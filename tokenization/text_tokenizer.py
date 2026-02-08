@@ -1,7 +1,7 @@
 import logging
 import torch
 from typing import List, Union, Dict
-from transformers import T5Tokenizer
+from transformers import T5Tokenizer, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -9,30 +9,36 @@ logger = logging.getLogger(__name__)
 class TextTokenizer:
     """
     文本分词器 (Text Modality)
-    - 严格基于 3D-MolT5 使用的 google/t5-v1_1-base
-    - 包含特殊标记 <bom>, <eom>
+    - 基于 google/t5-v1_1-base
+    - model_max_length 设为 1e9 以避免 Tokenizer 阶段的硬截断 (遵循 3D-MolT5 设计)
     """
 
-    def __init__(self, model_name: str = "google/t5-v1_1-base", max_len: int = 512):
+    def __init__(self, model_name: str = "google/t5-v1_1-base", max_len: int = int(1e9)):
         self.max_len = max_len
         self.model_name = model_name
 
-        logger.info(f"Loading TextTokenizer: {model_name}")
+        logger.info(f"Loading TextTokenizer: {model_name} (max_len={max_len})")
         try:
-            # legacy=False 确保行为确定性
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                model_max_length=max_len,
+                use_fast=True,
+                legacy=False
+            )
+        except Exception as e:
+            logger.warning(f"Fast tokenizer failed, falling back to slow version: {e}")
             self.tokenizer = T5Tokenizer.from_pretrained(
                 model_name,
                 model_max_length=max_len,
                 legacy=False
             )
-        except Exception as e:
-            logger.warning(f"Download failed, trying t5-base fallback: {e}")
-            self.tokenizer = T5Tokenizer.from_pretrained("t5-base", model_max_length=max_len)
 
-        # 添加 3D 分子相关特殊 Token (与 3d_tokenize.py 保持一致)
-        # 注意：MotifTokenizer 也会添加这些，但在这里添加是为了文本解码时的完整性
+        # 仅添加必要的 3D 边界符
         special_tokens_dict = {'additional_special_tokens': ['<bom>', '<eom>']}
-        self.tokenizer.add_special_tokens(special_tokens_dict)
+        self.tokenizer.add_special_tokens(
+            special_tokens_dict,
+            replace_additional_special_tokens=False
+        )
 
         self.pad_token_id = self.tokenizer.pad_token_id
         self.eos_token_id = self.tokenizer.eos_token_id
