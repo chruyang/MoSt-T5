@@ -72,8 +72,26 @@ def split_lmdb_3way(source_path, train_path, valid_path, test_path,
         if os.path.exists(output_path):
             os.remove(output_path)
 
-        # 设置较大的 map_size 以防溢出 (1TB)
-        env_out = lmdb.open(output_path, map_size=1099511627776, subdir=False)
+        # 修改为：
+        import psutil
+
+        def calculate_optimal_map_size(num_entries, avg_entry_size=2048):
+            """根据数据量动态计算合适的map_size"""
+            # 估算总大小 = 条目数 × 平均大小 × 安全系数
+            estimated_size = num_entries * avg_entry_size * 3  # 3倍安全系数
+            # 获取可用磁盘空间
+            disk_usage = psutil.disk_usage(os.path.dirname(os.path.abspath(output_path)))
+            available_space = disk_usage.free
+
+            # 取估算值和可用空间的较小值，但至少保证100MB
+            optimal_size = min(estimated_size, available_space // 2)  # 使用一半可用空间
+            optimal_size = max(optimal_size, 100 * 1024 * 1024)  # 至少100MB
+
+            return optimal_size
+
+        # 在write_dataset函数中使用
+        map_size = calculate_optimal_map_size(len(indices))
+        env_out = lmdb.open(output_path, map_size=map_size, subdir=False)
         env_src = lmdb.open(source_path, readonly=True, lock=False, readahead=False, meminit=False, subdir=False)
 
         with env_src.begin() as txn_src, env_out.begin(write=True) as txn_out:
@@ -121,5 +139,5 @@ if __name__ == "__main__":
     VALID_LMDB = "../dataset/3d-pubchem-valid.lmdb"
     TEST_LMDB = "../dataset/3d-pubchem-test.lmdb"
 
-    # 分割比例: 90% 训练, 5% 验证, 5% 测试
-    split_lmdb_3way(SOURCE_LMDB, TRAIN_LMDB, VALID_LMDB, TEST_LMDB, ratios=(0.90, 0.05, 0.05))
+    # 分割比例: 80% 训练, 10% 验证, 10% 测试
+    split_lmdb_3way(SOURCE_LMDB, TRAIN_LMDB, VALID_LMDB, TEST_LMDB, ratios=(0.80, 0.1, 0.1))
