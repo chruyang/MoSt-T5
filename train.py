@@ -2,6 +2,9 @@ import logging
 import os
 import sys
 import torch
+import numpy as np
+import evaluate
+import nltk
 from transformers import (
     HfArgumentParser,
     Seq2SeqTrainer,
@@ -10,7 +13,6 @@ from transformers import (
     EarlyStoppingCallback
 )
 
-# ... (引入模块保持不变) ...
 from tokenization.text_tokenizer import TextTokenizer
 from tokenization.motif_tokenizer import MotifTokenizer
 from tokenization.e3fp_tokenizer import E3FPTokenizer
@@ -23,29 +25,32 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    # 1. 参数解析
+    # 确保 nltk 资源存在
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt', quiet=True)
+
     parser = HfArgumentParser((ModelArguments, DataArguments, Seq2SeqTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # 2. 初始化日志
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO if training_args.local_rank in [-1, 0] else logging.WARN,
     )
-    logger.info(f"Training parameters: {training_args}")
     set_seed(training_args.seed)
 
-    # 3. 加载 Tokenizers
+    # --- Tokenizers ---
     logger.info("Loading Tokenizers...")
-    text_tokenizer = TextTokenizer(model_name=model_args.model_name_or_path)
+    text_tokenizer = TextTokenizer(model_name=model_args.model_name_or_path, max_len=data_args.max_len)
     motif_tokenizer = MotifTokenizer(vocab_file=model_args.vocab_path, model_name=model_args.model_name_or_path)
     e3fp_tokenizer = E3FPTokenizer(padding_idx=-1)
 
-    # 4. 准备数据集 (Train + Valid)
+    # --- Datasets ---
     logger.info("Loading Datasets...")
     train_dataset = GSMATDataset(
         lmdb_path=data_args.train_file,
@@ -53,28 +58,24 @@ def main():
         motif_tokenizer=motif_tokenizer,
         e3fp_tokenizer=e3fp_tokenizer
     )
-    logger.info(f"Train Dataset Size: {len(train_dataset)}")
 
     eval_dataset = None
     if data_args.validation_file:
-        logger.info(f"Loading Validation Dataset from {data_args.validation_file}...")
+        logger.info(f"Loading Validation Dataset...")
         eval_dataset = GSMATDataset(
             lmdb_path=data_args.validation_file,
             text_tokenizer=text_tokenizer,
             motif_tokenizer=motif_tokenizer,
             e3fp_tokenizer=e3fp_tokenizer
         )
-        logger.info(f"Eval Dataset Size: {len(eval_dataset)}")
 
-    # 5. 初始化模型
+    # --- Model Config & Init ---
     logger.info("Initializing MoSt-T5 Model...")
     config = MoStT5Config.from_pretrained(model_args.model_name_or_path)
-
-    # [关键修复] 注入所有参数，确保与 arguments.py 一致
     config.update({
         'e3fp_num_levels': model_args.e3fp_num_levels,
         'e3fp_vocab_size': model_args.e3fp_vocab_size,
-        'vocab_size': motif_tokenizer.vocab_size,  # 动态更新
+        'vocab_size': motif_tokenizer.vocab_size,
         'fusion_type': model_args.fusion_type,
         'dropout_rate': model_args.dropout_rate
     })
@@ -86,7 +87,52 @@ def main():
     )
     model.resize_token_embeddings(len(motif_tokenizer.tokenizer))
 
-    # 6. Collator
+    # [改进] 显式修复生成配置
+    model.config.decoder_start_token_id = text_tokenizer.tokenizer.pad_token_id
+    model.config.eos_token_id = text_tokenizer.tokenizer.eos_token_id
+    model.config.pad_token_id = text_tokenizer.tokenizer.pad_token_id
+    model.generation_config.max_length = data_args.max_len
+    model.generation_config.num_beams = 4
+    model.generation_config.repetition_penalty = 1.2
+
+    # --- Metrics ---
+    metric_bleu = evaluate.load("sacrebleu")
+    metric_rouge = evaluate.load("rouge")
+
+    def compute_metrics(eval_preds):
+        preds, labels = eval_preds
+        if isinstance(preds, tuple): preds = preds[0]
+
+        decoded_preds = text_tokenizer.tokenizer.batch_decode(preds, skip_special_tokens=True)
+        labels = np.where(labels != -100, labels, text_tokenizer.pad_token_id)
+        decoded_labels = text_tokenizer.tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+        # 文本处理: 小写 + NLTK 分词
+        decoded_preds = [pred.strip().lower() for pred in decoded_preds]
+        decoded_labels = [label.strip().lower() for label in decoded_labels]
+
+        decoded_preds_tok = [" ".join(nltk.word_tokenize(pred)) for pred in decoded_preds]
+        decoded_labels_tok = [" ".join(nltk.word_tokenize(label)) for label in decoded_labels]
+
+        # 打印 Sample 监控生成质量
+        logger.info("\n" + "=" * 20 + " Sample Generation " + "=" * 20)
+        logger.info(f"Pred : {decoded_preds[0]}")
+        logger.info(f"Label: {decoded_labels[0]}")
+        logger.info("=" * 60)
+
+        result = {}
+        # BLEU (sacrebleu 需要 list of list references)
+        decoded_labels_bleu = [[l] for l in decoded_labels_tok]
+        result["bleu"] = metric_bleu.compute(predictions=decoded_preds_tok, references=decoded_labels_bleu)["score"]
+
+        # ROUGE
+        rouge_score = metric_rouge.compute(predictions=decoded_preds_tok, references=decoded_labels_tok)
+        result["rouge1"] = rouge_score["rouge1"]
+        result["rougeL"] = rouge_score["rougeL"]
+
+        return {k: round(v, 4) for k, v in result.items()}
+
+    # --- Trainer ---
     data_collator = GSMATCollator(
         motif_pad_id=motif_tokenizer.pad_id,
         text_pad_id=text_tokenizer.pad_token_id,
@@ -94,7 +140,6 @@ def main():
         ignore_index=-100
     )
 
-    # 7. Trainer (加入 EarlyStopping)
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
@@ -102,20 +147,17 @@ def main():
         eval_dataset=eval_dataset,
         data_collator=data_collator,
         tokenizer=text_tokenizer.tokenizer,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)] if eval_dataset else None
+        compute_metrics=compute_metrics if training_args.predict_with_generate else None,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)] if eval_dataset else None
     )
 
-    # 8. 训练流程
     if training_args.do_train:
-        logger.info("*** Starting Training ***")
         train_result = trainer.train()
         trainer.save_model()
         trainer.log_metrics("train", train_result.metrics)
         trainer.save_metrics("train", train_result.metrics)
 
-    # 9. 评估流程
     if training_args.do_eval and eval_dataset:
-        logger.info("*** Starting Evaluation ***")
         metrics = trainer.evaluate()
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)

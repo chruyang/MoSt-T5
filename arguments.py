@@ -4,7 +4,7 @@ from typing import Optional
 @dataclass
 class ModelArguments:
     """
-    模型相关参数
+    模型架构参数
     """
     model_name_or_path: str = field(
         default="google/t5-v1_1-base",
@@ -14,7 +14,7 @@ class ModelArguments:
         default="asset/mol_vocabs/frag_merged.txt",
         metadata={"help": "Path to the motif vocabulary file"}
     )
-    # 关键修正：明确含义
+    # E3FP 参数
     e3fp_num_levels: int = field(
         default=4,
         metadata={"help": "Number of E3FP levels (e.g. 4 means Level 0,1,2,3)"}
@@ -23,6 +23,7 @@ class ModelArguments:
         default=4096,
         metadata={"help": "Number of E3FP bits (excluding padding)"}
     )
+    # 架构参数
     fusion_type: str = field(
         default="residual",
         metadata={"help": "Fusion type: 'residual' or 'gate'"}
@@ -35,7 +36,7 @@ class ModelArguments:
 @dataclass
 class DataArguments:
     """
-    数据相关参数
+    数据路径与处理参数
     """
     train_file: str = field(
         default=None, metadata={"help": "Path to training LMDB file"}
