@@ -85,7 +85,26 @@ def main():
         config=config,
         ignore_mismatched_sizes=True
     )
-    model.resize_token_embeddings(len(motif_tokenizer.tokenizer))
+    # ================== ✅ NEW FIX (增强版) ==================
+    # 强制补全所有必要的 Token ID，防止 evaluate 报错
+    print("🔧 Applying config fix for generation...")
+    pad_token_id = text_tokenizer.tokenizer.pad_token_id
+
+    # 1. 修复 decoder_start_token_id (T5 必需)
+    if model.config.decoder_start_token_id is None:
+        model.config.decoder_start_token_id = pad_token_id
+
+    # 2. 修复 bos_token_id (新版 Transformers 检查必需)
+    # T5 没有 BOS，我们将其指向 PAD，骗过检查
+    if model.config.bos_token_id is None:
+        model.config.bos_token_id = pad_token_id
+
+    # 3. 同步更新 generation_config
+    if hasattr(model, "generation_config"):
+        model.generation_config.decoder_start_token_id = pad_token_id
+        model.generation_config.pad_token_id = pad_token_id
+        model.generation_config.bos_token_id = pad_token_id
+    # ================== ✅ FIX END ===========================
 
     # [改进] 显式修复生成配置
     model.config.decoder_start_token_id = text_tokenizer.tokenizer.pad_token_id
