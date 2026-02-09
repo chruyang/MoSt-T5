@@ -3,7 +3,7 @@ import torch.nn as nn
 from transformers import T5EncoderModel, T5ForConditionalGeneration
 from transformers.modeling_outputs import Seq2SeqLMOutput, BaseModelOutput
 from torch_scatter import scatter_mean
-from .configuration_most_t5 import MoStT5Config
+from .configuration import MoStT5Config
 
 
 class GSMATEmbeddings(nn.Module):

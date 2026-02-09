@@ -6,24 +6,32 @@ import numpy as np
 from typing import List
 from rdkit import Chem
 from rdkit.Chem import AllChem
+import logging
 
 # ================= 路径注入 =================
 current_dir = os.path.dirname(os.path.abspath(__file__))
 lib_path = os.path.join(current_dir, "3d_tokenization")
 if lib_path not in sys.path:
     sys.path.append(lib_path)
+logger = logging.getLogger(__name__)
 
+# ================= 安全导入 =================
 try:
     from e3fp.pipeline import fprints_from_mol_verbose
     from e3fp.fingerprint.fprinter import signed_to_unsigned_int
-except ImportError:
+    E3FP_AVAILABLE = True
+    logger.info("✅ E3FP library loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ E3FP library import failed: {e}")
     fprints_from_mol_verbose = None
-
-logger = logging.getLogger(__name__)
+    signed_to_unsigned_int = None
+    E3FP_AVAILABLE = False
 
 
 # ================= 辅助函数 =================
 def identifier_to_bit(identifier: int, n_bits: int):
+    if signed_to_unsigned_int is None:
+        raise RuntimeError("E3FP library not available")
     return signed_to_unsigned_int(identifier) % n_bits
 
 
@@ -81,8 +89,11 @@ class E3FPTokenizer:
     """
 
     def __init__(self, fp_bits: int = 4096, fp_level: int = 3, max_atoms: int = 256, padding_idx: int = -1):
-        if fprints_from_mol_verbose is None:
-            logger.error("❌ e3fp library not found. Please ensure '3d_tokenization' folder is present.")
+        # 检查E3FP库可用性
+        if not E3FP_AVAILABLE:
+            error_msg = "❌ E3FP library not found. Please ensure '3d_tokenization' folder is present."
+            logger.error(error_msg)
+            raise ImportError(error_msg)
 
         self.max_atoms = max_atoms
         self.fp_level = fp_level
@@ -152,9 +163,15 @@ class E3FPTokenizer:
         从 RDKit Mol 生成 Tensor。如果缺少 3D 构象，尝试自动补全。
         """
         if mol is None:
+            logger.warning("Received None molecule")
             return self._get_empty_tensor()
 
         try:
+            # 检查E3FP库可用性
+            if not E3FP_AVAILABLE:
+                logger.error("E3FP library not available")
+                return self._get_empty_tensor()
+
             # 检查并自动补全 3D 构象
             if mol.GetNumConformers() == 0:
                 try:
@@ -162,13 +179,13 @@ class E3FPTokenizer:
                     res = AllChem.EmbedMolecule(mol_h, randomSeed=42)
                     if res == 0:
                         mol = mol_h
+                        logger.debug("Successfully embedded 3D coordinates")
                     else:
+                        logger.debug("Failed to embed 3D coordinates")
                         return self._get_empty_tensor()
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"3D embedding failed: {e}")
                     return self._get_empty_tensor()
-
-            if fprints_from_mol_verbose is None:
-                return self._get_empty_tensor()
 
             # 生成指纹
             fprints_list, fingerprinter = fprints_from_mol_verbose(mol, fprint_params=self.fprint_params)
@@ -181,16 +198,17 @@ class E3FPTokenizer:
             num_atoms = feats.shape[0]
             if num_atoms > self.max_atoms:
                 feats = feats[:self.max_atoms, :]
+                logger.debug(f"Truncated from {num_atoms} to {self.max_atoms} atoms")
             elif padding and num_atoms < self.max_atoms:
                 pad_len = self.max_atoms - num_atoms
-                # 使用 padding_idx (-1) 填充
                 pad_tensor = torch.full((pad_len, self.fp_level + 1), self.padding_idx, dtype=torch.long)
                 feats = torch.cat([feats, pad_tensor], dim=0)
+                logger.debug(f"Padded from {num_atoms} to {self.max_atoms} atoms")
 
             return feats
 
         except Exception as e:
-            logger.warning(f"E3FP encoding error: {e}")
+            logger.error(f"E3FP encoding error: {e}")
             return self._get_empty_tensor()
 
     def get_embedding_dim(self):
@@ -199,20 +217,27 @@ class E3FPTokenizer:
 
 
 if __name__ == "__main__":
-    # 简单的自我测试
     logging.basicConfig(level=logging.INFO)
+    
     try:
+        print("🧪 Initializing E3FPTokenizer...")
         tokenizer = E3FPTokenizer()
-
-        print("🧪 Test 1: Single SMILES (Auto 3D)")
+        print("✅ Tokenizer initialized successfully")
+        
+        print("\n🧪 Test 1: Single SMILES (Auto 3D)")
         smiles = "C1=CC=CC=C1"  # Benzene
         feats = tokenizer.from_smiles(smiles)
         print(f"✅ Shape: {feats.shape}")
-
+        print(f"✅ Sample values: {feats[0, :3]}")  # 显示前3个值
+        
         print("\n🧪 Test 2: Batch SMILES")
         batch = ["C", "CC", "CCC"]
         batch_feats = tokenizer.from_smiles_batch(batch)
         print(f"✅ Batch Shape: {batch_feats.shape}")
-
+        
+        print("\n🎉 All tests passed!")
+        
     except Exception as e:
         print(f"❌ Test Failed: {e}")
+        import traceback
+        traceback.print_exc()
