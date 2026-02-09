@@ -146,17 +146,19 @@ class GSMATDataset(Dataset):
 
 class GSMATCollator:
     """
-    数据整理器 (Collator)
-    负责 Batch 拼接、Padding 和 Mask 生成。
+    数据整理器 (Collator) - 增强版
+    自动处理 Mol2Text 任务的 Labels
     """
 
     def __init__(self,
                  motif_pad_id: int,
                  text_pad_id: int,
-                 e3fp_pad_id: int = -1):
+                 e3fp_pad_id: int = -1,
+                 ignore_index: int = -100):
         self.motif_pad_id = motif_pad_id
         self.text_pad_id = text_pad_id
         self.e3fp_pad_id = e3fp_pad_id
+        self.ignore_index = ignore_index
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         motif_ids = [item['motif_input_ids'] for item in batch]
@@ -164,32 +166,30 @@ class GSMATCollator:
         text_ids = [item['text_input_ids'] for item in batch]
         atom_maps = [item['atom_to_motif_map'] for item in batch]
 
-        # 2. Padding (batch_first=True)
+        # 1. Padding Inputs (batch_first=True)
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.motif_pad_id)
-        batch_text = pad_sequence(text_ids, batch_first=True, padding_value=self.text_pad_id)
-
-        # E3FP Padding (使用 -1)
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-
-        # Map Padding (使用 0)
+        # Map Padding 使用 0 (配合 Mask 使用)
         batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
 
-        # 3. Masks
-        motif_mask = (batch_motif != self.motif_pad_id).long()
-        text_mask = (batch_text != self.text_pad_id).long()
+        # 2. Padding Labels (关键步骤)
+        # 对于 Mol2Text 任务，目标是文本
+        # 使用 ignore_index (-100) 填充，使模型计算 Loss 时忽略 Pad 部分
+        batch_labels = pad_sequence(text_ids, batch_first=True, padding_value=self.ignore_index)
 
-        # Atom Mask: 检查 E3FP 第一维是否为有效值
-        # 只要不是 Pad ID，就是有效原子
+        # 3. 生成 Masks
+        motif_mask = (batch_motif != self.motif_pad_id).long()
+        # E3FP Mask: 只要第一列不为 Pad 即为有效
         atom_mask = (batch_e3fp[:, :, 0] != self.e3fp_pad_id).long()
 
         return {
-            "motif_ids": batch_motif,  # [B, Max_Motif]
-            "motif_attention_mask": motif_mask,  # [B, Max_Motif]
+            "motif_ids": batch_motif,
+            "motif_attention_mask": motif_mask,
 
-            "e3fp_ids": batch_e3fp,  # [B, Max_Atom, Level+1]
-            "atom_attention_mask": atom_mask,  # [B, Max_Atom]
-            "atom_to_motif_map": batch_map,  # [B, Max_Atom]
+            "e3fp_ids": batch_e3fp,
+            "atom_attention_mask": atom_mask,
+            "atom_to_motif_map": batch_map,
 
-            "text_ids": batch_text,  # [B, Max_Text]
-            "text_attention_mask": text_mask  # [B, Max_Text]
+            # 这里的 labels 字段会被 T5 自动识别并计算 Loss
+            "labels": batch_labels
         }
