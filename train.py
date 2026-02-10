@@ -69,6 +69,11 @@ def main():
             e3fp_tokenizer=e3fp_tokenizer
         )
 
+    if data_args.max_eval_samples is not None:
+        # 限制验证集大小，防止 Debug 时评估耗时过长
+        num_samples = min(len(eval_dataset), data_args.max_eval_samples)
+        eval_dataset = torch.utils.data.Subset(eval_dataset, range(num_samples))
+        logger.info(f"🔧 Debug Mode: Truncated eval_dataset to {num_samples} samples.")
     # --- Model Config & Init ---
     logger.info("Initializing MoSt-T5 Model...")
     config = MoStT5Config.from_pretrained(model_args.model_name_or_path)
@@ -169,6 +174,29 @@ def main():
         compute_metrics=compute_metrics if training_args.predict_with_generate else None,
         callbacks=[EarlyStoppingCallback(early_stopping_patience=5)] if eval_dataset else None
     )
+
+    # ✅✅✅ 【新增】训练前由于“照妖镜”检测
+    logger.info("=" * 40)
+    logger.info("🔍 WEIGHT SANITY CHECK (Before Training)")
+
+    # 检查 Decoder Embedding (shared)
+    if hasattr(model, "shared"):
+        std = model.shared.weight.std().item()
+        logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: ~0.002)")
+        if std > 0.01:
+            logger.error("❌❌ DANGER: Shared Embeddings are too large! post_init() reset them!")
+
+    # 检查 LM Head
+    if hasattr(model, "lm_head"):
+        std = model.lm_head.weight.std().item()
+        logger.info(f"  -> LM Head Weights STD:   {std:.6f} (Target: ~0.002)")
+
+    # 检查 Encoder Embedding
+    if hasattr(model.encoder, "gsm_embeddings"):
+        std = model.encoder.gsm_embeddings.word_embeddings.weight.std().item()
+        logger.info(f"  -> Encoder Embeddings STD: {std:.6f} (Target: ~0.002)")
+    logger.info("=" * 40)
+    # ✅✅✅ 检测结束
 
     if training_args.do_train:
         train_result = trainer.train()

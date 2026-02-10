@@ -57,3 +57,7 @@ class DataArguments:
     num_workers: int = field(
         default=4, metadata={"help": "Number of workers for dataloader"}
     )
+    max_eval_samples: Optional[int] = field(
+        default=None,
+        metadata={"help": "For debugging purposes, truncate the number of evaluation examples to this value if set."}
+    )
