@@ -2,17 +2,15 @@ import torch
 import torch.nn as nn
 from transformers import T5ForConditionalGeneration
 from transformers.models.t5.modeling_t5 import T5Stack
-from torch_scatter import scatter_sum
 from .configuration import MoStT5Config
 
 
 # =========================================================================
-# 1. GSMATEmbeddings: 支持动态更新 Embedding 引用
+# 1. GSMATEmbeddings
 # =========================================================================
 class GSMATEmbeddings(nn.Module):
     def __init__(self, config: MoStT5Config, word_embeddings=None):
         super().__init__()
-        # 如果传入了 word_embeddings，直接引用（实现共享）
         if word_embeddings is not None:
             self.word_embeddings = word_embeddings
         else:
@@ -24,11 +22,11 @@ class GSMATEmbeddings(nn.Module):
         ])
 
     def set_word_embeddings(self, new_embeddings):
-        """✅ 关键修复：允许外部更新 word_embeddings 引用"""
         self.word_embeddings = new_embeddings
 
-    def forward(self, motif_ids, e3fp_ids):
-        motif_embeds = self.word_embeddings(motif_ids)
+    def forward(self, input_ids, e3fp_ids):
+        # 统一使用 input_ids (对应 motif_ids)
+        motif_embeds = self.word_embeddings(input_ids)
         e3fp_ids_shifted = e3fp_ids + 1
         e3fp_embeds = 0
         for i, layer in enumerate(self.e3fp_embeddings):
@@ -37,7 +35,7 @@ class GSMATEmbeddings(nn.Module):
 
 
 # =========================================================================
-# 2. Fusion Layer (无变化)
+# 2. GeoSemanticFusion (纯 PyTorch 实现，无 torch_scatter)
 # =========================================================================
 class GeoSemanticFusion(nn.Module):
     def __init__(self, config: MoStT5Config):
@@ -57,19 +55,30 @@ class GeoSemanticFusion(nn.Module):
 
     def forward(self, motif_emb, e3fp_emb, atom_to_motif_map, atom_mask):
         batch_size, n_motifs, dim = motif_emb.shape
+
+        # 1. 准备数据
         masked_e3fp = e3fp_emb * atom_mask.unsqueeze(-1)
-        offset = torch.arange(batch_size, device=motif_emb.device).view(-1, 1) * n_motifs
-        flat_map = (atom_to_motif_map + offset).view(-1)
+        # 计算打平的索引
+        flat_map = atom_to_motif_map + (torch.arange(batch_size, device=motif_emb.device).view(-1, 1) * n_motifs)
+        flat_map = flat_map.view(-1)
 
         # 索引保护
         max_index = batch_size * n_motifs - 1
         flat_map = torch.clamp(flat_map, min=0, max=max_index)
 
-        sum_features = scatter_sum(masked_e3fp.view(-1, dim), flat_map, dim=0, dim_size=batch_size * n_motifs)
-        count_atoms = scatter_sum(atom_mask.view(-1, 1).float(), flat_map, dim=0, dim_size=batch_size * n_motifs)
+        # 2. 原生 PyTorch 聚合 (替代 scatter_sum)
+        sum_features = torch.zeros(batch_size * n_motifs, dim, device=motif_emb.device, dtype=motif_emb.dtype)
+        count_atoms = torch.zeros(batch_size * n_motifs, 1, device=motif_emb.device, dtype=motif_emb.dtype)
+
+        # 使用 index_add_
+        sum_features.index_add_(0, flat_map, masked_e3fp.view(-1, dim))
+        count_atoms.index_add_(0, flat_map, atom_mask.view(-1, 1).float())
+
+        # 3. 平均池化
         pooled_3d = sum_features / (count_atoms + 1e-9)
         pooled_3d = pooled_3d.view(batch_size, n_motifs, dim)
 
+        # 4. 融合
         concat_feat = torch.cat([motif_emb, pooled_3d], dim=-1)
         alpha = self.gate_proj(concat_feat)
         fused_emb = (1 - alpha) * motif_emb + alpha * pooled_3d
@@ -78,7 +87,7 @@ class GeoSemanticFusion(nn.Module):
 
 
 # =========================================================================
-# 3. MoStT5Encoder: 修复 resize_token_embeddings 导致的引用断裂
+# 3. MoStT5Encoder
 # =========================================================================
 class MoStT5Encoder(T5Stack):
     def __init__(self, config: MoStT5Config, embed_tokens=None):
@@ -87,7 +96,6 @@ class MoStT5Encoder(T5Stack):
         self.fusion_layer = GeoSemanticFusion(config)
 
     def set_input_embeddings(self, new_embeddings):
-        """✅ 关键修复：当 T5Stack 更新 embed_tokens 时，同步更新 gsm_embeddings"""
         super().set_input_embeddings(new_embeddings)
         self.gsm_embeddings.set_word_embeddings(new_embeddings)
 
@@ -96,13 +104,13 @@ class MoStT5Encoder(T5Stack):
         atom_to_motif_map = kwargs.pop('atom_to_motif_map', None)
         atom_attention_mask = kwargs.pop('atom_attention_mask', None)
 
+        # 这里的 input_ids 就是标准的输入
         motif_emb, e3fp_emb = self.gsm_embeddings(input_ids, e3fp_ids)
         inputs_embeds = self.fusion_layer(motif_emb, e3fp_emb, atom_to_motif_map, atom_attention_mask)
 
         valid_keys = ['output_attentions', 'output_hidden_states', 'return_dict', 'head_mask']
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_keys}
 
-        # 显式 use_cache=False
         return super().forward(
             input_ids=None,
             inputs_embeds=inputs_embeds,
@@ -113,58 +121,56 @@ class MoStT5Encoder(T5Stack):
 
 
 # =========================================================================
-# 4. MoStT5ForConditionalGeneration: 完善初始化与权重绑定
+# 4. MoStT5ForConditionalGeneration
 # =========================================================================
 class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
-    # ✅ 1. 参考 3D-MolT5: 显式声明绑定键，帮助 HF 识别共享权重
+    # ✅ 1. 显式声明绑定键 (对齐 3D-MolT5)
     _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight", "lm_head.weight"]
+
+    # ✅ 2. 忽略无关警告
+    _keys_to_ignore_on_load_unexpected = [
+        "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias.weight",
+    ]
 
     def __init__(self, config: MoStT5Config):
         super().__init__(config)
-
-        # 共享权重
         self.encoder = MoStT5Encoder(config, embed_tokens=self.shared)
-
-        # 初始化
         self.post_init()
 
-    # ✅ 2. 核心修复：重写系统级初始化逻辑
-    # 任何时候调用 init_weights (包括 from_pretrained 内部)，都会强制使用 std=0.002
+    # ✅ 3. 系统级初始化 (std=0.002)
     def _init_weights(self, module):
-        factor = self.config.initializer_factor  # T5默认是 1.0
-
+        factor = self.config.initializer_factor
         if isinstance(module, nn.Linear):
             module.weight.data.normal_(mean=0.0, std=factor * ((self.config.d_model) ** -0.5))
             if module.bias is not None:
                 module.bias.data.zero_()
-
         elif isinstance(module, nn.Embedding):
-            # ⚠️ 强制所有 Embedding 使用极小方差 (0.002)
-            # 这比在 __init__ 里手动设置更安全，因为它会覆盖所有场景
             module.weight.data.normal_(mean=0.0, std=0.002)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-
         elif isinstance(module, nn.LayerNorm):
             module.weight.data.fill_(1.0)
             module.bias.data.zero_()
 
-    def forward(self, motif_ids=None, motif_attention_mask=None, e3fp_ids=None, atom_to_motif_map=None,
-                atom_attention_mask=None, labels=None, **kwargs):
-        if motif_attention_mask is None:
-            motif_attention_mask = kwargs.pop("attention_mask", None)
+    def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+        # ✅ 4. 兼容性接口：将 motif_ids 自动转为 input_ids
+        if input_ids is None and "motif_ids" in kwargs:
+            input_ids = kwargs.pop("motif_ids")
+
+        # 提取并移除自定义参数
+        e3fp_ids = kwargs.pop("e3fp_ids", None)
+        atom_to_motif_map = kwargs.pop("atom_to_motif_map", None)
+        atom_attention_mask = kwargs.pop("atom_attention_mask", None)
+        kwargs.pop("motif_attention_mask", None)  # 清理旧名
 
         if kwargs.get("encoder_outputs") is None:
             kwargs["encoder_outputs"] = self.encoder(
-                input_ids=motif_ids,
-                attention_mask=motif_attention_mask,
+                input_ids=input_ids,  # 统一使用 input_ids
+                attention_mask=attention_mask,
                 e3fp_ids=e3fp_ids,
                 atom_to_motif_map=atom_to_motif_map,
                 atom_attention_mask=atom_attention_mask,
                 **kwargs
             )
 
-        for k in ['motif_ids', 'motif_attention_mask', 'e3fp_ids', 'atom_to_motif_map', 'atom_attention_mask']:
-            kwargs.pop(k, None)
-
-        return super().forward(labels=labels, **kwargs)
+        return super().forward(input_ids=None, attention_mask=attention_mask, labels=labels, **kwargs)

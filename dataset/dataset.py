@@ -165,8 +165,8 @@ class GSMATCollator:
         atom_mask = (batch_e3fp[:, :, 0] != self.e3fp_pad_id).long()
 
         return {
-            "motif_ids": batch_motif,
-            "motif_attention_mask": motif_mask,
+            "input_ids": batch_motif,  # 👈 修改：从 "motif_ids" 改为 "input_ids"
+            "attention_mask": motif_mask,  # 👈 修改：从 "motif_attention_mask" 改为 "attention_mask"
             "e3fp_ids": batch_e3fp,
             "atom_attention_mask": atom_mask,
             "atom_to_motif_map": batch_map,
