@@ -3,12 +3,10 @@ import os
 import sys
 import torch
 import numpy as np
-import evaluate
-import nltk
 from transformers import (
     HfArgumentParser,
-    Seq2SeqTrainer,
-    Seq2SeqTrainingArguments,
+    Trainer,  # 🚀 修改 1：预训练不需要 Seq2SeqTrainer，标准 Trainer 即可
+    TrainingArguments,  # 🚀 修改 2：使用标准 TrainingArguments
     set_seed,
     EarlyStoppingCallback
 )
@@ -16,7 +14,7 @@ from transformers import (
 from tokenization.text_tokenizer import TextTokenizer
 from tokenization.motif_tokenizer import MotifTokenizer
 from tokenization.e3fp_tokenizer import E3FPTokenizer
-from dataset.dataset import GSMATDataset, GSMATCollator
+from dataset.dataset import GSMATDataset, GSMATPretrainingCollator  # 🚀 修改 3：导入我们新写的预训练 Collator
 from model.configuration import MoStT5Config
 from model.modeling import MoStT5ForConditionalGeneration
 from arguments import ModelArguments, DataArguments
@@ -25,13 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    # 确保 nltk 资源存在
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        nltk.download('punkt', quiet=True)
-
-    parser = HfArgumentParser((ModelArguments, DataArguments, Seq2SeqTrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
@@ -69,20 +61,21 @@ def main():
             e3fp_tokenizer=e3fp_tokenizer
         )
 
-    if data_args.max_eval_samples is not None:
-        # 限制验证集大小，防止 Debug 时评估耗时过长
+    if data_args.max_eval_samples is not None and eval_dataset is not None:
         num_samples = min(len(eval_dataset), data_args.max_eval_samples)
         eval_dataset = torch.utils.data.Subset(eval_dataset, range(num_samples))
         logger.info(f"🔧 Debug Mode: Truncated eval_dataset to {num_samples} samples.")
+
     # --- Model Config & Init ---
-    logger.info("Initializing MoSt-T5 Model...")
+    logger.info("Initializing MoSt-T5 Model for Pre-training...")
     config = MoStT5Config.from_pretrained(model_args.model_name_or_path)
     config.update({
         'e3fp_num_levels': model_args.e3fp_num_levels,
         'e3fp_vocab_size': model_args.e3fp_vocab_size,
         'vocab_size': motif_tokenizer.vocab_size,
         'fusion_type': model_args.fusion_type,
-        'dropout_rate': model_args.dropout_rate
+        'dropout_rate': model_args.dropout_rate,
+        'lambda_3d': 0.1  # 🚀 修改 4：动态注入 3D 几何 MSE Loss 的权重！
     })
 
     model = MoStT5ForConditionalGeneration.from_pretrained(
@@ -90,113 +83,51 @@ def main():
         config=config,
         ignore_mismatched_sizes=True
     )
-    # ================== ✅ NEW FIX (增强版) ==================
-    # 强制补全所有必要的 Token ID，防止 evaluate 报错
-    print("🔧 Applying config fix for generation...")
-    pad_token_id = text_tokenizer.tokenizer.pad_token_id
 
-    # 1. 修复 decoder_start_token_id (T5 必需)
+    # 强制补全所有必要的 Token ID
+    pad_token_id = text_tokenizer.tokenizer.pad_token_id
     if model.config.decoder_start_token_id is None:
         model.config.decoder_start_token_id = pad_token_id
-
-    # 2. 修复 bos_token_id (新版 Transformers 检查必需)
-    # T5 没有 BOS，我们将其指向 PAD，骗过检查
     if model.config.bos_token_id is None:
         model.config.bos_token_id = pad_token_id
 
-    # 3. 同步更新 generation_config
-    if hasattr(model, "generation_config"):
-        model.generation_config.decoder_start_token_id = pad_token_id
-        model.generation_config.pad_token_id = pad_token_id
-        model.generation_config.bos_token_id = pad_token_id
-    # ================== ✅ FIX END ===========================
-
-    # [改进] 显式修复生成配置
-    model.config.decoder_start_token_id = text_tokenizer.tokenizer.pad_token_id
-    model.config.eos_token_id = text_tokenizer.tokenizer.eos_token_id
-    model.config.pad_token_id = text_tokenizer.tokenizer.pad_token_id
-    model.generation_config.max_length = data_args.max_len
-    model.generation_config.num_beams = 4
-    model.generation_config.repetition_penalty = 1.2
-
-    # --- Metrics ---
-    metric_bleu = evaluate.load("sacrebleu")
-    metric_rouge = evaluate.load("rouge")
-
-    def compute_metrics(eval_preds):
-        preds, labels = eval_preds
-        if isinstance(preds, tuple): preds = preds[0]
-
-        decoded_preds = text_tokenizer.tokenizer.batch_decode(preds, skip_special_tokens=True)
-        labels = np.where(labels != -100, labels, text_tokenizer.pad_token_id)
-        decoded_labels = text_tokenizer.tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-        # 文本处理: 小写 + NLTK 分词
-        decoded_preds = [pred.strip().lower() for pred in decoded_preds]
-        decoded_labels = [label.strip().lower() for label in decoded_labels]
-
-        decoded_preds_tok = [" ".join(nltk.word_tokenize(pred)) for pred in decoded_preds]
-        decoded_labels_tok = [" ".join(nltk.word_tokenize(label)) for label in decoded_labels]
-
-        # 打印 Sample 监控生成质量
-        logger.info("\n" + "=" * 20 + " Sample Generation " + "=" * 20)
-        logger.info(f"Pred : {decoded_preds[0]}")
-        logger.info(f"Label: {decoded_labels[0]}")
-        logger.info("=" * 60)
-
-        result = {}
-        # BLEU (sacrebleu 需要 list of list references)
-        decoded_labels_bleu = [[l] for l in decoded_labels_tok]
-        result["bleu"] = metric_bleu.compute(predictions=decoded_preds_tok, references=decoded_labels_bleu)["score"]
-
-        # ROUGE
-        rouge_score = metric_rouge.compute(predictions=decoded_preds_tok, references=decoded_labels_tok)
-        result["rouge1"] = rouge_score["rouge1"]
-        result["rougeL"] = rouge_score["rougeL"]
-
-        return {k: round(v, 4) for k, v in result.items()}
+    # 🚀 修改 5：彻底删除 evaluate, nltk 以及 compute_metrics 函数！
+    # 预训练只需要监控 Trainer 自动计算的 Loss。
 
     # --- Trainer ---
-    data_collator = GSMATCollator(
-        motif_pad_id=motif_tokenizer.pad_id,
-        text_pad_id=text_tokenizer.pad_token_id,
+    # 🚀 修改 6：使用我们全新打造的预训练专属 Collator
+    data_collator = GSMATPretrainingCollator(
+        motif_tokenizer=motif_tokenizer,
         e3fp_pad_id=-1,
-        ignore_index=-100
+        mask_ratio=0.15  # 经典 15% 掩码率
     )
 
-    trainer = Seq2SeqTrainer(
+    # 🚀 修改 7：换用标准 Trainer，关闭所有生成相关评估
+    trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
-        tokenizer=text_tokenizer.tokenizer,
-        compute_metrics=compute_metrics if training_args.predict_with_generate else None,
+        # compute_metrics=None, # 不再需要
         callbacks=[EarlyStoppingCallback(early_stopping_patience=5)] if eval_dataset else None
     )
 
-    # ✅✅✅ 【新增】训练前由于“照妖镜”检测
+    # 保持原有的“照妖镜”权重检测逻辑
     logger.info("=" * 40)
     logger.info("🔍 WEIGHT SANITY CHECK (Before Training)")
-
-    # 检查 Decoder Embedding (shared)
     if hasattr(model, "shared"):
         std = model.shared.weight.std().item()
         logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: ~0.002)")
         if std > 0.01:
             logger.error("❌❌ DANGER: Shared Embeddings are too large! post_init() reset them!")
-
-    # 检查 LM Head
     if hasattr(model, "lm_head"):
         std = model.lm_head.weight.std().item()
         logger.info(f"  -> LM Head Weights STD:   {std:.6f} (Target: ~0.002)")
-
-    # 检查 Encoder Embedding
     if hasattr(model.encoder, "gsm_embeddings"):
         std = model.encoder.gsm_embeddings.word_embeddings.weight.std().item()
         logger.info(f"  -> Encoder Embeddings STD: {std:.6f} (Target: ~0.002)")
     logger.info("=" * 40)
-    # ✅✅✅ 检测结束
 
     if training_args.do_train:
         train_result = trainer.train()
