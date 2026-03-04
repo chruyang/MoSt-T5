@@ -1,3 +1,4 @@
+#1
 torchrun --nproc_per_node=3 train.py \
     --model_name_or_path "google/t5-v1_1-base" \
     --train_file "dataset/3d-pubchem-train.lmdb" \
@@ -29,3 +30,5 @@ torchrun --nproc_per_node=3 train.py \
     --save_total_limit 3 \
     --output_dir "./most_t5_pretrain_checkpoints" \
     --report_to "tensorboard"
+
+#2

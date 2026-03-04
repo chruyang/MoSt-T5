@@ -4,6 +4,7 @@ import pickle
 import logging
 import numpy as np
 import os
+import json
 from typing import List, Dict, Any
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
@@ -37,6 +38,10 @@ class GSMATDataset(Dataset):
 
         # 期望的 E3FP 维度
         self.e3fp_width = self.e3fp_tokenizer.fp_level + 1
+
+        # 🚀 错误限流机制：防止死循环和海量报错刷屏
+        self.error_count = 0
+        self.max_log_errors = 50
 
         # 智能判断是文件还是目录
         is_subdir = os.path.isdir(lmdb_path)
@@ -104,7 +109,6 @@ class GSMATDataset(Dataset):
             if motif_ids.dim() > 1: motif_ids = motif_ids.squeeze(0)
 
             # 🚀 修复 Bug 3: OOV 灾难熔断机制
-            # 如果序列中存在 <unk>，说明基团被碎裂，直接抛出异常触发重采样，拒绝这颗“毒药”
             unk_token_id = self.motif_tokenizer.tokenizer.unk_token_id
             if unk_token_id is not None and unk_token_id in motif_ids:
                 raise ValueError(f"OOV token <unk> detected in 2D sequence! Skipping bad sample.")
@@ -120,7 +124,7 @@ class GSMATDataset(Dataset):
             # 5. Atom Mapping
             num_atoms = e3fp_ids.shape[0]
 
-            # 🚀 修复 Bug 1 & 2：必须使用 -1 作为无归属原子的默认值！绝对不能用 0 (0 是 <bom>)
+            # 🚀 必须使用 -1 作为无归属原子的默认值！
             atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
 
             for motif_idx, atom_indices in enumerate(atom_mapping):
@@ -138,8 +142,14 @@ class GSMATDataset(Dataset):
             }
 
         except Exception as e:
-            # 坏样本跳过机制 (包含 OOV 跳过)
-            # logger.warning(f"Error loading sample {idx}: {e}. Skipping...")
+            # 🚀 优雅解法：限流日志，既暴露异常又防止刷屏
+            if self.error_count < self.max_log_errors:
+                logger.warning(f"⚠️ [Data Error] 样本 {idx} 解析失败: {e}. 正在重采样...")
+                self.error_count += 1
+            elif self.error_count == self.max_log_errors:
+                logger.warning(f"🚫 [Data Error] 错误次数已达上限 {self.max_log_errors} 次，后续数据错误将静默跳过...")
+                self.error_count += 1
+
             return self.__getitem__((idx + 1) % self.length)
 
 
@@ -215,13 +225,15 @@ class GSMATPretrainingCollator:
                     # 获取真实的重原子数量作为重要性得分
                     atom_count = self.frag_processor.get_size(token_str)
                     self.weight_lookup[token_id] = float(atom_count)
-                except Exception:
+                except Exception as e:
+                    # 🚀 优雅解法：显式警告基团解析失败
+                    logger.warning(f"🪲 Motif 解析失败降级 -> Token: '{token_str}', ID: {token_id}, Reason: {e}")
                     self.weight_lookup[token_id] = 0.01
 
         # 对权重进行平滑 (对数平滑)，防止大小基团概率悬殊过大
         self.weight_lookup = torch.log1p(self.weight_lookup)
 
-        # 获取 T5 的掩码替换符 (统一使用 <extra_id_0> 作为占位符，保持长度不变以保全 3D 映射)
+        # 获取 T5 的掩码替换符
         self.mask_token_id = self.motif_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -288,4 +300,114 @@ class GSMATPretrainingCollator:
             "labels": labels,  # Decoder 的目标 (被 Mask 的真实 2D Motif ID)
             "unmasked_e3fp_ids": batch_e3fp,  # 完好无损的原始 3D 序列 (供模型内部瞬间生成 3D MSE Loss 的 Target)
             "mask_positions": mask_positions  # 布尔矩阵，告诉模型哪些位置需要算 3D MSE Loss
+        }
+
+
+class GSMATPhase2Collator(GSMATPretrainingCollator):
+    """
+    专门为 Phase 2 (文本-分子对齐) 设计的双视角掩码 Collator。
+    采用“序列拼接 + 掩码隔离”的 SOTA 工程架构。
+    """
+
+    def __init__(self,
+                 motif_tokenizer: MotifTokenizer,
+                 text_tokenizer: TextTokenizer,
+                 text_weight_path: str,
+                 e3fp_pad_id: int = -1,
+                 mask_ratio: float = 0.15):
+        # 初始化一阶段的分子掩码引擎
+        super().__init__(motif_tokenizer, e3fp_pad_id, mask_ratio)
+
+        self.text_pad_id = text_tokenizer.tokenizer.pad_token_id
+        # 使用统一的 extra_id_0 掩盖文本，因为是物理拼接，T5 会自动处理同一个掩码符的预测
+        self.text_mask_token_id = text_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
+
+        # 加载文本端静态权重字典
+        vocab_size = text_tokenizer.tokenizer.vocab_size
+        self.text_weight_lookup = torch.zeros(vocab_size, dtype=torch.float32)
+
+        if os.path.exists(text_weight_path):
+            with open(text_weight_path, 'r') as f:
+                text_weights = json.load(f)
+                for token_id_str, weight in text_weights.items():
+                    self.text_weight_lookup[int(token_id_str)] = float(weight)
+        else:
+            logger.warning(f"TF-IDF weights not found at {text_weight_path}. Using random masking for text.")
+            self.text_weight_lookup += 1.0  # 退化为纯随机掩码
+
+    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        # 1. 运行父类逻辑，获取完美掩码过的 Motif 和 3D 字典
+        motif_batch = super().__call__(batch)
+
+        # 2. 独立处理文本端的掩码
+        text_ids = [item['text_input_ids'] for item in batch]
+        batch_text = pad_sequence(text_ids, batch_first=True, padding_value=self.text_pad_id)
+        batch_size, text_len = batch_text.shape
+
+        # 获取文本掩码权重并进行多项式采样
+        text_weights = self.text_weight_lookup[batch_text]
+        text_weights[batch_text == self.text_pad_id] = 0.0  # padding 绝不掩码
+
+        masked_text_ids = batch_text.clone()
+        text_labels = batch_text.clone()
+        text_mask_positions = torch.zeros_like(batch_text, dtype=torch.bool)
+
+        for i in range(batch_size):
+            row_weight = text_weights[i]
+            if row_weight.sum() <= 0:
+                continue
+
+            num_to_mask = max(1, int((batch_text[i] != self.text_pad_id).sum() * self.mask_ratio))
+            mask_idx = torch.multinomial(row_weight + 1e-6, num_samples=num_to_mask, replacement=False)
+
+            text_mask_positions[i, mask_idx] = True
+            masked_text_ids[i, mask_idx] = self.text_mask_token_id
+
+        text_labels[~text_mask_positions] = -100
+        text_attention_mask = (masked_text_ids != self.text_pad_id).long()
+
+        # ==========================================================
+        # 🚀 3. 核心大招：序列级物理拼接 & 掩码隔离
+        # ==========================================================
+
+        # A. 拼接 input_ids: [Text] + [Motif]
+        concat_input_ids = torch.cat([masked_text_ids, motif_batch["input_ids"]], dim=1)
+
+        # B. 拼接 attention_mask
+        concat_attention_mask = torch.cat([text_attention_mask, motif_batch["attention_mask"]], dim=1)
+
+        # C. 拼接 labels: Decoder算交叉熵使用，包含文本和分子两端的掩码目标
+        concat_labels = torch.cat([text_labels, motif_batch["labels"]], dim=1)
+
+        # D. 3D 特征扩充：文本部分没有 3D，全部填充 e3fp_pad_id (-1)
+        fp_levels, fp_dim = motif_batch["e3fp_ids"].shape[1:]
+        dummy_e3fp = torch.full((batch_size, text_len, fp_dim), self.e3fp_pad_id,
+                                dtype=motif_batch["e3fp_ids"].dtype, device=motif_batch["e3fp_ids"].device)
+
+        concat_e3fp_ids = torch.cat([dummy_e3fp, motif_batch["e3fp_ids"]], dim=1)
+        concat_unmasked_e3fp_ids = torch.cat([dummy_e3fp, motif_batch["unmasked_e3fp_ids"]], dim=1)
+
+        # E. 3D 原子 Padding 掩码拼接
+        dummy_atom_mask = torch.zeros((batch_size, text_len), dtype=torch.long,
+                                      device=motif_batch["atom_attention_mask"].device)
+        concat_atom_mask = torch.cat([dummy_atom_mask, motif_batch["atom_attention_mask"]], dim=1)
+
+        # F. 掩码矩阵隔离 (Geometric Head 专属): 文本处强制为 False，绝不回归 3D 坐标！
+        concat_mask_positions = torch.cat([torch.zeros_like(text_mask_positions), motif_batch["mask_positions"]], dim=1)
+
+        # G. 🚀 致命修复：偏移 atom_to_motif_map
+        # 由于前面插入了 text_len 长度的文本，原先指向 Motif 的索引必须全部向右平移 text_len！
+        shifted_map = motif_batch["atom_to_motif_map"].clone()
+        valid_map_mask = shifted_map != -1
+        shifted_map[valid_map_mask] += text_len
+
+        return {
+            "input_ids": concat_input_ids,
+            "attention_mask": concat_attention_mask,
+            "labels": concat_labels,
+            "e3fp_ids": concat_e3fp_ids,
+            "unmasked_e3fp_ids": concat_unmasked_e3fp_ids,
+            "atom_attention_mask": concat_atom_mask,
+            "atom_to_motif_map": shifted_map,  # 修正后的 3D 挂载地图
+            "mask_positions": concat_mask_positions  # 绝对纯净的 3D 回归目标掩码
         }

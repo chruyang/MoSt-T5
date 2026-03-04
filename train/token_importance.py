@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 from transformers import PreTrainedTokenizerBase
 
 from model.CAMT5.representation import Representation
-from train.config import TokenImportance, TokenImportanceConfig
+from train1.config import TokenImportance, TokenImportanceConfig
 from utils import to_absolute_path
 
 
