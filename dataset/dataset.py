@@ -4,7 +4,6 @@ import pickle
 import logging
 import numpy as np
 import os
-import json
 from typing import List, Dict, Any
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
@@ -38,8 +37,6 @@ class GSMATDataset(Dataset):
 
         # 期望的 E3FP 维度
         self.e3fp_width = self.e3fp_tokenizer.fp_level + 1
-
-        # 🚀 错误限流机制：防止死循环和海量报错刷屏
         self.error_count = 0
         self.max_log_errors = 50
 
@@ -97,7 +94,7 @@ class GSMATDataset(Dataset):
                 text = entry.get('description', '')
             if not text:  # 如果还是空，回退到 text (兼容 split 脚本生成的字段)
                 text = entry.get('text', '')
-            atom_mapping = entry.get('atom_to_motif_map', [])
+            atom_mapping = entry.get('atom_mapping', [])
             e3fp_numpy = entry.get('e3fp')
 
             # 2. Text 处理
@@ -107,11 +104,6 @@ class GSMATDataset(Dataset):
             # 3. Motif 处理
             motif_ids = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False)
             if motif_ids.dim() > 1: motif_ids = motif_ids.squeeze(0)
-
-            # 🚀 修复 Bug 3: OOV 灾难熔断机制
-            unk_token_id = self.motif_tokenizer.tokenizer.unk_token_id
-            if unk_token_id is not None and unk_token_id in motif_ids:
-                raise ValueError(f"OOV token <unk> detected in 2D sequence! Skipping bad sample.")
 
             # 4. E3FP 处理 (带 Fallback 和 修复)
             if e3fp_numpy is not None:
@@ -123,12 +115,10 @@ class GSMATDataset(Dataset):
 
             # 5. Atom Mapping
             num_atoms = e3fp_ids.shape[0]
-
-            # 🚀 必须使用 -1 作为无归属原子的默认值！
-            atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
+            atom_to_motif_map = torch.zeros(num_atoms, dtype=torch.long)
 
             for motif_idx, atom_indices in enumerate(atom_mapping):
-                token_idx = motif_idx + 1  # +1 完美跳过开头的 <bom>
+                token_idx = motif_idx + 1
                 if token_idx >= len(motif_ids): break
                 for atom_idx in atom_indices:
                     if atom_idx < num_atoms:
@@ -142,12 +132,11 @@ class GSMATDataset(Dataset):
             }
 
         except Exception as e:
-            # 🚀 优雅解法：限流日志，既暴露异常又防止刷屏
             if self.error_count < self.max_log_errors:
                 logger.warning(f"⚠️ [Data Error] 样本 {idx} 解析失败: {e}. 正在重采样...")
                 self.error_count += 1
             elif self.error_count == self.max_log_errors:
-                logger.warning(f"🚫 [Data Error] 错误次数已达上限 {self.max_log_errors} 次，后续数据错误将静默跳过...")
+                logger.warning(f"🚫 [Data Error] 错误次数已达上限，后续数据错误将静默跳过...")
                 self.error_count += 1
 
             return self.__getitem__((idx + 1) % self.length)
@@ -173,9 +162,7 @@ class GSMATCollator:
         # Padding Inputs
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.motif_pad_id)
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-
-        # 🚀 修复 Bug 2：Padding 占位符必须为 -1，绝不能指向 <bom>
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=-1)
+        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
 
         # Padding Labels (Mol2Text Target)
         batch_labels = pad_sequence(text_ids, batch_first=True, padding_value=self.ignore_index)
@@ -185,8 +172,8 @@ class GSMATCollator:
         atom_mask = (batch_e3fp[:, :, 0] != self.e3fp_pad_id).long()
 
         return {
-            "input_ids": batch_motif,
-            "attention_mask": motif_mask,
+            "input_ids": batch_motif,  # 👈 修改：从 "motif_ids" 改为 "input_ids"
+            "attention_mask": motif_mask,  # 👈 修改：从 "motif_attention_mask" 改为 "attention_mask"
             "e3fp_ids": batch_e3fp,
             "atom_attention_mask": atom_mask,
             "atom_to_motif_map": batch_map,
@@ -204,14 +191,14 @@ class GSMATPretrainingCollator:
         self.e3fp_pad_id = e3fp_pad_id
         self.mask_ratio = mask_ratio
 
-        # 1. 引入 CAMT5 的底层 Frag 引擎
+        # 🚀 1. 引入 CAMT5 的底层 Frag 引擎
         try:
             from model.CAMT5.representation import Frag
             self.frag_processor = Frag()
         except ImportError:
             raise ImportError("无法导入 Frag，请确保路径正确")
 
-        # 2. 构建 O(1) 极速权重查表 Tensor (初始化时只执行一次)
+        # 🚀 2. 构建 O(1) 极速权重查表 Tensor (初始化时只执行一次)
         vocab_size = motif_tokenizer.vocab_size
         self.weight_lookup = torch.zeros(vocab_size, dtype=torch.float32)
 
@@ -222,18 +209,16 @@ class GSMATPretrainingCollator:
                 self.weight_lookup[token_id] = 0.0
             else:
                 try:
-                    # 获取真实的重原子数量作为重要性得分
                     atom_count = self.frag_processor.get_size(token_str)
                     self.weight_lookup[token_id] = float(atom_count)
                 except Exception as e:
-                    # 🚀 优雅解法：显式警告基团解析失败
                     logger.warning(f"🪲 Motif 解析失败降级 -> Token: '{token_str}', ID: {token_id}, Reason: {e}")
                     self.weight_lookup[token_id] = 0.01
 
         # 对权重进行平滑 (对数平滑)，防止大小基团概率悬殊过大
         self.weight_lookup = torch.log1p(self.weight_lookup)
 
-        # 获取 T5 的掩码替换符
+        # 获取 T5 的掩码替换符 (我们统一使用 <extra_id_0> 作为占位符，保持长度不变以保全 3D 映射)
         self.mask_token_id = self.motif_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -244,9 +229,7 @@ class GSMATPretrainingCollator:
         # 1. 基础 Padding
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.pad_id)
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-
-        # 🚀 修复 Bug 2：Padding 占位符必须为 -1，绝不能指向 <bom>
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=-1)
+        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
 
         batch_size, seq_len = batch_motif.shape
 
@@ -303,40 +286,45 @@ class GSMATPretrainingCollator:
         }
 
 
+import json
+
+
 class GSMATPhase2Collator(GSMATPretrainingCollator):
-    """
-    专门为 Phase 2 (文本-分子对齐) 设计的双视角掩码 Collator。
-    采用“序列拼接 + 掩码隔离”的 SOTA 工程架构。
-    """
-
-    def __init__(self,
-                 motif_tokenizer: MotifTokenizer,
-                 text_tokenizer: TextTokenizer,
-                 text_weight_path: str,
-                 e3fp_pad_id: int = -1,
-                 mask_ratio: float = 0.15):
-        # 初始化一阶段的分子掩码引擎
+    def __init__(self, motif_tokenizer, text_tokenizer, text_weight_path, e3fp_pad_id=-1, mask_ratio=0.15):
         super().__init__(motif_tokenizer, e3fp_pad_id, mask_ratio)
-
         self.text_pad_id = text_tokenizer.tokenizer.pad_token_id
-        # 使用统一的 extra_id_0 掩盖文本，因为是物理拼接，T5 会自动处理同一个掩码符的预测
-        self.text_mask_token_id = text_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
+        # 使用统一的 <extra_id_0> 作为掩码
+        self.mask_token_id = motif_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
 
-        # 加载文本端静态权重字典
-        vocab_size = text_tokenizer.tokenizer.vocab_size
-        self.text_weight_lookup = torch.zeros(vocab_size, dtype=torch.float32)
+        # 🚀 核心修复：建立具有冗余度的权重查找表
+        actual_vocab_size = text_tokenizer.tokenizer.vocab_size
 
         if os.path.exists(text_weight_path):
             with open(text_weight_path, 'r') as f:
                 text_weights = json.load(f)
-                for token_id_str, weight in text_weights.items():
-                    self.text_weight_lookup[int(token_id_str)] = float(weight)
+
+            # 1. 自动计算 JSON 文件中存在的最大 Token ID
+            max_json_id = max([int(k) for k in text_weights.keys()]) if text_weights else 0
+            # 2. 取词表大小与最大 ID 的较大值，确保矩阵不会越界
+            safe_size = max(actual_vocab_size, max_json_id + 1)
+
+            self.text_weight_lookup = torch.zeros(safe_size, dtype=torch.float32)
+
+            for k, v in text_weights.items():
+                curr_id = int(k)
+                # 3. 增加索引合法性双重检查
+                if curr_id < safe_size:
+                    self.text_weight_lookup[curr_id] = float(v)
+
+            # 记录日志方便调试（可选）
+            logger.info(f"Loaded {len(text_weights)} text weights into lookup table of size {safe_size}")
         else:
-            logger.warning(f"TF-IDF weights not found at {text_weight_path}. Using random masking for text.")
-            self.text_weight_lookup += 1.0  # 退化为纯随机掩码
+            print(f"Text weight file {text_weight_path} not found, using random weights")
+            # 如果没找到字典，按实际识别的词表大小退化为全随机掩码
+            self.text_weight_lookup = torch.zeros(actual_vocab_size, dtype=torch.float32) + 1.0
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # 1. 运行父类逻辑，获取完美掩码过的 Motif 和 3D 字典
+        # 1. 拿到底层 Motif 的掩码结果 (Phase 1 逻辑)
         motif_batch = super().__call__(batch)
 
         # 2. 独立处理文本端的掩码
@@ -344,27 +332,21 @@ class GSMATPhase2Collator(GSMATPretrainingCollator):
         batch_text = pad_sequence(text_ids, batch_first=True, padding_value=self.text_pad_id)
         batch_size, text_len = batch_text.shape
 
-        # 获取文本掩码权重并进行多项式采样
         text_weights = self.text_weight_lookup[batch_text]
-        text_weights[batch_text == self.text_pad_id] = 0.0  # padding 绝不掩码
+        text_weights[batch_text == self.text_pad_id] = 0.0
 
         masked_text_ids = batch_text.clone()
         text_labels = batch_text.clone()
         text_mask_positions = torch.zeros_like(batch_text, dtype=torch.bool)
 
         for i in range(batch_size):
-            row_weight = text_weights[i]
-            if row_weight.sum() <= 0:
-                continue
-
-            num_to_mask = max(1, int((batch_text[i] != self.text_pad_id).sum() * self.mask_ratio))
-            mask_idx = torch.multinomial(row_weight + 1e-6, num_samples=num_to_mask, replacement=False)
-
-            text_mask_positions[i, mask_idx] = True
-            masked_text_ids[i, mask_idx] = self.text_mask_token_id
-
+            row_w = text_weights[i]
+            if row_w.sum() > 0:
+                num_to_mask = max(1, int((batch_text[i] != self.text_pad_id).sum() * self.mask_ratio))
+                mask_idx = torch.multinomial(row_w + 1e-6, num_samples=num_to_mask, replacement=False)
+                text_mask_positions[i, mask_idx] = True
+                masked_text_ids[i, mask_idx] = self.mask_token_id
         text_labels[~text_mask_positions] = -100
-        text_attention_mask = (masked_text_ids != self.text_pad_id).long()
 
         # ==========================================================
         # 🚀 3. 核心大招：序列级物理拼接 & 掩码隔离
@@ -374,16 +356,16 @@ class GSMATPhase2Collator(GSMATPretrainingCollator):
         concat_input_ids = torch.cat([masked_text_ids, motif_batch["input_ids"]], dim=1)
 
         # B. 拼接 attention_mask
-        concat_attention_mask = torch.cat([text_attention_mask, motif_batch["attention_mask"]], dim=1)
+        text_att_mask = (masked_text_ids != self.text_pad_id).long()
+        concat_attention_mask = torch.cat([text_att_mask, motif_batch["attention_mask"]], dim=1)
 
-        # C. 拼接 labels: Decoder算交叉熵使用，包含文本和分子两端的掩码目标
+        # C. 拼接 labels: Decoder算交叉熵用
         concat_labels = torch.cat([text_labels, motif_batch["labels"]], dim=1)
 
         # D. 3D 特征扩充：文本部分没有 3D，全部填充 e3fp_pad_id (-1)
         fp_levels, fp_dim = motif_batch["e3fp_ids"].shape[1:]
         dummy_e3fp = torch.full((batch_size, text_len, fp_dim), self.e3fp_pad_id,
                                 dtype=motif_batch["e3fp_ids"].dtype, device=motif_batch["e3fp_ids"].device)
-
         concat_e3fp_ids = torch.cat([dummy_e3fp, motif_batch["e3fp_ids"]], dim=1)
         concat_unmasked_e3fp_ids = torch.cat([dummy_e3fp, motif_batch["unmasked_e3fp_ids"]], dim=1)
 
@@ -392,14 +374,21 @@ class GSMATPhase2Collator(GSMATPretrainingCollator):
                                       device=motif_batch["atom_attention_mask"].device)
         concat_atom_mask = torch.cat([dummy_atom_mask, motif_batch["atom_attention_mask"]], dim=1)
 
-        # F. 掩码矩阵隔离 (Geometric Head 专属): 文本处强制为 False，绝不回归 3D 坐标！
+        # F. 掩码矩阵隔离 (Geometric Head 专属): 文本处全为 False，Motif 处保留原样
         concat_mask_positions = torch.cat([torch.zeros_like(text_mask_positions), motif_batch["mask_positions"]], dim=1)
 
-        # G. 🚀 致命修复：偏移 atom_to_motif_map
-        # 由于前面插入了 text_len 长度的文本，原先指向 Motif 的索引必须全部向右平移 text_len！
+        # G. 🚀 关键修复：平移并拼接映射表
         shifted_map = motif_batch["atom_to_motif_map"].clone()
         valid_map_mask = shifted_map != -1
+        # 将原先指向 Motif 的索引向右平移 text_len
         shifted_map[valid_map_mask] += text_len
+
+        # 🆕 新增：为文本部分创建 dummy 映射 (-1 表示不指向任何 Motif)
+        dummy_map = torch.full((batch_size, text_len), -1,
+                               dtype=shifted_map.dtype, device=shifted_map.device)
+
+        # 🆕 拼接：使映射表长度与 e3fp_ids (text_len + motif_len) 绝对对齐
+        concat_map = torch.cat([dummy_map, shifted_map], dim=1)
 
         return {
             "input_ids": concat_input_ids,
@@ -408,6 +397,6 @@ class GSMATPhase2Collator(GSMATPretrainingCollator):
             "e3fp_ids": concat_e3fp_ids,
             "unmasked_e3fp_ids": concat_unmasked_e3fp_ids,
             "atom_attention_mask": concat_atom_mask,
-            "atom_to_motif_map": shifted_map,  # 修正后的 3D 挂载地图
+            "atom_to_motif_map": concat_map,  # 修正后的 3D 挂载地图
             "mask_positions": concat_mask_positions  # 绝对纯净的 3D 回归目标掩码
         }

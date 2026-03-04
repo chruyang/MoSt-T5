@@ -61,3 +61,7 @@ class DataArguments:
         default=None,
         metadata={"help": "For debugging purposes, truncate the number of evaluation examples to this value if set."}
     )
+    text_weight_path: str = field(
+        default=None,
+        metadata={"help": "Path to the static text IDF weights JSON file."}
+    )

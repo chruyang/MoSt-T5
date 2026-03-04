@@ -18,11 +18,12 @@ from dataset.dataset import GSMATDataset, GSMATPhase2Collator
 from model.configuration import MoStT5Config
 from model.modeling import MoStT5ForConditionalGeneration
 from arguments import ModelArguments, DataArguments
-
+from transformers import AutoConfig
 logger = logging.getLogger(__name__)
 
 
 def main():
+    AutoConfig.register("most-t5", MoStT5Config)
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))

@@ -55,22 +55,31 @@ class GeoSemanticFusion(nn.Module):
     def compute_pooled_3d(self, e3fp_emb, atom_to_motif_map, atom_mask, batch_size, n_motifs):
         """将底层原子 3D 特征池化到 2D Motif 级别"""
         dim = e3fp_emb.shape[-1]
-        masked_e3fp = e3fp_emb * atom_mask.unsqueeze(-1)
 
-        flat_map = atom_to_motif_map + (torch.arange(batch_size, device=e3fp_emb.device).view(-1, 1) * n_motifs)
+        # 1. 🚀 建立有效映射掩码 (排除 -1 的干扰)
+        valid_map_mask = (atom_to_motif_map >= 0).long()
+        # 双重保险：必须是真实原子 (atom_mask) 且有合法映射
+        final_mask = atom_mask * valid_map_mask
+
+        masked_e3fp = e3fp_emb * final_mask.unsqueeze(-1)
+
+        # 2. 🚀 安全截断：把 -1 变成 0 避免计算出错
+        # 因为 final_mask 已经是 0，所以该位置特征不会被计入 sum
+        safe_map = torch.clamp(atom_to_motif_map, min=0)
+
+        # 3. 计算展平索引
+        flat_map = safe_map + (torch.arange(batch_size, device=e3fp_emb.device).view(-1, 1) * n_motifs)
         flat_map = flat_map.view(-1)
 
-        max_index = batch_size * n_motifs - 1
-        flat_map = torch.clamp(flat_map, min=0, max=max_index)
-
+        # 初始化统计张量
         sum_features = torch.zeros(batch_size * n_motifs, dim, device=e3fp_emb.device, dtype=e3fp_emb.dtype)
         count_atoms = torch.zeros(batch_size * n_motifs, 1, device=e3fp_emb.device, dtype=e3fp_emb.dtype)
 
+        # 4. 执行聚合
         sum_features.index_add_(0, flat_map, masked_e3fp.view(-1, dim))
-        count_atoms.index_add_(0, flat_map, atom_mask.view(-1, 1).float())
+        count_atoms.index_add_(0, flat_map, final_mask.view(-1, 1).float())
 
-        pooled_3d = sum_features / (count_atoms + 1e-9)
-        return pooled_3d.view(batch_size, n_motifs, dim)
+        return (sum_features / (count_atoms + 1e-9)).view(batch_size, n_motifs, dim)
 
     def forward(self, motif_emb, e3fp_emb, atom_to_motif_map, atom_mask):
         batch_size, n_motifs, dim = motif_emb.shape

@@ -32,3 +32,34 @@ torchrun --nproc_per_node=3 train.py \
     --report_to "tensorboard"
 
 #2
+
+# 确保在项目根目录下执行
+torchrun --nproc_per_node=6 train2.py \
+    --model_name_or_path "./checkpoint-127500" \
+    --train_file "dataset/3d-pubchem-train.lmdb" \
+    --validation_file "dataset/3d-pubchem-valid.lmdb" \
+    --vocab_path "asset/mol_vocabs/my_dataset_vocab.txt" \
+    --text_weight_path "asset/text_idf_weights.json" \
+    --output_dir "./most_t5_phase2_alignment_v2" \
+    --max_len 512 \
+    --e3fp_num_levels 4 \
+    --e3fp_vocab_size 4096 \
+    --fusion_type "gated" \
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --gradient_accumulation_steps 2 \
+    --num_train_epochs 15 \
+    --learning_rate 1e-4 \
+    --warmup_ratio 0.1 \
+    --lr_scheduler_type "cosine" \
+    --bf16 True \
+    --do_train \
+    --do_eval \
+    --evaluation_strategy "steps" \
+    --eval_steps 1000 \
+    --save_strategy "steps" \
+    --save_steps 1000 \
+    --save_total_limit 3 \
+    --dataloader_num_workers 4 \
+    --report_to "tensorboard" \
+    --logging_steps 10
