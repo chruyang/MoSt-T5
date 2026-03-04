@@ -92,7 +92,7 @@ class GSMATDataset(Dataset):
                 text = entry.get('description', '')
             if not text:  # 如果还是空，回退到 text (兼容 split 脚本生成的字段)
                 text = entry.get('text', '')
-            atom_mapping = entry.get('atom_mapping', [])
+            atom_mapping = entry.get('atom_to_motif_map', [])
             e3fp_numpy = entry.get('e3fp')
 
             # 2. Text 处理
@@ -102,6 +102,12 @@ class GSMATDataset(Dataset):
             # 3. Motif 处理
             motif_ids = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False)
             if motif_ids.dim() > 1: motif_ids = motif_ids.squeeze(0)
+
+            # 🚀 修复 Bug 3: OOV 灾难熔断机制
+            # 如果序列中存在 <unk>，说明基团被碎裂，直接抛出异常触发重采样，拒绝这颗“毒药”
+            unk_token_id = self.motif_tokenizer.tokenizer.unk_token_id
+            if unk_token_id is not None and unk_token_id in motif_ids:
+                raise ValueError(f"OOV token <unk> detected in 2D sequence! Skipping bad sample.")
 
             # 4. E3FP 处理 (带 Fallback 和 修复)
             if e3fp_numpy is not None:
@@ -113,10 +119,12 @@ class GSMATDataset(Dataset):
 
             # 5. Atom Mapping
             num_atoms = e3fp_ids.shape[0]
-            atom_to_motif_map = torch.zeros(num_atoms, dtype=torch.long)
+
+            # 🚀 修复 Bug 1 & 2：必须使用 -1 作为无归属原子的默认值！绝对不能用 0 (0 是 <bom>)
+            atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
 
             for motif_idx, atom_indices in enumerate(atom_mapping):
-                token_idx = motif_idx + 1
+                token_idx = motif_idx + 1  # +1 完美跳过开头的 <bom>
                 if token_idx >= len(motif_ids): break
                 for atom_idx in atom_indices:
                     if atom_idx < num_atoms:
@@ -130,7 +138,7 @@ class GSMATDataset(Dataset):
             }
 
         except Exception as e:
-            # 坏样本跳过机制
+            # 坏样本跳过机制 (包含 OOV 跳过)
             # logger.warning(f"Error loading sample {idx}: {e}. Skipping...")
             return self.__getitem__((idx + 1) % self.length)
 
@@ -155,7 +163,9 @@ class GSMATCollator:
         # Padding Inputs
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.motif_pad_id)
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
+
+        # 🚀 修复 Bug 2：Padding 占位符必须为 -1，绝不能指向 <bom>
+        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=-1)
 
         # Padding Labels (Mol2Text Target)
         batch_labels = pad_sequence(text_ids, batch_first=True, padding_value=self.ignore_index)
@@ -165,8 +175,8 @@ class GSMATCollator:
         atom_mask = (batch_e3fp[:, :, 0] != self.e3fp_pad_id).long()
 
         return {
-            "input_ids": batch_motif,  # 👈 修改：从 "motif_ids" 改为 "input_ids"
-            "attention_mask": motif_mask,  # 👈 修改：从 "motif_attention_mask" 改为 "attention_mask"
+            "input_ids": batch_motif,
+            "attention_mask": motif_mask,
             "e3fp_ids": batch_e3fp,
             "atom_attention_mask": atom_mask,
             "atom_to_motif_map": batch_map,
@@ -184,14 +194,14 @@ class GSMATPretrainingCollator:
         self.e3fp_pad_id = e3fp_pad_id
         self.mask_ratio = mask_ratio
 
-        # 🚀 1. 引入 CAMT5 的底层 Frag 引擎
+        # 1. 引入 CAMT5 的底层 Frag 引擎
         try:
             from model.CAMT5.representation import Frag
             self.frag_processor = Frag()
         except ImportError:
             raise ImportError("无法导入 Frag，请确保路径正确")
 
-        # 🚀 2. 构建 O(1) 极速权重查表 Tensor (初始化时只执行一次)
+        # 2. 构建 O(1) 极速权重查表 Tensor (初始化时只执行一次)
         vocab_size = motif_tokenizer.vocab_size
         self.weight_lookup = torch.zeros(vocab_size, dtype=torch.float32)
 
@@ -211,7 +221,7 @@ class GSMATPretrainingCollator:
         # 对权重进行平滑 (对数平滑)，防止大小基团概率悬殊过大
         self.weight_lookup = torch.log1p(self.weight_lookup)
 
-        # 获取 T5 的掩码替换符 (我们统一使用 <extra_id_0> 作为占位符，保持长度不变以保全 3D 映射)
+        # 获取 T5 的掩码替换符 (统一使用 <extra_id_0> 作为占位符，保持长度不变以保全 3D 映射)
         self.mask_token_id = self.motif_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
@@ -222,7 +232,9 @@ class GSMATPretrainingCollator:
         # 1. 基础 Padding
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.pad_id)
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
+
+        # 🚀 修复 Bug 2：Padding 占位符必须为 -1，绝不能指向 <bom>
+        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=-1)
 
         batch_size, seq_len = batch_motif.shape
 

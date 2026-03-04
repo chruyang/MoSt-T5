@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
       <paths name="admin1@raspberrypi1:22 password">
         <serverdata>
@@ -72,6 +72,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="root@connect.nmb2.seetacloud.com:17815 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/tmp/pycharm_project_253" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="root@connect.nmb2.seetacloud.com:20030 password">
         <serverdata>
           <mappings>
@@ -93,7 +100,21 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="root@connect.nmb2.seetacloud.com:28883 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="root@connect.nmb2.seetacloud.com:32622 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@connect.nmb2.seetacloud.com:40350 agent">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />
@@ -129,5 +150,6 @@
         </serverdata>
       </paths>
     </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
   </component>
 </project>

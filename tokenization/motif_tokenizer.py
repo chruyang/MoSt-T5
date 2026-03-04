@@ -5,7 +5,6 @@ import logging
 from typing import List, Union
 from transformers import T5Tokenizer
 
-# ... (路径注入部分保持不变) ...
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
@@ -25,8 +24,6 @@ logger = logging.getLogger(__name__)
 class MotifTokenizer:
     """
     基团分词器 (Motif Modality)
-
-    [修改注] 增加了 padding 参数，支持动态 Padding 策略。
     """
 
     def __init__(self,
@@ -40,7 +37,6 @@ class MotifTokenizer:
         self.max_len = max_len
         self.frag_processor = Frag()
 
-        # ... (初始化逻辑保持不变) ...
         logger.info(f"Initializing MotifTokenizer (Base: {model_name})")
 
         try:
@@ -48,7 +44,7 @@ class MotifTokenizer:
         except Exception:
             self.tokenizer = T5Tokenizer.from_pretrained("t5-base")
 
-        # 路径解析与词表加载 (保持不变)
+        # 路径解析与词表加载
         env_vocab = os.getenv("FRAG_VOCAB_PATH")
         candidates = [vocab_file, os.path.join(project_root, vocab_file), env_vocab]
         valid_vocab_path = None
@@ -65,7 +61,11 @@ class MotifTokenizer:
 
         self.tokenizer.add_tokens(new_tokens)
 
-        special_tokens = {'additional_special_tokens': ['<bom>', '<eom>']}
+        # 🚀 核心升级二：彻底补全特殊控制符，包括 [.] 与 100 个 extra_id 掩码哨兵
+        extra_ids = [f"<extra_id_{i}>" for i in range(100)]
+        special_tokens_list = ['<bom>', '<eom>', '[.]'] + extra_ids
+
+        special_tokens = {'additional_special_tokens': special_tokens_list}
         self.tokenizer.add_special_tokens(special_tokens)
 
         self.pad_id = self.tokenizer.pad_token_id
@@ -76,27 +76,19 @@ class MotifTokenizer:
     def encode(self, smiles: str, return_tensors: str = "pt", padding: bool = False) -> torch.Tensor:
         """
         SMILES -> Frag String -> Token IDs
-
-        Args:
-            padding (bool): 是否填充到 max_len。
-                            默认为 False (推荐)，以便在 Collator 中进行动态 Padding。
         """
-        # 1. 切分
         try:
             result = self.frag_processor.encode(smiles)
             motif_str = result[0] if isinstance(result, tuple) else result
         except Exception:
             motif_str = "[C]"
 
-            # 2. 构造字符串
         full_str = f"<bom> {motif_str} <eom>"
 
-        # 3. 编码
-        # [关键修改] 根据 padding 参数决定行为
         encoding = self.tokenizer(
             full_str,
             max_length=self.max_len,
-            padding="max_length" if padding else False,  # 修正这里！
+            padding="max_length" if padding else False,
             truncation=True,
             return_tensors=return_tensors,
             add_special_tokens=False

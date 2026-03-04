@@ -11,7 +11,7 @@ class ModelArguments:
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     vocab_path: str = field(
-        default="asset/mol_vocabs/frag_merged.txt",
+        default="asset/mol_vocabs/my_dataset_vocab.txt",
         metadata={"help": "Path to the motif vocabulary file"}
     )
     # E3FP 参数
