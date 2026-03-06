@@ -33,7 +33,6 @@ torchrun --nproc_per_node=3 train.py \
 
 #2
 
-# 确保在项目根目录下执行
 torchrun --nproc_per_node=6 train2.py \
     --model_name_or_path "./checkpoint-127500" \
     --train_file "dataset/3d-pubchem-train.lmdb" \
@@ -45,14 +44,16 @@ torchrun --nproc_per_node=6 train2.py \
     --e3fp_num_levels 4 \
     --e3fp_vocab_size 4096 \
     --fusion_type "gated" \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
-    --gradient_accumulation_steps 2 \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
+    --gradient_accumulation_steps 4 \
     --num_train_epochs 15 \
     --learning_rate 1e-4 \
     --warmup_ratio 0.1 \
     --lr_scheduler_type "cosine" \
     --bf16 True \
+    --gradient_checkpointing True \
+    --save_safetensors False \
     --do_train \
     --do_eval \
     --evaluation_strategy "steps" \
@@ -60,6 +61,11 @@ torchrun --nproc_per_node=6 train2.py \
     --save_strategy "steps" \
     --save_steps 1000 \
     --save_total_limit 3 \
-    --dataloader_num_workers 4 \
+    --dataloader_num_workers 0 \
     --report_to "tensorboard" \
     --logging_steps 10
+
+
+cp ~/.cache/huggingface/hub/models--google--t5-v1_1-base/snapshots/b5fc947a416ea3cb079532cb3c2bbadeb7f800fc/spiece.model ./
+cp ~/.cache/huggingface/hub/models--google--t5-v1_1-base/snapshots/b5fc947a416ea3cb079532cb3c2bbadeb7f800fc/tokenizer_config.json ./
+cp ~/.cache/huggingface/hub/models--google--t5-v1_1-base/snapshots/b5fc947a416ea3cb079532cb3c2bbadeb7f800fc/special_tokens_map.json ./

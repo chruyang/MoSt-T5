@@ -275,6 +275,8 @@ def linearize(smile: SMILES) -> Tuple[str, List[str], List[List[int]]]:
     smile = smile.replace("[N@@+]", "[N+]")
     smile = smile.replace("[S@@]", "S")
     smile = smile.replace("[S@]", "S")
+    smile = smile.replace("[P@@]", "P")
+    smile = smile.replace("[P@]", "P")
     smile = smile.replace("/", "")
     smile = smile.replace("\\", "")
 
