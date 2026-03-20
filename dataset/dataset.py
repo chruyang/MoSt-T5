@@ -101,8 +101,18 @@ class GSMATDataset(Dataset):
             text_enc = self.text_tokenizer(text, padding=False, truncation=True)
             text_ids = text_enc['input_ids'].squeeze(0)
 
-            # 3. Motif 处理
-            motif_ids = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False)
+            # ---------------------------------------------------------
+            # 3. Motif 处理 (🚀 请求返回对齐地图)
+            # ---------------------------------------------------------
+            motif_result = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False, return_mapping=True)
+
+            # 兼容性拆包
+            if isinstance(motif_result, tuple):
+                motif_ids, motif_mapping = motif_result
+            else:
+                motif_ids = motif_result
+                motif_mapping = []  # 异常 Fallback
+
             if motif_ids.dim() > 1: motif_ids = motif_ids.squeeze(0)
 
             # 4. E3FP 处理 (带 Fallback 和 修复)
@@ -113,16 +123,22 @@ class GSMATDataset(Dataset):
 
             e3fp_ids = self.handle_dimension_mismatch(e3fp_ids)
 
-            # 5. Atom Mapping
+            # ---------------------------------------------------------
+            # 5. Atom Mapping (🚀 实施 3D 特征的绝对精准挂载！)
+            # ---------------------------------------------------------
             num_atoms = e3fp_ids.shape[0]
             atom_to_motif_map = torch.zeros(num_atoms, dtype=torch.long)
 
             for motif_idx, atom_indices in enumerate(atom_mapping):
-                token_idx = motif_idx + 1
-                if token_idx >= len(motif_ids): break
+                if motif_idx >= len(motif_mapping):
+                    break  # 防止序列被截断导致的越界
+
+                # 🎯 获取该 Motif 骨架在扩充后的 1D 序列中的真实、绝对索引！
+                real_token_idx = motif_mapping[motif_idx]
+
                 for atom_idx in atom_indices:
                     if atom_idx < num_atoms:
-                        atom_to_motif_map[atom_idx] = token_idx
+                        atom_to_motif_map[atom_idx] = real_token_idx
 
             return {
                 "motif_input_ids": motif_ids,

@@ -74,9 +74,10 @@ class MotifTokenizer:
         self.eom_id = self.tokenizer.convert_tokens_to_ids('<eom>')
         self.unk_id = self.tokenizer.unk_token_id
 
-    def encode(self, smiles: str, return_tensors: str = "pt", padding: bool = False) -> torch.Tensor:
+    def encode(self, smiles: str, return_tensors: str = "pt", padding: bool = False, return_mapping: bool = False):
         """
         SMILES -> 动态解耦 -> Direct Token IDs
+        🌟 新增 return_mapping 参数：返回原始 Motif 到绝对 Token 索引的映射地图
         """
         try:
             result = self.frag_processor.encode(smiles)
@@ -84,25 +85,18 @@ class MotifTokenizer:
             motifs = motif_str.split()
 
             final_tokens = ['<bom>']
+            orig_to_new_map = []  # 🚀 记录坐标地图
 
             for m in motifs:
-                # 遇到多组分分隔符直接放行
                 if m == "[.]":
                     final_tokens.append(m)
+                    orig_to_new_map.append(len(final_tokens) - 1)
                     continue
 
-                # 🚀 1. 动态剥离：提取所有的内嵌锚点
                 anchors = re.findall(r'<\d+\*>', m)
-
-                # 🚀 2. 提取纯净骨架
-                if m.startswith("[") and m.endswith("]"):
-                    inner = m[1:-1]
-                else:
-                    inner = m
-                pure_inner = re.sub(r'<\d+\*>', '', inner)
+                pure_inner = re.sub(r'<\d+\*>', '', m[1:-1] if m.startswith("[") else m)
                 pure_motif = f"[{pure_inner}]"
 
-                # 🚀 3. 拓扑与语义解耦入列 (先放锚点，再放骨架)
                 final_tokens.extend(anchors)
 
                 if pure_motif in self.motif_vocab_set:
@@ -110,23 +104,30 @@ class MotifTokenizer:
                 else:
                     final_tokens.append(self.tokenizer.unk_token)
 
-            final_tokens.append('<eom>')
+                # 🚀 核心：无论前面插了多少个锚点，我们只记录真正“化学语义实体”的绝对索引
+                orig_to_new_map.append(len(final_tokens) - 1)
 
-            # 降维打击：直接转化为 ID，绝不给 T5 切碎的机会！
+            final_tokens.append('<eom>')
             input_ids = self.tokenizer.convert_tokens_to_ids(final_tokens)
 
         except Exception as e:
             logger.debug(f"Frag parsing failed for SMILES: {smiles}. Error: {e}")
             input_ids = [self.bom_id, self.unk_id, self.eom_id]
+            orig_to_new_map = [1]  # 异常情况指向 <unk>
 
-        # Padding 与截断逻辑
+        # Padding 与截断逻辑 (必须同步截断地图！)
         if len(input_ids) > self.max_len:
             input_ids = input_ids[:self.max_len - 1] + [self.eom_id]
+            orig_to_new_map = [idx for idx in orig_to_new_map if idx < self.max_len - 1]
         elif padding and len(input_ids) < self.max_len:
             input_ids += [self.pad_id] * (self.max_len - len(input_ids))
 
         if return_tensors == "pt":
-            return torch.tensor([input_ids])
+            input_ids_tensor = torch.tensor([input_ids])
+            if return_mapping: return input_ids_tensor, orig_to_new_map
+            return input_ids_tensor
+
+        if return_mapping: return input_ids, orig_to_new_map
         return input_ids
 
     def decode(self, token_ids: Union[torch.Tensor, List[int]], skip_special_tokens: bool = True) -> str:
