@@ -127,7 +127,7 @@ class GSMATDataset(Dataset):
             # 5. Atom Mapping (🚀 实施 3D 特征的绝对精准挂载！)
             # ---------------------------------------------------------
             num_atoms = e3fp_ids.shape[0]
-            atom_to_motif_map = torch.zeros(num_atoms, dtype=torch.long)
+            atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
 
             for motif_idx, atom_indices in enumerate(atom_mapping):
                 if motif_idx >= len(motif_mapping):
@@ -178,7 +178,7 @@ class GSMATCollator:
         # Padding Inputs
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.motif_pad_id)
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
+        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=-1)
 
         # Padding Labels (Mol2Text Target)
         batch_labels = pad_sequence(text_ids, batch_first=True, padding_value=self.ignore_index)
@@ -245,7 +245,7 @@ class GSMATPretrainingCollator:
         # 1. 基础 Padding
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.pad_id)
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
+        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=-1)
 
         batch_size, seq_len = batch_motif.shape
 

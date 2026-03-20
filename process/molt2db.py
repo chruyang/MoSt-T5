@@ -45,11 +45,9 @@ def worker_process(item):
             # 🚀 保持宏观图结构：直接将完整的切块拼接，绝不拆解
             linear_smiles += frag_str + "[.]"
 
-            # 提取 2D 文本 Token 到 3D 原子索引的绝对映射
             if len(res) == 3:
                 # 加上全局偏移量，保证多片段分子(A.B)的原子序号不冲突
-                shifted_mapping = [[idx + atom_offset for idx in motif] for motif in res[2]]
-                atom_mapping.extend(shifted_mapping)
+                shifted_mapping = [[idx + atom_offset for idx in motif] for motif in res[1]]
             else:
                 # 兜底：处理没有被切断的极简分子，整体作为一个 Token
                 m_temp = Chem.MolFromSmiles(sub_smi)
