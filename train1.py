@@ -38,6 +38,12 @@ def main():
     )
     set_seed(training_args.seed)
 
+    # 🌟 新增：配置追踪器，确保您明确知道使用的是新方案！
+    logger.info("=" * 60)
+    logger.info(f"🧪 [VOCAB SCHEME] 加载的新词表路径: {model_args.vocab_path}")
+    logger.info(f"💾 [DATA SOURCE] 加载的新数据集库: {data_args.train_file}")
+    logger.info("=" * 60)
+
     # --- Tokenizers ---
     logger.info("Loading Tokenizers...")
     text_tokenizer = TextTokenizer(model_name=model_args.model_name_or_path, max_len=data_args.max_len)
@@ -89,9 +95,12 @@ def main():
     old_vocab_size = model.shared.weight.shape[0]
 
     # 🚀 核心对齐：严谨地将模型 Embedding 矩阵大小与补全后的 Tokenizer 词表大小对齐
-    model.resize_token_embeddings(motif_tokenizer.vocab_size)
+    # ⚠️ 致命 Bug 修复：使用 len(motif_tokenizer.tokenizer) 捕获真实的底层长度
+    new_vocab_size = len(motif_tokenizer.tokenizer)
+    logger.info(f"🔄 Resizing Token Embeddings: {old_vocab_size} -> {new_vocab_size}")
+    model.resize_token_embeddings(new_vocab_size)
 
-    # 🚀 终极 SOTA 初始化：动态分布匹配 (超越 CAMT5 的核心细节)
+    # 🚀 终极 SOTA 初始化：动态分布匹配
     with torch.no_grad():
         if hasattr(model, "shared") and model.shared.weight.shape[0] > old_vocab_size:
             # 1. 精准计算 T5 原始词表的统计分布
@@ -122,7 +131,6 @@ def main():
         mask_ratio=0.15  # 经典 15% 掩码率
     )
 
-    # 🚀 移除了 callbacks=[EarlyStoppingCallback...]，预训练不需要早停
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -136,8 +144,8 @@ def main():
     logger.info("🔍 WEIGHT SANITY CHECK (Before Training)")
     if hasattr(model, "shared"):
         std = model.shared.weight.std().item()
-        logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: ~0.002 or match Base Model)")
-        if std > 10.0: # 稍微调高了报警阈值，以免误伤 t5-v1_1-base 的正常大方差
+        logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: match Base Model)")
+        if std > 10.0:
             logger.warning("⚠️ WARNING: Shared Embeddings are exceptionally large!")
     if hasattr(model, "lm_head"):
         std = model.lm_head.weight.std().item()

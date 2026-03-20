@@ -215,7 +215,7 @@ class GSMATPretrainingCollator:
             raise ImportError("无法导入 Frag，请确保路径正确")
 
         # 🚀 2. 构建 O(1) 极速权重查表 Tensor (初始化时只执行一次)
-        vocab_size = motif_tokenizer.vocab_size
+        vocab_size = len(motif_tokenizer.tokenizer)
         self.weight_lookup = torch.zeros(vocab_size, dtype=torch.float32)
 
         vocab_dict = motif_tokenizer.tokenizer.get_vocab()
