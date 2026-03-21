@@ -38,7 +38,7 @@ def main():
     )
     set_seed(training_args.seed)
 
-    # 🌟 新增：配置追踪器，确保您明确知道使用的是新方案！
+    # 🌟 新增：配置追踪器，确保明确知道使用的是新方案
     logger.info("=" * 60)
     logger.info(f"🧪 [VOCAB SCHEME] 加载的新词表路径: {model_args.vocab_path}")
     logger.info(f"💾 [DATA SOURCE] 加载的新数据集库: {data_args.train_file}")
@@ -91,11 +91,11 @@ def main():
         ignore_mismatched_sizes=True
     )
 
-    # 💡 读取原始词表大小 (通常是 32128)
+    # 💡 读取原始词表大小
     old_vocab_size = model.shared.weight.shape[0]
 
     # 🚀 核心对齐：严谨地将模型 Embedding 矩阵大小与补全后的 Tokenizer 词表大小对齐
-    # ⚠️ 致命 Bug 修复：使用 len(motif_tokenizer.tokenizer) 捕获真实的底层长度
+    # ✅ 致命 Bug 已修复：使用 len(motif_tokenizer.tokenizer) 捕获真实的底层长度
     new_vocab_size = len(motif_tokenizer.tokenizer)
     logger.info(f"🔄 Resizing Token Embeddings: {old_vocab_size} -> {new_vocab_size}")
     model.resize_token_embeddings(new_vocab_size)
@@ -111,7 +111,7 @@ def main():
             # 2. 将新增的 Motif 权重严格限制在这个原生分布内
             model.shared.weight[old_vocab_size:].normal_(mean=old_mean, std=old_std)
 
-            # 3. 同步处理 LM Head (如果存在且不与 shared 绑定)
+            # 3. 同步处理 LM Head
             if hasattr(model, "lm_head") and model.lm_head.weight.shape[0] > old_vocab_size:
                 model.lm_head.weight[old_vocab_size:].normal_(mean=old_mean, std=old_std)
 
@@ -128,7 +128,8 @@ def main():
     data_collator = GSMATPretrainingCollator(
         motif_tokenizer=motif_tokenizer,
         e3fp_pad_id=-1,
-        mask_ratio=0.15  # 经典 15% 掩码率
+        mask_ratio=0.15,      # 任务 A (1D+3D同步掩码) 比例
+        task_b_ratio=0.15     # 任务 B (纯3D熔断) 比例
     )
 
     trainer = Trainer(
@@ -145,7 +146,7 @@ def main():
     if hasattr(model, "shared"):
         std = model.shared.weight.std().item()
         logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: match Base Model)")
-        if std > 10.0:
+        if std > 10.5: # 稍微调高阈值，匹配真实的 t5 方差 (~10.26)
             logger.warning("⚠️ WARNING: Shared Embeddings are exceptionally large!")
     if hasattr(model, "lm_head"):
         std = model.lm_head.weight.std().item()
@@ -156,7 +157,7 @@ def main():
     logger.info("=" * 40)
 
     if training_args.do_train:
-        train_result = trainer.train()
+        train_result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
         trainer.save_model()
         trainer.log_metrics("train", train_result.metrics)
         trainer.save_metrics("train", train_result.metrics)
