@@ -69,3 +69,33 @@ torchrun --nproc_per_node=6 train2.py \
 cp ~/.cache/huggingface/hub/models--google--t5-v1_1-base/snapshots/b5fc947a416ea3cb079532cb3c2bbadeb7f800fc/spiece.model ./
 cp ~/.cache/huggingface/hub/models--google--t5-v1_1-base/snapshots/b5fc947a416ea3cb079532cb3c2bbadeb7f800fc/tokenizer_config.json ./
 cp ~/.cache/huggingface/hub/models--google--t5-v1_1-base/snapshots/b5fc947a416ea3cb079532cb3c2bbadeb7f800fc/special_tokens_map.json ./
+
+
+
+export WANDB_DISABLED="true"
+export WANDB_MODE="offline"
+export NCCL_P2P_DISABLE="1"
+export NCCL_IB_DISABLE="1"
+
+nohup torchrun --nproc_per_node=2 --master_port=29501 train1.py \
+  --model_name_or_path "google/t5-v1_1-base" \
+  --vocab_path "asset/mol_vocabs/vocab_20k.txt" \
+  --train_file "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchemqc/pubchemqc_final.lmdb" \
+  --output_dir "./checkpoints/phase1_pretrain" \
+  --do_train True \
+  --resume_from_checkpoint True \
+  --save_safetensors False \
+  --report_to "tensorboard" \
+  --per_device_train_batch_size 32 \
+  --gradient_accumulation_steps 2 \
+  --learning_rate 5e-4 \
+  --warmup_ratio 0.05 \
+  --weight_decay 0.0 \
+  --max_grad_norm 1.0 \
+  --bf16 True \
+  --dataloader_num_workers 8 \
+  --num_train_epochs 4 \
+  --save_steps 5000 \
+  --logging_steps 100 \
+  --save_total_limit 3 \
+  > train_phase1.log 2>&1 &

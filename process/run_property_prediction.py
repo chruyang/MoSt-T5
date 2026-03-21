@@ -18,14 +18,11 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
 # ==========================================
-# 🌍 1. MoleculeNet 全局任务注册表 (精简与更新版)
+# 🌍 1. MoleculeNet 全局任务注册表
 # ==========================================
 MOLECULE_NET_CONFIG = {
-    # --- 您专属的数据集 ---
     "estrogen": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["alpha", "beta"]},
     "metstab": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["high", "low"]},
-
-    # --- 分类任务 (Classification) ---
     "bbbp": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["p_np"]},
     "bace": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["Class"]},
     "clintox": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["FDA_APPROVED", "CT_TOX"]},
@@ -43,15 +40,10 @@ MOLECULE_NET_CONFIG = {
                               'Renal and urinary disorders', 'Pregnancy, puerperium and perinatal conditions',
                               'Ear and labyrinth disorders', 'Cardiac disorders', 'Nervous system disorders',
                               'Injury, poisoning and procedural complications']},
-
-    # --- 毒性预测双雄 ---
     "tox21": {"task_type": "classification", "smiles_col": "smiles",
               "target_cols": ['NR-AR', 'NR-AR-LBD', 'NR-AhR', 'NR-Aromatase', 'NR-ER', 'NR-ER-LBD', 'NR-PPAR-gamma',
                               'SR-ARE', 'SR-ATAD5', 'SR-HSE', 'SR-MMP', 'SR-p53']},
     "toxcast": {"task_type": "classification", "smiles_col": "smiles", "target_cols": "AUTO"},
-    # 🌟 核心：使用 AUTO 自动解析 617 个任务
-
-    # --- 其他备用任务 ---
     "hiv": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["HIV_active"]},
     "muv": {"task_type": "classification", "smiles_col": "smiles",
             "target_cols": ['MUV-466', 'MUV-548', 'MUV-600', 'MUV-644', 'MUV-652', 'MUV-689', 'MUV-692', 'MUV-712',
@@ -65,7 +57,7 @@ MOLECULE_NET_CONFIG = {
 
 
 # ==========================================
-# 🚀 2. 原子级到 Motif 级映射
+# 🚀 2. 原子级到 Motif 级映射 (修正为 -1)
 # ==========================================
 def generate_atom_to_motif_map_online(smiles, motif_ids):
     from model.CAMT5.representation import linearize
@@ -92,10 +84,11 @@ def generate_atom_to_motif_map_online(smiles, motif_ids):
             pass
 
     num_atoms = mol.GetNumAtoms()
-    atom_to_motif_list = [0] * num_atoms
+    # 🌟 修复雷区2: 初始化为 -1，而不是 0
+    atom_to_motif_list = [-1] * num_atoms
 
     for motif_idx, atom_indices in enumerate(full_mapping):
-        token_idx = motif_idx + 1
+        token_idx = motif_idx + 1  # 考虑到开头的 <s>
         if token_idx >= len(motif_ids): break
         for a_idx in atom_indices:
             if a_idx < num_atoms: atom_to_motif_list[a_idx] = token_idx
@@ -162,7 +155,7 @@ SPLIT_TO_ID = {'train': 0, 'val': 1, 'test': 2, 'validation': 1}
 
 
 # ==========================================
-# 🚀 4. Dataset (含全局特征缓存与 AUTO 自愈机制)
+# 🚀 4. Dataset (完美对齐预训练特征)
 # ==========================================
 class MoleculeNetDataset(Dataset):
     def __init__(self, data_dir, dataset_name, split_name, motif_tokenizer, e3fp_tokenizer, split_type="scaffold",
@@ -174,10 +167,13 @@ class MoleculeNetDataset(Dataset):
         target_cols = config["target_cols"]
         self.task_type = config["task_type"]
 
+        # 提取 3D 模型必需信息
+        self.e3fp_width = e3fp_tokenizer.fp_level + 1
+        self.e3fp_pad_idx = e3fp_tokenizer.padding_idx
+
         csv_path = f"{data_dir}/{dataset_name}/{dataset_name}.csv"
         global_cache_path = f"{data_dir}/{dataset_name}_global_feature_cache.pt"
 
-        # 🌟 核心：防御型 AUTO 解析机制
         if target_cols == "AUTO":
             temp_df = pd.read_csv(csv_path, nrows=0, sep=None, engine='python')
             target_cols = [col.strip() for col in temp_df.columns if col.strip() != smiles_col]
@@ -191,15 +187,14 @@ class MoleculeNetDataset(Dataset):
             with open(global_cache_path, 'rb') as f:
                 global_features = pickle.load(f)
         else:
-            print(
-                f"⏳ Global cache not found. Building for the ENTIRE [{dataset_name}] dataset (This only runs ONCE)...")
+            if split_name == "train":
+                print(f"⏳ Global cache not found. Building for the ENTIRE [{dataset_name}] dataset...")
             df_full = pd.read_csv(csv_path, sep=None, engine='python')
             df_full.columns = [col.strip() for col in df_full.columns]
             df_full = df_full.dropna(subset=[smiles_col])
 
             global_features = {}
             unique_smiles = df_full[smiles_col].unique()
-            print(f"⚙️ Extracting 3D/2D features for {len(unique_smiles)} unique molecules...")
 
             for smiles in unique_smiles:
                 try:
@@ -219,11 +214,21 @@ class MoleculeNetDataset(Dataset):
                                                dtype=torch.long).clone().detach()
                     if e3fp_tensor.dim() > 2: e3fp_tensor = e3fp_tensor.squeeze(0)
 
+                    # 🌟 修复雷区1: 移植预训练的强制维度对齐逻辑
+                    current_width = e3fp_tensor.shape[1]
+                    if current_width < self.e3fp_width:
+                        pad_tensor = torch.full((e3fp_tensor.shape[0], self.e3fp_width - current_width),
+                                                self.e3fp_pad_idx, dtype=torch.long)
+                        e3fp_tensor = torch.cat([e3fp_tensor, pad_tensor], dim=1)
+                    elif current_width > self.e3fp_width:
+                        e3fp_tensor = e3fp_tensor[:, :self.e3fp_width]
+
                     num_e3fp_atoms = e3fp_tensor.shape[0]
                     atom_map_list = atom_map_list[:num_e3fp_atoms]
                     if len(atom_map_list) < num_e3fp_atoms:
-                        atom_map_list.extend([0] * (num_e3fp_atoms - len(atom_map_list)))
-                    atom_mask = (e3fp_tensor[:, 0] != e3fp_tokenizer.padding_idx).long().tolist()
+                        atom_map_list.extend([-1] * (num_e3fp_atoms - len(atom_map_list)))
+
+                    atom_mask = (e3fp_tensor[:, 0] != self.e3fp_pad_idx).long().tolist()
 
                     global_features[smiles] = {
                         'motif_input_ids': torch.tensor(motif_ids, dtype=torch.long),
@@ -237,7 +242,8 @@ class MoleculeNetDataset(Dataset):
             os.makedirs(os.path.dirname(global_cache_path), exist_ok=True)
             with open(global_cache_path, 'wb') as f:
                 pickle.dump(global_features, f)
-            print(f"✅ Global cache built successfully with {len(global_features)} valid molecules!")
+            if split_name == "train":
+                print(f"✅ Global cache built successfully with {len(global_features)} valid molecules!")
 
         if split_type == "scaffold":
             split_path = f"{data_dir}/{dataset_name}/splits/scaffold-0.npy" if os.path.exists(
@@ -245,9 +251,6 @@ class MoleculeNetDataset(Dataset):
         else:
             split_path = f"{data_dir}/{dataset_name}/splits/random-0.npy" if os.path.exists(
                 f"{data_dir}/{dataset_name}/splits/random-0.npy") else f"{data_dir}/{dataset_name}/splits/random_seed{seed}.npy"
-
-        if not os.path.exists(split_path):
-            raise FileNotFoundError(f"❌ Split index missing: {split_path}")
 
         df = pd.read_csv(csv_path, sep=None, engine='python')
         df.columns = [col.strip() for col in df.columns]
@@ -292,7 +295,9 @@ class PropertyCollator:
         batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.pad)
         batch_mask = (batch_motif != self.pad).long()
         batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad)
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
+
+        # 🌟 修复雷区3: 严格对齐预训练的 mapping padding (-1)
+        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=-1)
         batch_atom_mask = pad_sequence(atom_masks, batch_first=True, padding_value=0)
 
         return {
@@ -306,7 +311,7 @@ class PropertyCollator:
 
 
 # ==========================================
-# 🚀 5. 对齐 Molformer 的宏平均评估
+# 🚀 5. 评估指标
 # ==========================================
 def compute_metrics(eval_pred, task_type="classification"):
     logits, labels = eval_pred
@@ -315,7 +320,6 @@ def compute_metrics(eval_pred, task_type="classification"):
     if task_type == "classification":
         probs = 1.0 / (1.0 + np.exp(-logits))
         aucs = []
-
         for i in range(labels.shape[1]):
             task_labels = labels[:, i]
             task_probs = probs[:, i]
@@ -327,9 +331,7 @@ def compute_metrics(eval_pred, task_type="classification"):
             if len(np.unique(valid_task_labels)) > 1:
                 auc = roc_auc_score(valid_task_labels, valid_task_probs)
                 aucs.append(auc)
-
         return {"roc_auc": np.mean(aucs) if aucs else 0.5}
-
     else:
         rmses = []
         for i in range(labels.shape[1]):
@@ -342,12 +344,11 @@ def compute_metrics(eval_pred, task_type="classification"):
 
             if len(valid_task_labels) > 0:
                 rmses.append(np.sqrt(mean_squared_error(valid_task_labels, valid_task_logits)))
-
         return {"rmse": np.mean(rmses) if rmses else 0.0}
 
 
 # ==========================================
-# 🚀 6. 主函数流程
+# 🚀 6. 主函数
 # ==========================================
 def main():
     parser = ArgumentParser()
@@ -363,7 +364,6 @@ def main():
 
     set_seed(args.seed)
 
-    # 🌟 核心：在模型初始化前拦截并解析 AUTO
     dataset_cfg = MOLECULE_NET_CONFIG[args.dataset_name]
     if dataset_cfg["target_cols"] == "AUTO":
         csv_path = f"{args.data_dir}/{args.dataset_name}/{args.dataset_name}.csv"
@@ -401,8 +401,8 @@ def main():
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"✅ Trainable params (Encoder LoRA + Head): {trainable_params:,}")
 
-    motif_tokenizer = MotifTokenizer(vocab_file="asset/mol_vocabs/my_dataset_vocab.txt",
-                                     model_name="google/t5-v1_1-base")
+    # 🌟 修复雷区：修改回真实使用的词表
+    motif_tokenizer = MotifTokenizer(vocab_file="asset/mol_vocabs/vocab_20k.txt", model_name="google/t5-v1_1-base")
     e3fp_tokenizer = E3FPTokenizer(fp_level=4, fp_bits=4096)
 
     train_dataset = MoleculeNetDataset(args.data_dir, args.dataset_name, "train", motif_tokenizer, e3fp_tokenizer,
@@ -412,7 +412,8 @@ def main():
     test_dataset = MoleculeNetDataset(args.data_dir, args.dataset_name, "test", motif_tokenizer, e3fp_tokenizer,
                                       split_type=args.split_type, seed=args.seed)
 
-    collator = PropertyCollator()
+    # 提取预训练对齐的 pad ID
+    collator = PropertyCollator(padding_value=motif_tokenizer.pad_id, e3fp_pad=-1)
 
     training_args = TrainingArguments(
         output_dir=f"./checkpoints/{args.dataset_name}_seed{args.seed}",
@@ -420,10 +421,8 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size * 2,
         learning_rate=args.lr,
-
         weight_decay=0.01,
         warmup_ratio=0.1,
-
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
