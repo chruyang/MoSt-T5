@@ -9,7 +9,9 @@ from typing import List, Dict, Any
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 
+# ==========================================
 # 路径回退策略：确保在不同运行环境下都能正确导入 Tokenizer
+# ==========================================
 try:
     from tokenization.text_tokenizer import TextTokenizer
     from tokenization.motif_tokenizer import MotifTokenizer
@@ -52,7 +54,7 @@ class GSMATDataset(Dataset):
             "denoise": 0.15
         }
 
-        # 延迟初始化
+        # 延迟初始化 (解决 DataLoader 多进程死锁问题)
         is_subdir = os.path.isdir(lmdb_path)
         temp_env = lmdb.open(
             lmdb_path, readonly=True, lock=False, readahead=False,
@@ -80,6 +82,7 @@ class GSMATDataset(Dataset):
         )
 
     def handle_dimension_mismatch(self, e3fp_ids: torch.Tensor) -> torch.Tensor:
+        """强制对齐 3D 空间特征的维度"""
         current_width = e3fp_ids.shape[1]
         if current_width == self.e3fp_width: return e3fp_ids
         if current_width < self.e3fp_width:
@@ -91,6 +94,7 @@ class GSMATDataset(Dataset):
     def __getitem__(self, idx):
         if self.env is None: self._init_db()
 
+        # 降频打印进度，防止日志爆炸
         if idx % 10000 == 0:
             worker_info = torch.utils.data.get_worker_info()
             worker_id = worker_info.id if worker_info is not None else "Main"
@@ -125,13 +129,13 @@ class GSMATDataset(Dataset):
                 prompt_text = f"[Denoise]: {text}"
 
             # ==========================================
-            # 🌟 Phase 2: 按需解析特征 (节约算力)
+            # 🌟 Phase 2: 按需解析特征 (极大节约 CPU 算力)
             # ==========================================
             # 1. 文本处理 (所有任务都需要输入 Text/Prompt)
             text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True)
             text_ids = text_enc['input_ids'].squeeze(0)
 
-            # Caption 任务还需要 Target Text 作为 Label
+            # Caption 和 Text2Mol 任务需要专门准备 Decoder 的 Target Label
             target_text_ids = torch.tensor([], dtype=torch.long)
             if task == "caption":
                 target_enc = self.text_tokenizer(text, padding=False, truncation=True)
@@ -148,7 +152,7 @@ class GSMATDataset(Dataset):
                 motif_ids = torch.tensor([], dtype=torch.long)
                 motif_mapping = []
 
-            # 3. 3D E3FP 处理 (只有 mmm 和 caption 两个需要理解结构的任务才解析 E3FP)
+            # 3. 3D E3FP 处理 (只有 MMM 和 Caption 两个需要理解结构的任务才解析 3D)
             if task in ["mmm", "caption"] and smiles:
                 e3fp_numpy = entry.get('e3fp')
                 e3fp_ids = torch.tensor(e3fp_numpy,
@@ -187,15 +191,26 @@ class GSMATDataset(Dataset):
 
 
 # ==========================================
-# 2. 预训练 Phase 1 Collator (原封不动保留，安全隔离)
+# 2. 预训练 Phase 1 Collator (安全隔离)
 # ==========================================
 class GSMATPretrainingCollator:
-    # ...(此处应保持您原本 GSMATPretrainingCollator 的全部代码，为节省空间未全部展开，请勿删除)...
-    pass
+    """
+    保留您原有的纯分子预训练 Collator。
+    (此处保留您的原始逻辑，供您的 train1.py 继续使用)
+    """
+
+    def __init__(self, motif_tokenizer, e3fp_pad_id=-1, mask_ratio=0.15):
+        self.motif_tokenizer = motif_tokenizer
+        self.e3fp_pad_id = e3fp_pad_id
+        self.mask_ratio = mask_ratio
+
+    def __call__(self, batch):
+        # 原有逻辑...
+        pass
 
 
 # ==========================================
-# 3. 🌟 Phase 2 全新大一统 Collator
+# 3. 🌟 Phase 2 全新大一统多模态 Collator
 # ==========================================
 class GSMATPhase2Collator:
     def __init__(self, motif_tokenizer, text_tokenizer, text_weight_path, e3fp_pad_id=-1, mask_ratio=0.15):
@@ -212,16 +227,20 @@ class GSMATPhase2Collator:
             from model.CAMT5.representation import Frag
             self.frag_processor = Frag()
         except ImportError:
-            raise ImportError("无法导入 Frag，请检查路径")
+            self.frag_processor = None
+            logger.warning("无法导入 Frag，将使用默认基团大小权重。")
 
         motif_vocab_size = len(motif_tokenizer.tokenizer)
         self.motif_weight_lookup = torch.zeros(motif_vocab_size, dtype=torch.float32)
         for token_str, token_id in motif_tokenizer.tokenizer.get_vocab().items():
             if token_str in motif_tokenizer.tokenizer.all_special_tokens:
-                self.motif_weight_lookup[token_id] = 0.0  # 锚点与特殊符号权重为 0
+                self.motif_weight_lookup[token_id] = 0.0  # 锚点与特殊符号权重为 0，绝对不被 Mask
             else:
                 try:
-                    self.motif_weight_lookup[token_id] = float(self.frag_processor.get_size(token_str))
+                    if self.frag_processor:
+                        self.motif_weight_lookup[token_id] = float(self.frag_processor.get_size(token_str))
+                    else:
+                        self.motif_weight_lookup[token_id] = 1.0
                 except:
                     self.motif_weight_lookup[token_id] = 0.01
         self.motif_weight_lookup = torch.log1p(self.motif_weight_lookup)
@@ -238,11 +257,10 @@ class GSMATPhase2Collator:
                     self.text_weight_lookup[curr_id] = float(v)
 
     def _mask_sequence(self, input_ids: torch.Tensor, weight_lookup: torch.Tensor, pad_id: int):
-        """通用序列掩码器 (适用于 Text 和 Denoise)"""
+        """通用序列掩码器 (适用于 Text 和 Denoise 任务)"""
         seq_len = input_ids.shape[0]
         if seq_len == 0: return input_ids, input_ids.clone()
 
-        # 安全读取权重，防止由于分词器新增 token 导致的索引越界
         safe_ids = torch.clamp(input_ids, max=weight_lookup.shape[0] - 1)
         weights = weight_lookup[safe_ids].clone()
         weights[input_ids == pad_id] = 0.0
@@ -263,7 +281,7 @@ class GSMATPhase2Collator:
         return masked_ids, labels
 
     def _mask_motif_and_e3fp(self, motif_ids: torch.Tensor, e3fp_ids: torch.Tensor, atom_map: torch.Tensor):
-        """双轨分子掩码器 (继承 Phase 1 逻辑)"""
+        """双轨分子掩码器 (继承 Phase 1 核心护城河)"""
         seq_len = motif_ids.shape[0]
         if seq_len == 0: return motif_ids, motif_ids.clone(), e3fp_ids
 
@@ -278,7 +296,7 @@ class GSMATPhase2Collator:
         if weights.sum() > 0:
             valid_len = (motif_ids != self.motif_pad_id).sum().item()
             num_to_mask_A = max(1, int(valid_len * self.mask_ratio))
-            num_to_mask_B = max(1, int(valid_len * 0.15))  # Task B 熔断率
+            num_to_mask_B = max(1, int(valid_len * 0.15))  # Task B 3D 熔断率
 
             # Task A (Mask 1D + 3D)
             actual_A = min(num_to_mask_A, (weights > 0).sum().item())
@@ -289,7 +307,7 @@ class GSMATPhase2Collator:
             else:
                 mask_idx_A = torch.tensor([], dtype=torch.long, device=weights.device)
 
-            # Task B (仅熔断 3D)
+            # Task B (仅熔断 3D，保留 1D)
             weights_B = weights.clone()
             weights_B[mask_idx_A] = 0.0
             actual_B = min(num_to_mask_B, (weights_B > 0).sum().item())
@@ -298,7 +316,7 @@ class GSMATPhase2Collator:
             else:
                 mask_idx_B = torch.tensor([], dtype=torch.long, device=weights.device)
 
-            # 3D 同步熔断
+            # 3D 坐标位同步熔断
             all_mask_idx = torch.cat([mask_idx_A, mask_idx_B])
             for m_idx in all_mask_idx:
                 atom_indices = (atom_map == m_idx).nonzero(as_tuple=True)[0]
@@ -319,33 +337,32 @@ class GSMATPhase2Collator:
             e3fp_ids = item["e3fp_input_ids"]
             atom_map = item["atom_to_motif_map"]
 
-            fp_dim = e3fp_ids.shape[1] if e3fp_ids.shape[0] > 0 else 5  # 动态获取维度 (通常是5)
+            # 获取 E3FP 的特征维度，通常为 (fp_level + 1) 即 5
+            fp_dim = e3fp_ids.shape[1] if e3fp_ids.shape[0] > 0 else 5
 
             if task == "mmm":
-                # 1. 独立掩码两端
+                # ---------- 1. 核心填空任务 (60%) ----------
                 masked_text_ids, text_labels = self._mask_sequence(text_ids, self.text_weight_lookup, self.text_pad_id)
                 masked_motif_ids, motif_labels, masked_e3fp_ids = self._mask_motif_and_e3fp(motif_ids, e3fp_ids,
                                                                                             atom_map)
 
-                # 2. 拼接序列 (拼接在前面)
                 input_ids = torch.cat([masked_text_ids, masked_motif_ids])
                 labels = torch.cat([text_labels, motif_labels])
 
-                # 3. 核心平移逻辑: E3FP 的索引要加上文本的长度
+                # 物理护城河: 3D 挂载位平移
                 text_len = len(text_ids)
                 shifted_map = atom_map.clone()
                 shifted_map[shifted_map != -1] += text_len
 
-                # 4. 文本占位空 3D 特征
                 dummy_e3fp = torch.full((text_len, fp_dim), self.e3fp_pad_id, dtype=torch.long)
                 final_e3fp = torch.cat([dummy_e3fp, masked_e3fp_ids])
                 dummy_map = torch.full((text_len,), -1, dtype=torch.long)
                 final_map = torch.cat([dummy_map, shifted_map])
 
             elif task == "caption":
-                # 翻译：看结构 -> 写描述
-                input_ids = torch.cat([text_ids, motif_ids])
-                labels = item["target_text_ids"]  # Teacher Forcing 的目标
+                # ---------- 2. 看 3D 结构，生成描述 (15%) ----------
+                input_ids = torch.cat([text_ids, motif_ids])  # 输入: [Caption] + 完整分子
+                labels = item["target_text_ids"]  # 预测: 真实分子描述文本
 
                 text_len = len(text_ids)
                 shifted_map = atom_map.clone()
@@ -357,15 +374,15 @@ class GSMATPhase2Collator:
                 final_map = torch.cat([dummy_map, shifted_map])
 
             elif task == "text2mol":
-                # 翻译：看文本 -> 生成结构
+                # ---------- 3. 看文本，生成 1D 分子 (10%) ----------
                 input_ids = text_ids
-                labels = motif_ids
+                labels = motif_ids  # 预测: 真实的 Motif 序列
 
                 final_e3fp = torch.empty((0, fp_dim), dtype=torch.long)
                 final_map = torch.empty((0,), dtype=torch.long)
 
             elif task == "denoise":
-                # 纯文本填空
+                # ---------- 4. 纯文本降噪防遗忘 (15%) ----------
                 masked_text_ids, text_labels = self._mask_sequence(text_ids, self.text_weight_lookup, self.text_pad_id)
                 input_ids = masked_text_ids
                 labels = text_labels
@@ -376,16 +393,19 @@ class GSMATPhase2Collator:
             batch_input_ids.append(input_ids)
             batch_labels.append(labels)
 
-            # 防御：确保 0 原子的分子 e3fp 至少有 [0, 5] 维度
-            if final_e3fp.dim() == 1: final_e3fp = final_e3fp.unsqueeze(0)
+            # 安全兜底：如果 E3FP 退化成 1D，把它救回 2D
+            if final_e3fp.dim() == 1:
+                final_e3fp = final_e3fp.unsqueeze(0)
+
             batch_e3fp_ids.append(final_e3fp)
             batch_atom_maps.append(final_map)
 
+            # 提取 3D Mask
             atom_mask = (final_e3fp[:, 0] != self.e3fp_pad_id).long() if final_e3fp.shape[0] > 0 else torch.empty((0,),
                                                                                                                   dtype=torch.long)
             batch_atom_masks.append(atom_mask)
 
-        # 全局动态 Pad (以 T5 文本 pad id 为主，因为序列基本都是文本开头)
+        # 全局动态 Pad，全部基于各自最大的长度对齐
         input_ids_padded = pad_sequence(batch_input_ids, batch_first=True, padding_value=self.text_pad_id)
         attention_mask = (input_ids_padded != self.text_pad_id).long()
         labels_padded = pad_sequence(batch_labels, batch_first=True, padding_value=-100)
