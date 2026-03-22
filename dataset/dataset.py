@@ -75,7 +75,8 @@ class GSMATDataset(Dataset):
 
         self.c4_length = 0
         self.c4_env = None
-        if os.path.exists(self.c4_lmdb_path):
+        # 加上 self.c4_lmdb_path and 的判断，防止传入 None 或空字符串
+        if self.c4_lmdb_path and os.path.exists(self.c4_lmdb_path):
             temp_c4_env = lmdb.open(self.c4_lmdb_path, readonly=True, lock=False, subdir=False)
             with temp_c4_env.begin() as txn:
                 try:
@@ -151,19 +152,18 @@ class GSMATDataset(Dataset):
                     prompt_text = f"[Denoise]: {text}"
                     smiles = ""
 
-            # 🧠 动态注水截断 (Water-filling)
             max_total_len = self.max_seq_len
 
-            # 🌟 修复关键点：直接调用底层的 `.tokenizer` 避开自建包装类的严格参数检查
-            text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
-                                                     max_length=max_total_len, return_tensors="pt")
+            # 🌟 修复点 1：text_tokenizer 已是完美代理，直接调用即可，删掉丑陋的 .tokenizer 尾巴
+            text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=max_total_len,
+                                           return_tensors="pt")
             text_ids = text_enc['input_ids'].squeeze(0)
             len_t = text_ids.shape[0]
 
             target_text_ids = torch.tensor([], dtype=torch.long)
             if task == "caption":
-                target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
-                                                           max_length=max_total_len, return_tensors="pt")
+                target_enc = self.text_tokenizer(text, padding=False, truncation=True, max_length=max_total_len,
+                                                 return_tensors="pt")
                 target_text_ids = target_enc['input_ids'].squeeze(0)
 
             if task != "denoise" and smiles:
@@ -185,23 +185,21 @@ class GSMATDataset(Dataset):
                     motif_ids = motif_ids[:allow_m]
                 elif len_m < half_quota:
                     allow_t = max_total_len - len_m
-                    text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
-                                                             max_length=allow_t, return_tensors="pt")
-                    text_ids = text_enc['input_ids'].squeeze(0)
+                    # ⚡ 修复点 2：极速截断法！不再调 tokenizer 重新切词，直接张量切片并强行闭合 </s>
+                    text_ids = text_ids[:allow_t]
+                    text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                     if task == "caption":
-                        target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
-                                                                   max_length=allow_t, return_tensors="pt")
-                        target_text_ids = target_enc['input_ids'].squeeze(0)
+                        target_text_ids = target_text_ids[:allow_t]
+                        target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                 else:
                     allow_t = half_quota
                     allow_m = half_quota
-                    text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
-                                                             max_length=allow_t, return_tensors="pt")
-                    text_ids = text_enc['input_ids'].squeeze(0)
+                    # ⚡ 极速张量切片
+                    text_ids = text_ids[:allow_t]
+                    text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                     if task == "caption":
-                        target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
-                                                                   max_length=allow_t, return_tensors="pt")
-                        target_text_ids = target_enc['input_ids'].squeeze(0)
+                        target_text_ids = target_text_ids[:allow_t]
+                        target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                     motif_ids = motif_ids[:allow_m]
 
             # 3D E3FP 处理

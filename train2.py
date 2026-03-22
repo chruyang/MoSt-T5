@@ -94,10 +94,10 @@ def main():
     logger.info("📦 Building Multi-modal Dataset with C4 Replay...")
 
     data_path = getattr(data_args, 'train_file',
-                        "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb")
-    c4_path = getattr(data_args, 'c4_file', "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb")
+                        None) or "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb"
+    c4_path = getattr(data_args, 'c4_file', None) or "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb"
     text_weight_path = getattr(data_args, 'text_weight_path',
-                               "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_text_weights.json")
+                               None) or "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_text_weights.json"
     max_seq_length = getattr(data_args, 'max_seq_length', 512)
     # 训练集：挂载 C4 弹药库进行防遗忘降噪
     train_dataset = GSMATDataset(
