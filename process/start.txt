@@ -99,3 +99,5 @@ nohup torchrun --nproc_per_node=2 --master_port=29501 train1.py \
   --logging_steps 100 \
   --save_total_limit 3 \
   > train_phase1.log 2>&1 &
+
+ 目前存在的问题，第一阶段预训练中使用到了pubhcemqc数据集的所有内容

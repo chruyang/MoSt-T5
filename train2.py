@@ -15,8 +15,8 @@ from transformers import (
 from tokenization.text_tokenizer import TextTokenizer
 from tokenization.motif_tokenizer import MotifTokenizer
 from tokenization.e3fp_tokenizer import E3FPTokenizer
-# 🚀 引入 Phase 2 专属的 Dataset 和 Collator (我们在 dataset.py 中新增的)
-from dataset.dataset import MoStPhase2Dataset, GSMATPhase2Collator
+# 🚀 引入大一统 Dataset 和 Phase 2 专属 Collator
+from dataset.dataset import GSMATDataset, GSMATPhase2Collator
 from model.configuration import MoStT5Config
 from model.modeling import MoStT5ForConditionalGeneration
 from arguments import ModelArguments, DataArguments
@@ -38,7 +38,6 @@ def main():
     # ==========================================
     training_args.remove_unused_columns = False
 
-    # 配置标准日志
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
@@ -49,47 +48,59 @@ def main():
     set_seed(training_args.seed)
 
     # ==========================================
-    # 🚀 2. 加载 Phase 1 预训练权重
+    # 📦 2. 初始化三大分词器 (强制使用 Phase 2 专属词表)
+    # ==========================================
+    logger.info("Initializing tokenizers...")
+
+    # 🚨 动态读取我们刚刚生成的 25k 词表
+    vocab_file_path = "asset/mol_vocabs/vocab_phase2_25k.txt"
+    if not os.path.exists(vocab_file_path):
+        raise FileNotFoundError(f"找不到 Phase 2 词表: {vocab_file_path}")
+
+    motif_tokenizer = MotifTokenizer(vocab_file=vocab_file_path)
+    text_tokenizer = TextTokenizer(model_name="google/t5-v1_1-base")
+    e3fp_tokenizer = E3FPTokenizer(fp_level=4, fp_bits=4096)
+
+    # 获取实际新词表的大小
+    new_vocab_size = len(motif_tokenizer.tokenizer)
+    logger.info(f"✅ Motif Tokenizer 成功加载，当前词表大小: {new_vocab_size}")
+
+    # ==========================================
+    # 🚀 3. 加载 Phase 1 权重并扩充张量 (极其重要)
     # ==========================================
     logger.info(f"🚀 Loading Phase 1 Checkpoint from: {model_args.model_name_or_path}")
     model = MoStT5ForConditionalGeneration.from_pretrained(model_args.model_name_or_path)
 
-    # ==========================================
-    # 📦 3. 初始化三大分词器
-    # ==========================================
-    logger.info("Initializing tokenizers...")
-    motif_tokenizer = MotifTokenizer(vocab_file="asset/mol_vocabs/vocab_20k.txt")
-    text_tokenizer = TextTokenizer(model_name="google/t5-v1_1-base")
-    e3fp_tokenizer = E3FPTokenizer(fp_level=4, fp_bits=4096)
+    # 🚨 扩充模型的 Embedding 矩阵以兼容 25k 词表
+    logger.info(f"🔄 正在根据新词表 Resize Token Embeddings -> {new_vocab_size}...")
+    # 注意：T5 底层结构复杂，调用专门的 resize_token_embeddings
+    model.resize_token_embeddings(new_vocab_size)
 
     # ==========================================
     # 🌍 4. 构建 Phase 2 混合多任务数据集和 Collator
     # ==========================================
     logger.info("📦 Building Phase 2 Multi-modal Dataset...")
 
-    # 加载 LMDB 数据集
-    try:
-        # data_args.data_path 应该是包含图文对的 LMDB 文件夹路径
-        lmdb_env = lmdb.open(data_args.data_path, readonly=True, lock=False)
-        logger.info(f"✅ LMDB Environment loaded successfully from {data_args.data_path}")
-    except Exception as e:
-        logger.warning(f"⚠️ LMDB open failed at {data_args.data_path}. Error: {e}")
-        lmdb_env = None
+    # 获取传参，如果没有指定则回退到我们生成的终极数据库
+    data_path = data_args.train_file if data_args.train_file else "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb"
+    text_weight_path = data_args.text_weight_path if data_args.text_weight_path else "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_text_weights.json"
 
-    # 调用我们在 dataset.py 中配置的 60/25/15 黄金配比 Dataset
-    max_len = data_args.max_seq_length if hasattr(data_args, 'max_seq_length') else 1024
-    train_dataset = MoStPhase2Dataset(
-        lmdb_env=lmdb_env,
+    # 调用大一统 Dataset
+    max_len = data_args.max_len if hasattr(data_args, 'max_len') else 512
+    train_dataset = GSMATDataset(
+        lmdb_path=data_path,
         motif_tokenizer=motif_tokenizer,
         text_tokenizer=text_tokenizer,
-        e3fp_tokenizer=e3fp_tokenizer,
-        max_seq_len=max_len
+        e3fp_tokenizer=e3fp_tokenizer
     )
 
+    # 🚨 修复 Collator 初始化，传入真正的 Tokenizer 实例和权重路径
     data_collator = GSMATPhase2Collator(
-        motif_pad_id=motif_tokenizer.pad_id,
-        text_pad_id=text_tokenizer.pad_id,
-        e3fp_pad_id=-1
+        motif_tokenizer=motif_tokenizer,
+        text_tokenizer=text_tokenizer,
+        text_weight_path=text_weight_path,
+        e3fp_pad_id=-1,
+        mask_ratio=0.15
     )
 
     # 5. 初始化 Trainer
@@ -101,7 +112,7 @@ def main():
     )
 
     # ==========================================
-    # 🔍 6. 权重健康检查 (照妖镜逻辑，防 NaN 崩溃)
+    # 🔍 6. 权重健康检查 (防 NaN 崩溃)
     # ==========================================
     logger.info("=" * 40)
     logger.info("🔍 WEIGHT SANITY CHECK (Before Phase 2 Training)")
@@ -110,12 +121,6 @@ def main():
         logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: ~0.002 or match Base Model)")
         if std > 10.0:
             logger.warning("⚠️ WARNING: Shared Embeddings are exceptionally large! Might cause NaN in Text MLM.")
-    if hasattr(model, "lm_head"):
-        std = model.lm_head.weight.std().item()
-        logger.info(f"  -> LM Head Weights STD:   {std:.6f}")
-    if hasattr(model.encoder, "gsm_embeddings"):
-        std = model.encoder.gsm_embeddings.word_embeddings.weight.std().item()
-        logger.info(f"  -> Encoder Embeddings STD: {std:.6f}")
     logger.info("=" * 40)
 
     # ==========================================
@@ -127,7 +132,7 @@ def main():
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
         trainer.train(resume_from_checkpoint=checkpoint)
-        trainer.save_model()  # 保存最终的 Phase 2 模型大一统权重
+        trainer.save_model()
 
 
 if __name__ == "__main__":

@@ -21,32 +21,47 @@ except LookupError:
 
 
 def build_text_importance_dict(lmdb_path, model_name_or_path, output_path):
+    print(f"🚀 正在初始化 Tokenizer: {model_name_or_path}")
     tokenizer = TextTokenizer(model_name=model_name_or_path, max_len=512)
-    is_subdir = os.path.isdir(lmdb_path)  # 判断是否是目录
+    is_subdir = os.path.isdir(lmdb_path)
     env = lmdb.open(
         lmdb_path,
         readonly=True,
         lock=False,
         readahead=False,
         meminit=False,
-        subdir=is_subdir  # <--- 自动适配目录模式或文件模式
+        subdir=is_subdir
     )
     texts = []
+
+    # =========================================================
+    # 🌟 核心修复：使用游标遍历，兼容 CID Key 和无 __len__ 的情况
+    # =========================================================
     with env.begin() as txn:
-        length = int(txn.get(b'__len__'))
-        for idx in tqdm(range(length), desc="Reading LMDB"):
-            data = txn.get(str(idx).encode())
+        total_entries = txn.stat()['entries']
+        cursor = txn.cursor()
+        for key, data in tqdm(cursor, total=total_entries, desc="📚 提取 LMDB 文本"):
+            # 过滤掉可能存在的长度元数据
+            if key == b'__len__': continue
             if data:
-                entry = pickle.loads(data)
-                text = entry.get('enriched_description', '') or entry.get('description', '') or entry.get('text', '')
-                if text: texts.append(text)
+                try:
+                    entry = pickle.loads(data)
+                    text = entry.get('enriched_description', '') or entry.get('description', '') or entry.get('text',
+                                                                                                              '')
+                    if text: texts.append(text)
+                except Exception:
+                    pass
+    env.close()
+
+    print(f"✅ 成功提取了 {len(texts)} 条有效自然语言描述。")
+    print("🧮 1. 开始计算 TF-IDF 词频矩阵...")
 
     vectorizer = TfidfVectorizer(stop_words='english', token_pattern=r'(?u)\b[A-Za-z]+\b')
     vectorizer.fit(texts)
     idf_dict = dict(zip(vectorizer.get_feature_names_out(), vectorizer.idf_))
     max_idf = max(idf_dict.values()) if idf_dict else 1.0
 
-    print("3. 结合词性 (POS) 映射到 T5 词表...")
+    print("🏷️ 2. 结合词性 (POS) 映射到 T5 词表...")
     vocab = tokenizer.tokenizer.get_vocab()
     weight_dict = {}
 
@@ -64,19 +79,26 @@ def build_text_importance_dict(lmdb_path, model_name_or_path, output_path):
     print(f"   开始对 {len(token_list)} 个候选词进行词性标注...")
     tagged_tokens = nltk.pos_tag(token_list)
 
-    # 映射回权重字典
+    # 映射回权重字典 (仅保留名词和形容词作为填空的高价值目标)
     for i, (word, pos_tag) in enumerate(tagged_tokens):
         if pos_tag.startswith('NN') or pos_tag.startswith('JJ'):
             current_id = token_ids[i]
-            # 获取 IDF 权重
+            # 获取 IDF 权重 (未见词赋予 0.1 的极低底线权重)
             weight_dict[current_id] = idf_dict.get(word, max_idf * 0.1)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(weight_dict, f)
-    print(f"✅ Text weights saved to: {output_path}")
+    print(f"🎉 Text Weights 智能掩码字典生成成功！")
+    print(f"💾 保存在: {output_path}")
 
 
 if __name__ == "__main__":
-    build_text_importance_dict("../dataset/official_pretrain_lmdb", "google/t5-v1_1-base",
-                               "../asset/text_idf_weights.json")
+    # =========================================================
+    # 🎯 严格指向 Phase 2 的原始数据集和输出路径
+    # =========================================================
+    PHASE2_LMDB = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/3d-pubchem.lmdb"
+    OUTPUT_JSON = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_text_weights.json"
+    MODEL_NAME = "google/t5-v1_1-base"
+
+    build_text_importance_dict(PHASE2_LMDB, MODEL_NAME, OUTPUT_JSON)
