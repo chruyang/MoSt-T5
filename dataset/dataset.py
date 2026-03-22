@@ -9,9 +9,6 @@ from typing import List, Dict, Any
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 
-# ==========================================
-# 路径回退策略：确保在不同运行环境下都能正确导入 Tokenizer
-# ==========================================
 try:
     from tokenization.text_tokenizer import TextTokenizer
     from tokenization.motif_tokenizer import MotifTokenizer
@@ -28,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
-# 1. 核心数据集类 (加入 Phase 2 多任务路由、防遗忘与动态注水截断)
+# 1. 核心数据集类 (满血版：修复 Tokenizer 包装限制)
 # ==========================================
 class GSMATDataset(Dataset):
     def __init__(self, lmdb_path: str,
@@ -49,7 +46,6 @@ class GSMATDataset(Dataset):
         self.max_log_errors = 50
         self.max_seq_len = 512
 
-        # 🚀 Phase 2: 黄金混合比例
         self.task_probs = {
             "mmm": 0.60,
             "caption": 0.15,
@@ -57,33 +53,25 @@ class GSMATDataset(Dataset):
             "denoise": 0.15
         }
 
-        # 🛡️ 注入防泄漏绝对白名单 (Whitelist Protection)
         self.whitelist = set()
         whitelist_path = os.path.expanduser("~/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchemqc/pretrain_whitelist.json")
         if os.path.exists(whitelist_path):
             with open(whitelist_path, 'r', encoding='utf-8') as f:
                 self.whitelist = set(json.load(f))
             logger.info(f"🛡️ 开启绝对白名单保护：仅允许 {len(self.whitelist):,} 个分子参与预训练。")
-        else:
-            logger.warning(f"⚠️ 未找到白名单文件: {whitelist_path}。模型将读取 LMDB 中的所有数据！")
 
-        # 延迟初始化主库
         is_subdir = os.path.isdir(lmdb_path)
         temp_env = lmdb.open(
-            lmdb_path, readonly=True, lock=False, readahead=False,
-            meminit=False, subdir=is_subdir
+            lmdb_path, readonly=True, lock=False, readahead=False, meminit=False, subdir=is_subdir
         )
-
         with temp_env.begin() as txn:
             try:
                 self.length = int(txn.get(b'__len__'))
             except (TypeError, ValueError):
                 self.length = txn.stat()['entries']
-                logger.warning(f"LMDB missing '__len__', using stat entries: {self.length}")
         temp_env.close()
         self.env = None
 
-        # 初始化 C4 通用语料库
         self.c4_length = 0
         self.c4_env = None
         if os.path.exists(self.c4_lmdb_path):
@@ -94,19 +82,17 @@ class GSMATDataset(Dataset):
                 except:
                     self.c4_length = txn.stat()['entries']
             temp_c4_env.close()
-            logger.info(f"📚 成功挂载 C4 通用语料库，数据量: {self.c4_length:,}")
+            logger.info(f"📚 成功挂载 C4 弹药库，可用数据量: {self.c4_length:,}")
         else:
-            logger.warning("⚠️ 未找到 C4 库，将回退使用 PubChem 文本进行降噪。")
+            logger.warning(f"⚠️ 未找到 C4 库 ({self.c4_lmdb_path})，降噪任务将回退使用 PubChem。")
 
     def __len__(self):
         return self.length
 
     def _init_db(self):
         is_subdir = os.path.isdir(self.lmdb_path)
-        self.env = lmdb.open(
-            self.lmdb_path, readonly=True, lock=False, readahead=False,
-            meminit=False, subdir=is_subdir
-        )
+        self.env = lmdb.open(self.lmdb_path, readonly=True, lock=False, readahead=False, meminit=False,
+                             subdir=is_subdir)
         if self.c4_length > 0:
             self.c4_env = lmdb.open(self.c4_lmdb_path, readonly=True, lock=False, subdir=False)
 
@@ -122,46 +108,33 @@ class GSMATDataset(Dataset):
     def __getitem__(self, idx):
         if self.env is None: self._init_db()
 
-        if idx % 10000 == 0:
-            worker_info = torch.utils.data.get_worker_info()
-            worker_id = worker_info.id if worker_info is not None else "Main"
-            logger.info(f"🔍 [Worker-{worker_id}] 正常读取数据中，当前进度索引: {idx}")
-
         try:
             roll = np.random.rand()
 
-            # ==========================================
-            # 🚀 分流：纯文本 C4 防遗忘降噪
-            # ==========================================
+            # 🚀 分流：前往 C4 库抽取纯英文文本
             if roll >= sum(self.task_probs.values()) - self.task_probs["denoise"] and self.c4_length > 0:
                 task = "denoise"
                 c4_idx = np.random.randint(0, self.c4_length)
                 with self.c4_env.begin() as txn:
                     c4_data = pickle.loads(txn.get(str(c4_idx).encode()))
                     text = c4_data.get('text', '')
-
                 prompt_text = f"[Denoise]: {text}"
                 smiles = ""
 
-            # ==========================================
-            # 🧪 常规：PubChem 图文对路线
-            # ==========================================
+            # 🧪 常规：抽取 PubChem 分子
             else:
                 with self.env.begin() as txn:
                     data = txn.get(str(idx).encode())
                     if data is None: return self.__getitem__((idx + 1) % self.length)
                     entry = pickle.loads(data)
 
-                # 白名单拦截
                 if self.whitelist:
                     cid = str(entry.get('cid', entry.get('index', entry.get('id', entry.get('input', ''))))).strip()
                     if cid and cid not in self.whitelist:
                         return self.__getitem__((idx + 1) % self.length)
 
                 smiles = entry.get('smiles_kekule') or entry.get('smiles', '')
-                text = entry.get('enriched_description', '')
-                if not text: text = entry.get('description', '')
-                if not text: text = entry.get('text', '')
+                text = entry.get('enriched_description', '') or entry.get('description', '') or entry.get('text', '')
 
                 if roll < self.task_probs["mmm"]:
                     task = "mmm"
@@ -169,26 +142,29 @@ class GSMATDataset(Dataset):
                 elif roll < self.task_probs["mmm"] + self.task_probs["caption"]:
                     task = "caption"
                     prompt_text = f"[Caption]: Generate description for the molecule:"
-                else:
+                elif roll < sum(self.task_probs.values()) - self.task_probs["denoise"]:
                     task = "text2mol"
                     prompt_text = f"[Text2Mol]: {text}"
+                else:
+                    task = "denoise"
+                    prompt_text = f"[Denoise]: {text}"
+                    smiles = ""
 
-            # ==========================================
-            # 🧠 核心架构：智能“动态注水”截断算法 (防 OOM 屏障)
-            # ==========================================
+            # 🧠 动态注水截断 (Water-filling)
             max_total_len = self.max_seq_len
 
-            # 先不设限编码 Text
-            text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=max_total_len)
+            # 🌟 修复关键点：直接调用底层的 `.tokenizer` 避开自建包装类的严格参数检查
+            text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
+                                                     max_length=max_total_len, return_tensors="pt")
             text_ids = text_enc['input_ids'].squeeze(0)
             len_t = text_ids.shape[0]
 
             target_text_ids = torch.tensor([], dtype=torch.long)
             if task == "caption":
-                target_enc = self.text_tokenizer(text, padding=False, truncation=True, max_length=max_total_len)
+                target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
+                                                           max_length=max_total_len, return_tensors="pt")
                 target_text_ids = target_enc['input_ids'].squeeze(0)
 
-            # 先不设限编码 Motif
             if task != "denoise" and smiles:
                 motif_result = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False,
                                                            return_mapping=True)
@@ -200,33 +176,34 @@ class GSMATDataset(Dataset):
                 motif_mapping = []
                 len_m = 0
 
-            # 🚀 触发智能截断
+            # 触发动态注水分配
             if len_t + len_m > max_total_len:
                 half_quota = max_total_len // 2
                 if len_t < half_quota:
-                    # 文本短，让出额度给结构
                     allow_m = max_total_len - len_t
                     motif_ids = motif_ids[:allow_m]
                 elif len_m < half_quota:
-                    # 结构短，让出额度给文本 (需要重新编码以保留 </s> 结束符)
                     allow_t = max_total_len - len_m
-                    text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=allow_t)
+                    text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
+                                                             max_length=allow_t, return_tensors="pt")
                     text_ids = text_enc['input_ids'].squeeze(0)
                     if task == "caption":
-                        target_enc = self.text_tokenizer(text, padding=False, truncation=True, max_length=allow_t)
+                        target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
+                                                                   max_length=allow_t, return_tensors="pt")
                         target_text_ids = target_enc['input_ids'].squeeze(0)
                 else:
-                    # 都超长，绝对公平对半切
                     allow_t = half_quota
                     allow_m = half_quota
-                    text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=allow_t)
+                    text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
+                                                             max_length=allow_t, return_tensors="pt")
                     text_ids = text_enc['input_ids'].squeeze(0)
                     if task == "caption":
-                        target_enc = self.text_tokenizer(text, padding=False, truncation=True, max_length=allow_t)
+                        target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
+                                                                   max_length=allow_t, return_tensors="pt")
                         target_text_ids = target_enc['input_ids'].squeeze(0)
                     motif_ids = motif_ids[:allow_m]
 
-            # 3. 3D E3FP 处理 (挂载映射)
+            # 3D E3FP 处理
             if task in ["mmm", "caption"] and smiles:
                 e3fp_numpy = entry.get('e3fp')
                 e3fp_ids = torch.tensor(e3fp_numpy,
@@ -241,7 +218,6 @@ class GSMATDataset(Dataset):
                 for motif_idx, atom_indices in enumerate(atom_mapping):
                     if motif_idx >= len(motif_mapping): break
                     real_token_idx = motif_mapping[motif_idx]
-                    # 🛡️ 截断越界免疫保护
                     if real_token_idx < motif_ids.shape[0]:
                         for atom_idx in atom_indices:
                             if atom_idx < num_atoms: atom_to_motif_map[atom_idx] = real_token_idx
@@ -259,6 +235,7 @@ class GSMATDataset(Dataset):
             }
 
         except Exception as e:
+            # 引入保险丝：打印错误，避免无尽沉默地抓取
             if self.error_count < self.max_log_errors:
                 logger.warning(f"⚠️ [Data Error] 样本 {idx} 解析失败: {e}. 正在重采样...")
                 self.error_count += 1
@@ -266,13 +243,10 @@ class GSMATDataset(Dataset):
 
 
 # ==========================================
-# 2. 预训练 Phase 1 Collator (纯分子，保持不动)
+# 2. 预训练 Phase 1 Collator
 # ==========================================
 class GSMATPretrainingCollator:
-    def __init__(self,
-                 motif_tokenizer: MotifTokenizer,
-                 e3fp_pad_id: int = -1,
-                 mask_ratio: float = 0.15,
+    def __init__(self, motif_tokenizer: MotifTokenizer, e3fp_pad_id: int = -1, mask_ratio: float = 0.15,
                  task_b_ratio: float = 0.15):
         self.motif_tokenizer = motif_tokenizer
         self.pad_id = motif_tokenizer.pad_id
@@ -296,7 +270,7 @@ class GSMATPretrainingCollator:
             else:
                 try:
                     self.weight_lookup[token_id] = float(self.frag_processor.get_size(token_str))
-                except Exception:
+                except:
                     self.weight_lookup[token_id] = 0.01
 
         self.weight_lookup = torch.log1p(self.weight_lookup)
@@ -343,12 +317,8 @@ class GSMATPretrainingCollator:
                 if actual_num_B > 0:
                     mask_idx_B = torch.multinomial(row_weight_B + 1e-6, num_samples=actual_num_B, replacement=False)
                     geometric_mask_positions[i, mask_idx_B] = True
-                else:
-                    mask_idx_B = torch.tensor([], dtype=torch.long, device=mask_idx_A.device)
-            else:
-                mask_idx_B = torch.tensor([], dtype=torch.long, device=mask_idx_A.device)
 
-            all_mask_idx = torch.cat([mask_idx_A, mask_idx_B])
+            all_mask_idx = torch.cat([mask_idx_A, mask_idx_B] if row_weight_B.sum() > 0 else [mask_idx_A])
             for m_idx in all_mask_idx:
                 atom_indices = (batch_map[i] == m_idx).nonzero(as_tuple=True)[0]
                 if len(atom_indices) > 0:
@@ -365,14 +335,13 @@ class GSMATPretrainingCollator:
             "atom_attention_mask": atom_mask,
             "atom_to_motif_map": batch_map,
             "labels": labels,
-            # ✅ Phase 1 正确返回了 3D 所需信号，无需修改
             "unmasked_e3fp_ids": batch_e3fp,
             "mask_positions": geometric_mask_positions
         }
 
 
 # ==========================================
-# 3. 🌟 Phase 2 全新大一统多模态 Collator (修复 3D Geometric Head)
+# 3. 🌟 Phase 2 全新大一统多模态 Collator
 # ==========================================
 class GSMATPhase2Collator:
     def __init__(self, motif_tokenizer, text_tokenizer, text_weight_path, e3fp_pad_id=-1, mask_ratio=0.15):
@@ -388,7 +357,6 @@ class GSMATPhase2Collator:
             self.frag_processor = Frag()
         except ImportError:
             self.frag_processor = None
-            logger.warning("无法导入 Frag，将使用默认基团大小权重。")
 
         motif_vocab_size = len(motif_tokenizer.tokenizer)
         self.motif_weight_lookup = torch.zeros(motif_vocab_size, dtype=torch.float32)
@@ -397,10 +365,8 @@ class GSMATPhase2Collator:
                 self.motif_weight_lookup[token_id] = 0.0
             else:
                 try:
-                    if self.frag_processor:
-                        self.motif_weight_lookup[token_id] = float(self.frag_processor.get_size(token_str))
-                    else:
-                        self.motif_weight_lookup[token_id] = 1.0
+                    self.motif_weight_lookup[token_id] = float(
+                        self.frag_processor.get_size(token_str)) if self.frag_processor else 1.0
                 except:
                     self.motif_weight_lookup[token_id] = 0.01
         self.motif_weight_lookup = torch.log1p(self.motif_weight_lookup)
@@ -424,7 +390,7 @@ class GSMATPhase2Collator:
         weights[input_ids == pad_id] = 0.0
 
         masked_ids = input_ids.clone()
-        labels = input_ids.clone()  # DAE: 目标为完整原始序列
+        labels = input_ids.clone()
         labels[labels == pad_id] = -100
 
         if weights.sum() > 0:
@@ -447,10 +413,9 @@ class GSMATPhase2Collator:
         masked_motif_ids = motif_ids.clone()
         masked_e3fp_ids = e3fp_ids.clone()
 
-        labels = motif_ids.clone()  # DAE: 目标为完整原始序列
+        labels = motif_ids.clone()
         labels[labels == self.motif_pad_id] = -100
 
-        # 🚀 追踪 3D 掩码位置 (几何头专用)
         motif_3d_mask_pos = torch.zeros_like(motif_ids, dtype=torch.bool)
 
         if weights.sum() > 0:
@@ -499,7 +464,8 @@ class GSMATPhase2Collator:
             e3fp_ids = item["e3fp_input_ids"]
             atom_map = item["atom_to_motif_map"]
 
-            fp_dim = e3fp_ids.shape[1]
+            # ✅ 动态维度获取：永不报错
+            fp_dim = e3fp_ids.shape[1] if e3fp_ids.shape[0] > 0 else 4
 
             if task == "mmm":
                 masked_text_ids, text_labels = self._mask_sequence(text_ids, self.text_weight_lookup, self.text_pad_id)
@@ -515,13 +481,11 @@ class GSMATPhase2Collator:
 
                 dummy_e3fp = torch.full((text_len, fp_dim), self.e3fp_pad_id, dtype=torch.long)
                 final_e3fp = torch.cat([dummy_e3fp, masked_e3fp_ids])
-
-                # 🚀 几何头修复：保留无损的 3D
                 final_unmasked_e3fp = torch.cat([dummy_e3fp, e3fp_ids])
+
                 dummy_map = torch.full((text_len,), -1, dtype=torch.long)
                 final_map = torch.cat([dummy_map, shifted_map])
 
-                # 🚀 拼接 3D Tracker (文本部分全 False)
                 text_mask_pos = torch.zeros(text_len, dtype=torch.bool)
                 item_mask_pos = torch.cat([text_mask_pos, motif_3d_mask_pos])
 
@@ -581,8 +545,6 @@ class GSMATPhase2Collator:
         labels_padded = pad_sequence(batch_labels, batch_first=True, padding_value=-100)
 
         e3fp_padded = pad_sequence(batch_e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-
-        # 🚀 几何头修复：对齐 Padding
         unmasked_e3fp_padded = pad_sequence(batch_unmasked_e3fp, batch_first=True, padding_value=self.e3fp_pad_id)
         map_padded = pad_sequence(batch_atom_maps, batch_first=True, padding_value=-1)
         atom_mask_padded = pad_sequence(batch_atom_masks, batch_first=True, padding_value=0)
@@ -593,8 +555,8 @@ class GSMATPhase2Collator:
             "attention_mask": attention_mask,
             "labels": labels_padded,
             "e3fp_ids": e3fp_padded,
-            "unmasked_e3fp_ids": unmasked_e3fp_padded,  # ✅ 成功传输 3D 原貌
+            "unmasked_e3fp_ids": unmasked_e3fp_padded,
             "atom_attention_mask": atom_mask_padded,
             "atom_to_motif_map": map_padded,
-            "mask_positions": mask_positions_padded,  # ✅ 成功传输 3D Mask 坐标
+            "mask_positions": mask_positions_padded,
         }
