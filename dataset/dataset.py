@@ -152,24 +152,27 @@ class GSMATDataset(Dataset):
                     prompt_text = f"[Denoise]: {text}"
                     smiles = ""
 
+            # 🧠 动态注水截断 (Water-filling)
             max_total_len = self.max_seq_len
 
-            # 🌟 修复点 1：text_tokenizer 已是完美代理，直接调用即可，删掉丑陋的 .tokenizer 尾巴
-            text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=max_total_len,
-                                           return_tensors="pt")
+            # 🌟 修复点：加上 .tokenizer 直接调用原生分词器，它天生支持 max_length，绝不会报错！
+            text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
+                                                     max_length=max_total_len, return_tensors="pt")
             text_ids = text_enc['input_ids'].squeeze(0)
             len_t = text_ids.shape[0]
 
             target_text_ids = torch.tensor([], dtype=torch.long)
             if task == "caption":
-                target_enc = self.text_tokenizer(text, padding=False, truncation=True, max_length=max_total_len,
-                                                 return_tensors="pt")
+                # 🌟 修复点
+                target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
+                                                           max_length=max_total_len, return_tensors="pt")
                 target_text_ids = target_enc['input_ids'].squeeze(0)
 
             if task != "denoise" and smiles:
                 motif_result = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False,
                                                            return_mapping=True)
-                motif_ids, motif_mapping = motif_result if isinstance(motif_result, tuple) else (motif_result, [])
+                motif_ids, motif_mapping = motif_result if isinstance(motif_result, tuple) else (
+                motif_result, [])
                 if motif_ids.dim() > 1: motif_ids = motif_ids.squeeze(0)
                 len_m = motif_ids.shape[0]
             else:
@@ -185,7 +188,7 @@ class GSMATDataset(Dataset):
                     motif_ids = motif_ids[:allow_m]
                 elif len_m < half_quota:
                     allow_t = max_total_len - len_m
-                    # ⚡ 修复点 2：极速截断法！不再调 tokenizer 重新切词，直接张量切片并强行闭合 </s>
+                    # ⚡ 极速切片，解放 CPU
                     text_ids = text_ids[:allow_t]
                     text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                     if task == "caption":
@@ -194,7 +197,7 @@ class GSMATDataset(Dataset):
                 else:
                     allow_t = half_quota
                     allow_m = half_quota
-                    # ⚡ 极速张量切片
+                    # ⚡ 极速切片，解放 CPU
                     text_ids = text_ids[:allow_t]
                     text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                     if task == "caption":
