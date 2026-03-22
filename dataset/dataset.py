@@ -33,7 +33,8 @@ class GSMATDataset(Dataset):
                  motif_tokenizer: MotifTokenizer,
                  e3fp_tokenizer: E3FPTokenizer,
                  c4_lmdb_path: str = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb",
-                 max_seq_length: int = 512):
+                 whitelist_path: str = None,  # 🚀 新增参数：默认不使用白名单
+                 max_seq_length: int = 768):
 
         self.lmdb_path = lmdb_path
         self.c4_lmdb_path = c4_lmdb_path
@@ -55,11 +56,12 @@ class GSMATDataset(Dataset):
         }
 
         self.whitelist = set()
-        whitelist_path = os.path.expanduser("~/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchemqc/pretrain_whitelist.json")
-        if os.path.exists(whitelist_path):
+        if whitelist_path and os.path.exists(whitelist_path):
             with open(whitelist_path, 'r', encoding='utf-8') as f:
                 self.whitelist = set(json.load(f))
             logger.info(f"🛡️ 开启绝对白名单保护：仅允许 {len(self.whitelist):,} 个分子参与预训练。")
+        else:
+            logger.info("🔓 未配置白名单，允许全量数据参与训练。")
 
         is_subdir = os.path.isdir(lmdb_path)
         temp_env = lmdb.open(

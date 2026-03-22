@@ -58,7 +58,7 @@ def main():
         vocab_file_path = "asset/mol_vocabs/vocab_20k.txt"
 
     motif_tokenizer = MotifTokenizer(vocab_file=vocab_file_path)
-    text_tokenizer = TextTokenizer(model_name=model_args.model_name_or_path)
+    text_tokenizer = TextTokenizer(model_name="google/t5-v1_1-base")
 
     # fp_level=3 对应 4 层 E3FP 特征 (0, 1, 2, 3)
     e3fp_tokenizer = E3FPTokenizer(fp_level=3, fp_bits=4096)
@@ -106,6 +106,7 @@ def main():
         text_tokenizer=text_tokenizer,
         e3fp_tokenizer=e3fp_tokenizer,
         c4_lmdb_path=c4_path,
+        whitelist_path="",
         max_seq_length=max_seq_length
     )
 
@@ -120,8 +121,9 @@ def main():
             motif_tokenizer=motif_tokenizer,
             text_tokenizer=text_tokenizer,
             e3fp_tokenizer=e3fp_tokenizer,
-            c4_lmdb_path=""  # 强制熔断验证集 C4
-            , max_seq_length=max_seq_length
+            c4_lmdb_path="" ,
+            whitelist_path = "",
+            max_seq_length=max_seq_length
         )
 
     data_collator = GSMATPhase2Collator(
