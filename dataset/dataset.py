@@ -110,138 +110,156 @@ class GSMATDataset(Dataset):
     def __getitem__(self, idx):
         if self.env is None: self._init_db()
 
-        try:
-            roll = np.random.rand()
+        # 🛡️ 架构级重构：消除危险的无限递归，引入“连续失败熔断机制”
+        for attempt in range(10):
+            try:
+                roll = np.random.rand()
 
-            # 🚀 分流：前往 C4 库抽取纯英文文本
-            if roll >= sum(self.task_probs.values()) - self.task_probs["denoise"] and self.c4_length > 0:
-                task = "denoise"
-                c4_idx = np.random.randint(0, self.c4_length)
-                with self.c4_env.begin() as txn:
-                    c4_data = pickle.loads(txn.get(str(c4_idx).encode()))
-                    text = c4_data.get('text', '')
-                prompt_text = f"[Denoise]: {text}"
-                smiles = ""
-
-            # 🧪 常规：抽取 PubChem 分子
-            else:
-                with self.env.begin() as txn:
-                    data = txn.get(str(idx).encode())
-                    if data is None: return self.__getitem__((idx + 1) % self.length)
-                    entry = pickle.loads(data)
-
-                if self.whitelist:
-                    cid = str(entry.get('cid', entry.get('index', entry.get('id', entry.get('input', ''))))).strip()
-                    if cid and cid not in self.whitelist:
-                        return self.__getitem__((idx + 1) % self.length)
-
-                smiles = entry.get('smiles_kekule') or entry.get('smiles', '')
-                text = entry.get('enriched_description', '') or entry.get('description', '') or entry.get('text', '')
-
-                if roll < self.task_probs["mmm"]:
-                    task = "mmm"
-                    prompt_text = f"[MMM]: {text}"
-                elif roll < self.task_probs["mmm"] + self.task_probs["caption"]:
-                    task = "caption"
-                    prompt_text = f"[Caption]: Generate description for the molecule:"
-                elif roll < sum(self.task_probs.values()) - self.task_probs["denoise"]:
-                    task = "text2mol"
-                    prompt_text = f"[Text2Mol]: {text}"
-                else:
+                # 🚀 分流：前往 C4 库抽取纯英文文本
+                if roll >= sum(self.task_probs.values()) - self.task_probs["denoise"] and getattr(self, 'c4_length',
+                                                                                                  0) > 0:
                     task = "denoise"
+                    c4_idx = np.random.randint(0, self.c4_length)
+                    with self.c4_env.begin() as txn:
+                        c4_data = pickle.loads(txn.get(str(c4_idx).encode()))
+                        text = c4_data.get('text', '')
                     prompt_text = f"[Denoise]: {text}"
                     smiles = ""
 
-            # 🧠 动态注水截断 (Water-filling)
-            max_total_len = self.max_seq_len
-
-            # 🌟 修复点：加上 .tokenizer 直接调用原生分词器，它天生支持 max_length，绝不会报错！
-            text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
-                                                     max_length=max_total_len, return_tensors="pt")
-            text_ids = text_enc['input_ids'].squeeze(0)
-            len_t = text_ids.shape[0]
-
-            target_text_ids = torch.tensor([], dtype=torch.long)
-            if task == "caption":
-                # 🌟 修复点
-                target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
-                                                           max_length=max_total_len, return_tensors="pt")
-                target_text_ids = target_enc['input_ids'].squeeze(0)
-
-            if task != "denoise" and smiles:
-                motif_result = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False,
-                                                           return_mapping=True)
-                motif_ids, motif_mapping = motif_result if isinstance(motif_result, tuple) else (
-                motif_result, [])
-                if motif_ids.dim() > 1: motif_ids = motif_ids.squeeze(0)
-                len_m = motif_ids.shape[0]
-            else:
-                motif_ids = torch.tensor([], dtype=torch.long)
-                motif_mapping = []
-                len_m = 0
-
-            # 触发动态注水分配
-            if len_t + len_m > max_total_len:
-                half_quota = max_total_len // 2
-                if len_t < half_quota:
-                    allow_m = max_total_len - len_t
-                    motif_ids = motif_ids[:allow_m]
-                elif len_m < half_quota:
-                    allow_t = max_total_len - len_m
-                    # ⚡ 极速切片，解放 CPU
-                    text_ids = text_ids[:allow_t]
-                    text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
-                    if task == "caption":
-                        target_text_ids = target_text_ids[:allow_t]
-                        target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
+                # 🧪 常规：抽取 PubChem 分子
                 else:
-                    allow_t = half_quota
-                    allow_m = half_quota
-                    # ⚡ 极速切片，解放 CPU
-                    text_ids = text_ids[:allow_t]
-                    text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
-                    if task == "caption":
-                        target_text_ids = target_text_ids[:allow_t]
-                        target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
-                    motif_ids = motif_ids[:allow_m]
+                    with self.env.begin() as txn:
+                        data = txn.get(str(idx).encode())
+                        if data is None:
+                            idx = (idx + 1) % self.length
+                            continue
+                        entry = pickle.loads(data)
 
-            # 3D E3FP 处理
-            if task in ["mmm", "caption"] and smiles:
-                e3fp_numpy = entry.get('e3fp')
-                e3fp_ids = torch.tensor(e3fp_numpy,
-                                        dtype=torch.long) if e3fp_numpy is not None else self.e3fp_tokenizer.from_smiles(
-                    smiles)
-                e3fp_ids = self.handle_dimension_mismatch(e3fp_ids)
+                    if getattr(self, 'whitelist', None):
+                        cid = str(entry.get('cid', entry.get('index', entry.get('id', entry.get('input', ''))))).strip()
+                        if cid and cid not in self.whitelist:
+                            idx = (idx + 1) % self.length
+                            continue
 
-                num_atoms = e3fp_ids.shape[0]
-                atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
-                atom_mapping = entry.get('atom_mapping', [])
+                    smiles = entry.get('smiles_kekule') or entry.get('smiles', '')
+                    text = entry.get('enriched_description', '') or entry.get('description', '') or entry.get('text',
+                                                                                                              '')
 
-                for motif_idx, atom_indices in enumerate(atom_mapping):
-                    if motif_idx >= len(motif_mapping): break
-                    real_token_idx = motif_mapping[motif_idx]
-                    if real_token_idx < motif_ids.shape[0]:
-                        for atom_idx in atom_indices:
-                            if atom_idx < num_atoms: atom_to_motif_map[atom_idx] = real_token_idx
-            else:
-                e3fp_ids = torch.empty((0, self.e3fp_width), dtype=torch.long)
-                atom_to_motif_map = torch.empty((0,), dtype=torch.long)
+                    if roll < self.task_probs["mmm"]:
+                        task = "mmm"
+                        prompt_text = f"[MMM]: {text}"
+                    elif roll < self.task_probs["mmm"] + self.task_probs["caption"]:
+                        task = "caption"
+                        prompt_text = f"[Caption]: Generate description for the molecule:"
+                    elif roll < sum(self.task_probs.values()) - self.task_probs["denoise"]:
+                        task = "text2mol"
+                        prompt_text = f"[Text2Mol]: {text}"
+                    else:
+                        task = "denoise"
+                        prompt_text = f"[Denoise]: {text}"
+                        smiles = ""
 
-            return {
-                "task": task,
-                "text_input_ids": text_ids,
-                "target_text_ids": target_text_ids,
-                "motif_input_ids": motif_ids,
-                "e3fp_input_ids": e3fp_ids,
-                "atom_to_motif_map": atom_to_motif_map,
-            }
+                # 🧠 动态注水截断 (Water-filling)
+                max_total_len = getattr(self, 'max_seq_len', 768)
 
-        except Exception as e:
-            # 引入保险丝：打印错误，避免无尽沉默地抓取
-            if self.error_count < self.max_log_errors:
-                logger.warning(f"⚠️ [Data Error] 样本 {idx} 解析失败: {e}. 正在重采样...")
-                self.error_count += 1
-            return self.__getitem__((idx + 1) % self.length)
+                # 🌟 完美调用底层的原生 tokenizer，天生支持 max_length，绝不报错
+                text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
+                                                         max_length=max_total_len, return_tensors="pt")
+                text_ids = text_enc['input_ids'].squeeze(0)
+                len_t = text_ids.shape[0]
+
+                target_text_ids = torch.tensor([], dtype=torch.long)
+                if task == "caption":
+                    target_enc = self.text_tokenizer.tokenizer(text, padding=False, truncation=True,
+                                                               max_length=max_total_len, return_tensors="pt")
+                    target_text_ids = target_enc['input_ids'].squeeze(0)
+
+                if task != "denoise" and smiles:
+                    motif_result = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False,
+                                                               return_mapping=True)
+                    motif_ids, motif_mapping = motif_result if isinstance(motif_result, tuple) else (motif_result, [])
+                    if motif_ids.dim() > 1: motif_ids = motif_ids.squeeze(0)
+                    len_m = motif_ids.shape[0]
+                else:
+                    motif_ids = torch.tensor([], dtype=torch.long)
+                    motif_mapping = []
+                    len_m = 0
+
+                # ⚡ 触发动态注水分配 (极速张量切片，解放 CPU)
+                if len_t + len_m > max_total_len:
+                    half_quota = max_total_len // 2
+                    if len_t < half_quota:
+                        allow_m = max_total_len - len_t
+                        motif_ids = motif_ids[:allow_m]
+                    elif len_m < half_quota:
+                        allow_t = max_total_len - len_m
+                        text_ids = text_ids[:allow_t]
+                        text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
+                        if task == "caption":
+                            target_text_ids = target_text_ids[:allow_t]
+                            target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
+                    else:
+                        allow_t = half_quota
+                        allow_m = half_quota
+                        text_ids = text_ids[:allow_t]
+                        text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
+                        if task == "caption":
+                            target_text_ids = target_text_ids[:allow_t]
+                            target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
+                        motif_ids = motif_ids[:allow_m]
+
+                # 3D E3FP 处理
+                if task in ["mmm", "caption"] and smiles:
+                    e3fp_numpy = entry.get('e3fp')
+                    e3fp_ids = torch.tensor(e3fp_numpy,
+                                            dtype=torch.long) if e3fp_numpy is not None else self.e3fp_tokenizer.from_smiles(
+                        smiles)
+                    e3fp_ids = self.handle_dimension_mismatch(e3fp_ids)
+
+                    num_atoms = e3fp_ids.shape[0]
+                    atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
+                    atom_mapping = entry.get('atom_mapping', [])
+
+                    for motif_idx, atom_indices in enumerate(atom_mapping):
+                        if motif_idx >= len(motif_mapping): break
+                        real_token_idx = motif_mapping[motif_idx]
+                        if real_token_idx < motif_ids.shape[0]:
+
+                            # 🚀 修复点：兼容 Phase 2 数据库单原子被极端压缩成 int 的情况
+                            if isinstance(atom_indices, int):
+                                atom_indices = [atom_indices]
+
+                            for atom_idx in atom_indices:
+                                if atom_idx < num_atoms:
+                                    atom_to_motif_map[atom_idx] = real_token_idx
+                else:
+                    e3fp_ids = torch.empty((0, self.e3fp_width), dtype=torch.long)
+                    atom_to_motif_map = torch.empty((0,), dtype=torch.long)
+
+                return {
+                    "task": task,
+                    "text_input_ids": text_ids,
+                    "target_text_ids": target_text_ids,
+                    "motif_input_ids": motif_ids,
+                    "e3fp_input_ids": e3fp_ids,
+                    "atom_to_motif_map": atom_to_motif_map,
+                }
+
+            except Exception as e:
+                # 打印具体的异常类型，一眼看出是代码写错了还是脏数据
+                if getattr(self, 'error_count', 0) < getattr(self, 'max_log_errors', 50):
+                    logger.warning(f"⚠️ [Data Error] 样本 {idx} 解析失败 ({type(e).__name__}): {e}. 正在重试下一个...")
+                    self.error_count = getattr(self, 'error_count', 0) + 1
+
+                # 推进到下一个样本，继续循环重试 (绝不使用递归！)
+                idx = (idx + 1) % self.length
+
+        # 🚨 触发硬熔断：如果循环了 10 次都没能成功 return，说明绝对是系统或代码 Bug！
+        logger.error("❌ 检测到连续 10 次数据解析失败，触发系统硬熔断！")
+        raise RuntimeError(
+            f"数据集连续读取失败超过 10 次！极大概率是代码逻辑存在致命 Bug，或 LMDB 文件已损坏，"
+            f"绝不是零星的脏数据。请检查上方捕获的最后一次报错：{type(e).__name__}: {e}"
+        )
 
 
 # ==========================================
