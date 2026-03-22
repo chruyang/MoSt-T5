@@ -98,14 +98,15 @@ def main():
     c4_path = getattr(data_args, 'c4_file', "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb")
     text_weight_path = getattr(data_args, 'text_weight_path',
                                "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_text_weights.json")
-
+    max_seq_length = getattr(data_args, 'max_seq_length', 512)
     # 训练集：挂载 C4 弹药库进行防遗忘降噪
     train_dataset = GSMATDataset(
         lmdb_path=data_path,
         motif_tokenizer=motif_tokenizer,
         text_tokenizer=text_tokenizer,
         e3fp_tokenizer=e3fp_tokenizer,
-        c4_lmdb_path=c4_path
+        c4_lmdb_path=c4_path,
+        max_seq_length=max_seq_length
     )
 
     # 验证集：强制传空 C4 路径，保证评估指标纯粹反映分子图文对齐能力
@@ -120,6 +121,7 @@ def main():
             text_tokenizer=text_tokenizer,
             e3fp_tokenizer=e3fp_tokenizer,
             c4_lmdb_path=""  # 强制熔断验证集 C4
+            , max_seq_length=max_seq_length
         )
 
     data_collator = GSMATPhase2Collator(

@@ -32,7 +32,8 @@ class GSMATDataset(Dataset):
                  text_tokenizer: TextTokenizer,
                  motif_tokenizer: MotifTokenizer,
                  e3fp_tokenizer: E3FPTokenizer,
-                 c4_lmdb_path: str = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb"):
+                 c4_lmdb_path: str = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb",
+                 max_seq_length: int = 512):
 
         self.lmdb_path = lmdb_path
         self.c4_lmdb_path = c4_lmdb_path
@@ -44,7 +45,7 @@ class GSMATDataset(Dataset):
         self.e3fp_width = self.e3fp_tokenizer.fp_level + 1
         self.error_count = 0
         self.max_log_errors = 50
-        self.max_seq_len = 512
+        self.max_seq_len = max_seq_length
 
         self.task_probs = {
             "mmm": 0.60,

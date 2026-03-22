@@ -71,3 +71,10 @@ class DataArguments:
     c4_file: Optional[str] = field(
         default=None, metadata={"help": "The input C4 generic text data file (lmdb)."}
     )
+    max_seq_length: Optional[int] = field(
+        default=512,
+        metadata={
+            "help": "The maximum total input sequence length after tokenization. Sequences longer "
+                    "than this will be dynamically truncated, sequences shorter will be padded."
+        },
+    )
