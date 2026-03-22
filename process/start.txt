@@ -101,3 +101,28 @@ nohup torchrun --nproc_per_node=2 --master_port=29501 train1.py \
   > train_phase1.log 2>&1 &
 
  目前存在的问题，第一阶段预训练中使用到了pubhcemqc数据集的所有内容
+
+ torchrun --nproc_per_node=4 train2.py \
+    --model_name_or_path "google/t5-v1_1-base" \
+    --train_file "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb" \
+    --eval_file "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/valid/phase2_pubchem_final.lmdb" \
+    --output_dir "./checkpoints/most-t5-phase2" \
+    --do_train \
+    --do_eval \
+    --evaluation_strategy "steps" \
+    --eval_steps 2000 \
+    --per_device_train_batch_size 16 \
+    --per_device_eval_batch_size 16 \
+    --gradient_accumulation_steps 2 \
+    --learning_rate 5e-4 \
+    --optim "adafactor" \
+    --weight_decay 0.01 \
+    --lr_scheduler_type "cosine" \
+    --warmup_ratio 0.05 \
+    --logging_steps 50 \
+    --save_strategy "steps" \
+    --save_steps 2000 \
+    --num_train_epochs 15 \
+    --bf16 True \
+    --remove_unused_columns False \
+    --report_to "tensorboard"

@@ -65,3 +65,9 @@ class DataArguments:
         default=None,
         metadata={"help": "Path to the static text IDF weights JSON file."}
     )
+    eval_file: Optional[str] = field(
+        default=None, metadata={"help": "The input evaluation data file (lmdb)."}
+    )
+    c4_file: Optional[str] = field(
+        default=None, metadata={"help": "The input C4 generic text data file (lmdb)."}
+    )
