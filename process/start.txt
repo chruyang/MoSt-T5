@@ -103,7 +103,7 @@ nohup torchrun --nproc_per_node=2 --master_port=29501 train1.py \
  目前存在的问题，第一阶段预训练中使用到了pubhcemqc数据集的所有内容
 
  torchrun --nproc_per_node=4 train2.py \
-    --model_name_or_path "google/t5-v1_1-base" \
+    --model_name_or_path  \
     --train_file "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb" \
     --eval_file "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/valid/phase2_pubchem_final.lmdb" \
     --output_dir "./checkpoints/most-t5-phase2" \

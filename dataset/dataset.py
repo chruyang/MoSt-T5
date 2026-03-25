@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
-# 1. 核心数据集类 (满血版：修复 Tokenizer 包装限制)
+# 1. 核心数据集类 (终极完全体：支持非连续CID映射)
 # ==========================================
 class GSMATDataset(Dataset):
     def __init__(self, lmdb_path: str,
@@ -33,7 +33,7 @@ class GSMATDataset(Dataset):
                  motif_tokenizer: MotifTokenizer,
                  e3fp_tokenizer: E3FPTokenizer,
                  c4_lmdb_path: str = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb",
-                 whitelist_path: str = None,  # 🚀 新增参数：默认不使用白名单
+                 whitelist_path: str = None,
                  max_seq_length: int = 768):
 
         self.lmdb_path = lmdb_path
@@ -63,21 +63,28 @@ class GSMATDataset(Dataset):
         else:
             logger.info("🔓 未配置白名单，允许全量数据参与训练。")
 
+        # ==========================================
+        # 🚀 核心架构升级：将真实的 Key 扫描进内存，彻底解决断层/非连续问题
+        # ==========================================
         is_subdir = os.path.isdir(lmdb_path)
         temp_env = lmdb.open(
             lmdb_path, readonly=True, lock=False, readahead=False, meminit=False, subdir=is_subdir
         )
         with temp_env.begin() as txn:
-            try:
-                self.length = int(txn.get(b'__len__'))
-            except (TypeError, ValueError):
-                self.length = txn.stat()['entries']
+            logger.info("📋 正在扫描主数据库中的真实 Key 映射表...")
+            # 过滤掉诸如 b'__len__' 这类的元数据标签
+            self.keys = [k for k in txn.cursor().iternext(keys=True, values=False) if k != b'__len__']
+            self.length = len(self.keys)
+
         temp_env.close()
         self.env = None
+        logger.info(f"✅ 主数据库 Key 映射表建立完成，共 {self.length:,} 条有效数据。")
 
+        # ==========================================
+        # C4 数据集 (纯文本流，一般是连续生成的，如果也是稀疏的，可以采用同上逻辑)
+        # ==========================================
         self.c4_length = 0
         self.c4_env = None
-        # 加上 self.c4_lmdb_path and 的判断，防止传入 None 或空字符串
         if self.c4_lmdb_path and os.path.exists(self.c4_lmdb_path):
             temp_c4_env = lmdb.open(self.c4_lmdb_path, readonly=True, lock=False, subdir=False)
             with temp_c4_env.begin() as txn:
@@ -112,7 +119,10 @@ class GSMATDataset(Dataset):
     def __getitem__(self, idx):
         if self.env is None: self._init_db()
 
-        # 🛡️ 架构级重构：消除危险的无限递归，引入“连续失败熔断机制”
+        # 🚀 修复 UnboundLocalError：提前定义 last_error
+        last_error = None
+
+        # 🛡️ 连续失败熔断机制
         for attempt in range(10):
             try:
                 roll = np.random.rand()
@@ -131,7 +141,10 @@ class GSMATDataset(Dataset):
                 # 🧪 常规：抽取 PubChem 分子
                 else:
                     with self.env.begin() as txn:
-                        data = txn.get(str(idx).encode())
+                        # 🚀 核心修复：拿着 DataLoader 传来的数字 idx，去查询真实的 CID Key！
+                        real_key = self.keys[idx]
+                        data = txn.get(real_key)
+
                         if data is None:
                             idx = (idx + 1) % self.length
                             continue
@@ -164,7 +177,6 @@ class GSMATDataset(Dataset):
                 # 🧠 动态注水截断 (Water-filling)
                 max_total_len = getattr(self, 'max_seq_len', 768)
 
-                # 🌟 完美调用底层的原生 tokenizer，天生支持 max_length，绝不报错
                 text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
                                                          max_length=max_total_len, return_tensors="pt")
                 text_ids = text_enc['input_ids'].squeeze(0)
@@ -187,7 +199,7 @@ class GSMATDataset(Dataset):
                     motif_mapping = []
                     len_m = 0
 
-                # ⚡ 触发动态注水分配 (极速张量切片，解放 CPU)
+                # ⚡ 触发动态注水分配 (极速张量切片)
                 if len_t + len_m > max_total_len:
                     half_quota = max_total_len // 2
                     if len_t < half_quota:
@@ -227,7 +239,6 @@ class GSMATDataset(Dataset):
                         real_token_idx = motif_mapping[motif_idx]
                         if real_token_idx < motif_ids.shape[0]:
 
-                            # 🚀 修复点：兼容 Phase 2 数据库单原子被极端压缩成 int 的情况
                             if isinstance(atom_indices, int):
                                 atom_indices = [atom_indices]
 
@@ -248,20 +259,16 @@ class GSMATDataset(Dataset):
                 }
 
             except Exception as e:
-                # 打印具体的异常类型，一眼看出是代码写错了还是脏数据
+                last_error = e  # 记录最后的错误
                 if getattr(self, 'error_count', 0) < getattr(self, 'max_log_errors', 50):
                     logger.warning(f"⚠️ [Data Error] 样本 {idx} 解析失败 ({type(e).__name__}): {e}. 正在重试下一个...")
                     self.error_count = getattr(self, 'error_count', 0) + 1
-
-                # 推进到下一个样本，继续循环重试 (绝不使用递归！)
                 idx = (idx + 1) % self.length
 
-        # 🚨 触发硬熔断：如果循环了 10 次都没能成功 return，说明绝对是系统或代码 Bug！
-        logger.error("❌ 检测到连续 10 次数据解析失败，触发系统硬熔断！")
-        raise RuntimeError(
-            f"数据集连续读取失败超过 10 次！极大概率是代码逻辑存在致命 Bug，或 LMDB 文件已损坏，"
-            f"绝不是零星的脏数据。请检查上方捕获的最后一次报错：{type(e).__name__}: {e}"
-        )
+        # 🚨 触发硬熔断：明确打印真正的崩溃原因
+        error_msg = str(last_error) if last_error else "该区块附近的 LMDB 数据可能全为空！请检查键值是否映射成功。"
+        logger.error(f"❌ 检测到连续 10 次数据解析失败，触发系统硬熔断！最后的报错信息: {error_msg}")
+        raise RuntimeError(f"数据集连续读取失败超过 10 次！致命 Bug 或 LMDB 已损坏: {error_msg}")
 
 
 # ==========================================
@@ -486,7 +493,6 @@ class GSMATPhase2Collator:
             e3fp_ids = item["e3fp_input_ids"]
             atom_map = item["atom_to_motif_map"]
 
-            # ✅ 动态维度获取：永不报错
             fp_dim = e3fp_ids.shape[1] if e3fp_ids.shape[0] > 0 else 4
 
             if task == "mmm":
