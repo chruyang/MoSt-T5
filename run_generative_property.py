@@ -6,6 +6,7 @@ import lmdb
 import pickle
 import os
 import re
+import csv
 import logging
 from tqdm import tqdm
 from argparse import ArgumentParser
@@ -25,7 +26,6 @@ from tokenization.e3fp_tokenizer import E3FPTokenizer
 # ================== 开启底层极限加速 ==================
 torch.backends.cudnn.benchmark = True
 
-# 日志双轨输出，永久保存在硬盘中
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 MoStT5ForConditionalGeneration.config_class = MoStT5Config
 
 
-# ================= Dataset (融合全部 Phase2 预训练底层对齐逻辑) =================
+# ================= Dataset (坚守 MoSt-T5 专属锚点对齐) =================
 class GenerativeHybridDataset(Dataset):
     def __init__(self, json_path, lmdb_path, text_tokenizer, motif_tokenizer, e3fp_tokenizer, is_eval=False):
         self.text_tokenizer = text_tokenizer
@@ -93,9 +93,8 @@ class GenerativeHybridDataset(Dataset):
 
                 smiles = db_entry.get('smiles', db_entry.get('smi', ''))
 
-                # 🚀 修复1：不加 add_special_tokens=False，保留文本 </s>，建立跨模态注意力界碑！
                 text_ids = self.text_tokenizer.tokenizer(
-                    prompt, truncation=True, max_length=384, return_tensors="pt"
+                    prompt, truncation=True, max_length=128, return_tensors="pt"
                 )['input_ids'].squeeze(0)
                 len_t = len(text_ids)
 
@@ -105,7 +104,6 @@ class GenerativeHybridDataset(Dataset):
                 motif_ids = motif_ids.squeeze(0) if motif_ids.dim() > 1 else motif_ids
                 len_m = len(motif_ids)
 
-                # 🚀 修复2：截断时保护 <eom> 闭合标志！
                 if len_t + len_m > 768:
                     motif_ids = motif_ids[:768 - len_t]
                     motif_ids[-1] = self.motif_tokenizer.eom_id
@@ -113,7 +111,7 @@ class GenerativeHybridDataset(Dataset):
 
                 input_ids = torch.cat([text_ids, motif_ids])
                 target_ids = \
-                self.text_tokenizer.tokenizer(target_text, truncation=True, max_length=64, return_tensors="pt")[
+                self.text_tokenizer.tokenizer(target_text, truncation=True, max_length=36, return_tensors="pt")[
                     'input_ids'].squeeze(0)
 
                 e3fp_ids = torch.tensor(db_entry.get('e3fp'), dtype=torch.long)
@@ -129,13 +127,12 @@ class GenerativeHybridDataset(Dataset):
                 for motif_idx, atom_indices in enumerate(db_entry.get('atom_mapping', [])):
                     if motif_idx < len(motif_mapping):
                         real_token_idx = motif_mapping[motif_idx]
-                        if real_token_idx < len_m and real_token_idx + len_t < seq_len:
+                        if real_token_idx < len_m - 1 and real_token_idx + len_t < seq_len:
                             if isinstance(atom_indices, int): atom_indices = [atom_indices]
                             for atom_idx in atom_indices:
                                 if atom_idx < num_atoms:
                                     atom_to_motif_map[atom_idx] = real_token_idx + len_t
 
-                # 🚀 修复3：恢复 Dummy 填充！将 3D 原子的绝对索引推移 len_t，防止错贴到文本节点上！
                 dummy_e3fp = torch.full((len_t, self.e3fp_width), -1, dtype=torch.long)
                 final_e3fp = torch.cat([dummy_e3fp, e3fp_ids])
 
@@ -168,7 +165,6 @@ class GenerativeCollator:
         e3fp_ids = pad_sequence([f['e3fp_ids'] for f in valid], batch_first=True, padding_value=-1)
         atom_to_motif_map = pad_sequence([f['atom_to_motif_map'] for f in valid], batch_first=True, padding_value=-1)
 
-        # 鲁棒性防御：越界锚点置为 -1
         safe_map = atom_to_motif_map.clone()
         safe_map[safe_map >= input_ids.shape[1]] = -1
 
@@ -183,23 +179,31 @@ class GenerativeCollator:
 
 
 def extract_float(text):
-    match = re.search(r'-?\d+\.?\d*', text)
-    return float(match.group()) if match else None
+    # 严格匹配浮点数并取最后一个
+    matches = re.findall(r'-?\d+\.\d+', text)
+    return float(matches[-1]) if matches else None
 
 
-# ================= 🌟 官方对齐：带物理截断的分属性评估 =================
+# ================= 🌟 学术级评估模块 =================
 def evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, output_dir, tag=""):
     logger.info(f"\n⏳ 正在进行 {tag} 评估 (Global Step: {global_step})...")
     model.eval()
     eval_loss_total = 0.0
     actual_val_steps = 0
 
-    prop_metrics = collections.defaultdict(lambda: {"y_true": [], "y_pred": []})
+    prop_metrics = collections.defaultdict(lambda: {"y_true": [], "y_pred": [], "total_count": 0})
+
+    # 🚀 优化：动态 Beam Search。日常采样评估用贪婪加速，大考用全量集束！
+    current_beams = 1 if tag == "periodic" else 5
+    max_eval_steps = 100 if tag == "periodic" else float('inf')
 
     with torch.no_grad():
-        for val_step, val_batch in enumerate(eval_loader):
+        for val_step, val_batch in enumerate(tqdm(eval_loader, desc=f"Eval {tag}")):
             if not val_batch: continue
-            if actual_val_steps >= 100: break  # 取样评估
+
+            # 🚀 明确区分：Periodic 抽样 100 批次，Epoch/Final 跑全集！
+            if actual_val_steps >= max_eval_steps:
+                break
 
             val_batch = {k: v.to(device) for k, v in val_batch.items()}
 
@@ -207,7 +211,6 @@ def evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, o
                 val_outputs = model(**val_batch)
                 eval_loss_total += val_outputs.loss.item()
 
-                # Encoder 预计算多模态隐状态，规避 generate 参数白名单拦截
                 encoder_outputs = model.get_encoder()(
                     input_ids=val_batch["input_ids"],
                     attention_mask=val_batch["attention_mask"],
@@ -219,7 +222,10 @@ def evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, o
                 generated_ids = model.generate(
                     attention_mask=val_batch["attention_mask"],
                     encoder_outputs=encoder_outputs,
-                    max_length=64
+                    max_length=36,
+                    num_beams=current_beams,
+                    early_stopping=True,
+                    do_sample=False
                 )
 
             preds = text_tokenizer.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
@@ -231,15 +237,27 @@ def evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, o
             for p_str, r_str, prompt_str in zip(preds, refs, prompts):
                 p_val, r_val = extract_float(p_str), extract_float(r_str)
 
-                tag_match = re.match(r'^\[(.*?)\]', prompt_str)
-                prop_name = tag_match.group(1) if tag_match else "General"
+                # 🚀 优化：以 Reference 文本内容作为绝对黄金标准进行分类！
+                if 'SCF' in r_str or 'Energy' in r_str:
+                    prop_name = 'SCF'
+                elif 'Gap' in r_str or 'HOMO-LUMO' in r_str:
+                    prop_name = 'Gap'
+                elif 'HOMO' in r_str:
+                    prop_name = 'HOMO'
+                elif 'LUMO' in r_str:
+                    prop_name = 'LUMO'
+                else:
+                    # 兜底方案
+                    tag_match = re.match(r'^\[(.*?)\]', prompt_str)
+                    prop_name = tag_match.group(1) if tag_match else "General"
 
-                # 物理常识异常截断
+                prop_metrics[prop_name]["total_count"] += 1
+
                 if r_val is not None and p_val is not None:
-                    if ("Energy" in prop_name or "SCF" in prop_name or "U0" in prop_name) and not (
-                            -10000 < p_val < 10000):
+                    # 严格对齐官方量子化学常识截断
+                    if prop_name == 'SCF' and not (-5 < p_val < 0):
                         continue
-                    if ("HOMO" in prop_name or "LUMO" in prop_name or "Gap" in prop_name) and not (-20 < p_val < 20):
+                    if prop_name in ['HOMO', 'LUMO', 'Gap'] and not (-20 < p_val < 20):
                         continue
 
                     prop_metrics[prop_name]["y_true"].append(r_val)
@@ -248,32 +266,48 @@ def evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, o
             actual_val_steps += 1
 
     avg_val_loss = eval_loss_total / max(actual_val_steps, 1)
-    logger.info(f"✅ [{tag}] Eval Loss: {avg_val_loss:.4f}")
+    logger.info(f"✅ [{tag}] Eval Loss: {avg_val_loss:.4f} (Beams: {current_beams})")
     eval_result_str = f"Tag: {tag} | Step: {global_step} | Eval Loss: {avg_val_loss:.4f}\n"
-    global_y_true, global_y_pred = [], []
 
+    # 🚀 优化：分属性输出并携带 Valid Ratio
     for prop, data in prop_metrics.items():
         y_t, y_p = data["y_true"], data["y_pred"]
-        if len(y_t) > 0:
-            mae = mean_absolute_error(y_t, y_p)
-            logger.info(f"   -> {prop} MAE: {mae:.4f} (Samples: {len(y_t)})")
-            eval_result_str += f"   -> {prop} MAE: {mae:.4f}\n"
-            global_y_true.extend(y_t)
-            global_y_pred.extend(y_p)
+        total_samples = data["total_count"]
+        valid_samples = len(y_t)
 
-    if len(global_y_true) > 0:
-        global_mae = mean_absolute_error(global_y_true, global_y_pred)
-        logger.info(f"   => Global Average MAE: {global_mae:.4f}\n")
-        eval_result_str += f"   => Global Average MAE: {global_mae:.4f}\n"
+        valid_ratio = (valid_samples / total_samples * 100) if total_samples > 0 else 0.0
+
+        if valid_samples > 0:
+            mae = mean_absolute_error(y_t, y_p)
+            log_msg = f"   -> {prop} MAE: {mae:.4f} | Valid: {valid_ratio:.1f}% ({valid_samples}/{total_samples})"
+            logger.info(log_msg)
+            eval_result_str += log_msg + "\n"
+        else:
+            log_msg = f"   -> {prop} MAE: N/A | Valid: 0.0% (0/{total_samples})"
+            logger.info(log_msg)
+            eval_result_str += log_msg + "\n"
 
     with open(os.path.join(output_dir, "eval_results.txt"), "a", encoding="utf-8") as f:
         f.write(eval_result_str + "-" * 40 + "\n")
+
+    # 🚀 优化：只有大考（Epoch End 或 Final）才保存 TSV 预测详情，便于进行 bad case 分析
+    if tag != "periodic":
+        tsv_path = os.path.join(output_dir, f"predictions_{tag}_{global_step}.tsv")
+        try:
+            with open(tsv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f, delimiter='\t')
+                writer.writerow(['Property', 'Ground Truth', 'Prediction (Float)'])
+                for prop, data in prop_metrics.items():
+                    for gt, pred in zip(data['y_true'], data['y_pred']):
+                        writer.writerow([prop, gt, pred])
+            logger.info(f"📄 详细预测结果已保存至: {tsv_path}")
+        except Exception as e:
+            logger.error(f"保存 TSV 失败: {e}")
 
     save_path = os.path.join(output_dir, f"checkpoint-{tag}-{global_step}")
     model.save_pretrained(save_path, safe_serialization=False)
     logger.info(f"💾 模型已保存至: {save_path}\n")
 
-    # 自动清理过期的 Checkpoint，只保留最新的 3 个
     if tag == "periodic":
         keep_last_n = 3
         checkpoints = glob.glob(os.path.join(output_dir, "checkpoint-periodic-*"))
@@ -288,18 +322,16 @@ def evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, o
 
         if len(checkpoints_with_step) > keep_last_n:
             for step, cp_to_delete in checkpoints_with_step[:-keep_last_n]:
-                logger.info(f"🧹 清理过期权重释放硬盘空间: {cp_to_delete}")
                 shutil.rmtree(cp_to_delete, ignore_errors=True)
 
     model.train()
 
 
-# ================= 原生主循环 (极限性能版) =================
+# ================= 原生主循环 (对齐官方 50000 步策略) =================
 def main():
     parser = ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--model_path", type=str, required=True)
-    # 🚀 默认学习率对齐官方的 1e-3
     parser.add_argument("--lr", type=float, default=1e-3)
     args = parser.parse_args()
     set_seed(42)
@@ -307,19 +339,22 @@ def main():
     output_dir = "./checkpoints/gen_prop_Native_BF16"
     os.makedirs(output_dir, exist_ok=True)
 
-    # 🔥 性能调优参数 (保持上一轮跑通的高效吞吐量)
     batch_size = 128
-    accum_steps = 2
-    num_train_epochs = 10
-    eval_steps = 2500
+    accum_steps = 8
+    num_train_epochs = 85
+    eval_steps = 1000
 
     AutoConfig.register("most-t5", MoStT5Config)
     text_tokenizer = TextTokenizer("google/t5-v1_1-base", max_len=768)
-    motif_tokenizer = MotifTokenizer("asset/mol_vocabs/vocab_phase2_25k.txt", "google/t5-v1_1-base", max_len=768)
+
+    motif_tokenizer = MotifTokenizer(
+        vocab_file="asset/mol_vocabs/vocab_phase2_25k.txt",
+        model_name="google/t5-v1_1-base",
+        max_len=768
+    )
     e3fp_tokenizer = E3FPTokenizer(fp_level=3, fp_bits=4096)
 
     logger.info("⚙️ 正在加载模型...")
-    # 🚀 强制注入预训练结构参数，防止退化
     config = MoStT5Config.from_pretrained(
         args.model_path,
         e3fp_num_levels=4,
@@ -359,18 +394,18 @@ def main():
         eval_dataset,
         batch_size=batch_size * 2,
         collate_fn=collator,
-        shuffle=False,
+        shuffle=True,
         num_workers=4,
         pin_memory=True
     )
 
-    # 🚀 彻底移除 weight_decay 阻力
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.0)
-    total_steps = len(train_loader) // accum_steps * num_train_epochs
+
+    total_steps = 50000
     scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=1000, num_training_steps=total_steps)
 
     logger.info("=" * 60)
-    logger.info(f"🚀 [Phase 3] 启动属性预测全装甲微调! 预计总更新步数: {total_steps}")
+    logger.info(f"🚀 [Phase 3] 启动属性预测微调 (专业学术打榜版)! 预计总更新步数: {total_steps}")
     logger.info("=" * 60)
 
     global_step = 0
@@ -383,6 +418,9 @@ def main():
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_train_epochs}")
 
         for step, batch in enumerate(progress_bar):
+            if global_step >= total_steps:
+                break
+
             if not batch: continue
 
             batch = {k: v.to(device) for k, v in batch.items()}
@@ -400,7 +438,8 @@ def main():
             valid_steps += 1
 
             if valid_steps == accum_steps:
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0).item()
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1e9).item()
+
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
@@ -408,22 +447,23 @@ def main():
                 global_step += 1
                 valid_steps = 0
 
-                progress_bar.set_postfix({'loss': f"{epoch_loss / accum_steps:.4f}", 'grad': f"{grad_norm:.2f}",
-                                          'lr': f"{scheduler.get_last_lr()[0]:.2e}"})
+                progress_bar.set_postfix(
+                    {'loss': f"{epoch_loss / accum_steps:.4f}", 'lr': f"{scheduler.get_last_lr()[0]:.2e}",
+                     'grad': f"{grad_norm:.2f}"})
                 epoch_loss = 0.0
 
                 if global_step % eval_steps == 0:
                     evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, output_dir,
                                       tag="periodic")
 
-        logger.info(f"🎉 Epoch {epoch + 1} 结束！执行强制兜底评估...")
+        if global_step >= total_steps:
+            break
+
+        logger.info(f"🎉 Epoch {epoch + 1} 结束！进行全量评估...")
         evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, output_dir,
                           tag=f"epoch_{epoch + 1}_end")
 
-    if valid_steps > 0:
-        optimizer.step()
-        global_step += 1
-    logger.info(f"🏁 训练全部完成！执行最终收尾评估...")
+    logger.info(f"🏁 训练完成！进行 Final 终极评估...")
     evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, output_dir, tag="final")
 
 
