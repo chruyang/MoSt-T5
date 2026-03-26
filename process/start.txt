@@ -126,3 +126,5 @@ nohup torchrun --nproc_per_node=2 --master_port=29501 train1.py \
     --bf16 True \
     --remove_unused_columns False \
     --report_to "tensorboard"
+
+ 第二阶段预训练中存在特殊符号问题

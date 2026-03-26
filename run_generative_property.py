@@ -14,10 +14,12 @@ from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     set_seed,
-    EarlyStoppingCallback
+    EarlyStoppingCallback,
+    AutoConfig
 )
 from sklearn.metrics import mean_absolute_error
 
+from model.configuration import MoStT5Config
 from model.modeling import MoStT5ForConditionalGeneration
 from tokenization.text_tokenizer import TextTokenizer
 from tokenization.motif_tokenizer import MotifTokenizer
@@ -26,9 +28,11 @@ from tokenization.e3fp_tokenizer import E3FPTokenizer
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+MoStT5ForConditionalGeneration.config_class = MoStT5Config
+
 
 # ==========================================
-# 1. 终极 Dataset (绝对 -1 填充版)
+# 1. 终极 Dataset (加装防毒数据装甲版)
 # ==========================================
 class GenerativeHybridDataset(Dataset):
     def __init__(self, json_path: str, lmdb_path: str,
@@ -75,35 +79,42 @@ class GenerativeHybridDataset(Dataset):
                 if d_k.lower().strip() == k.lower(): return str(item[d_k])
         return ""
 
-    def handle_dimension_mismatch(self, e3fp_ids: torch.Tensor) -> torch.Tensor:
-        current_width = e3fp_ids.shape[1]
-        if current_width == self.e3fp_width: return e3fp_ids
-        if current_width < self.e3fp_width:
-            # 🚨🚨🚨 核心修正 1：维度不足时，绝对使用 -1 填充，杜绝随机特征注入！
-            pad_tensor = torch.full((e3fp_ids.shape[0], self.e3fp_width - current_width), -1, dtype=torch.long)
-            return torch.cat([e3fp_ids, pad_tensor], dim=1)
-        return e3fp_ids[:, :self.e3fp_width]
-
     def __getitem__(self, idx):
-        for attempt in range(10):
+        # 如果当前样本是“毒数据”，最多尝试寻找 20 个下一个样本替代
+        for attempt in range(20):
             try:
                 item = self.qa_data[idx]
 
-                prompt = self._get_val(item, ["Instruction", "instruction", "prompt"])
-                target_text = self._get_val(item, ["Target", "target", "output"])
-                raw_cid_str = self._get_val(item, ["Input", "input", "cid", "id"])
+                base_prompt = self._get_val(item, ["Instruction", "instruction", "prompt"])
+                task_tag = self._get_val(item, ["Task Tag (任务标签)", "task", "Task Tag"])
+                prompt = f"[{task_tag}]: {base_prompt}" if task_tag else base_prompt
 
+                target_text = self._get_val(item, ["Target", "target", "output"])
+
+                # 🛡️ 毒数据防御 1：目标文本不可为空
+                if not target_text or target_text.strip() == "":
+                    raise ValueError("Target text is empty")
+
+                raw_cid_str = self._get_val(item, ["Input", "input", "cid", "id"])
                 match = re.search(r'\d+', raw_cid_str)
-                if not match: raise ValueError(f"无效 CID: {raw_cid_str}")
+                if not match: raise ValueError(f"Invalid CID")
                 clean_cid = match.group()
 
                 lmdb_key = self.cid_to_key.get(clean_cid)
-                if not lmdb_key: raise ValueError(f"CID {clean_cid} 不在特征库中")
+                if not lmdb_key: raise ValueError(f"CID {clean_cid} not in LMDB")
 
                 with self.env.begin() as txn:
                     db_entry = pickle.loads(txn.get(lmdb_key))
 
                 smiles = db_entry.get('smiles', db_entry.get('smi', ''))
+                e3fp_numpy = db_entry.get('e3fp')
+
+                # 🛡️ 毒数据防御 2：E3FP 必须存在，且绝不能有超出词表的异常脏值！
+                if e3fp_numpy is None:
+                    raise ValueError("Missing E3FP feature")
+                e3fp_max, e3fp_min = np.max(e3fp_numpy), np.min(e3fp_numpy)
+                if e3fp_max >= 4096 or e3fp_min < -1:
+                    raise ValueError(f"Corrupted E3FP Range! Max={e3fp_max}, Min={e3fp_min}")
 
                 text_ids = \
                 self.text_tokenizer.tokenizer(prompt, truncation=True, max_length=self.max_source_length // 2,
@@ -125,9 +136,13 @@ class GenerativeHybridDataset(Dataset):
                 self.text_tokenizer.tokenizer(target_text, truncation=True, max_length=self.max_target_length,
                                               return_tensors="pt")['input_ids'].squeeze(0)
 
-                e3fp_numpy = db_entry.get('e3fp')
                 e3fp_ids = torch.tensor(e3fp_numpy, dtype=torch.long)
-                e3fp_ids = self.handle_dimension_mismatch(e3fp_ids)
+                if e3fp_ids.shape[1] < self.e3fp_width:
+                    pad_tensor = torch.full((e3fp_ids.shape[0], self.e3fp_width - e3fp_ids.shape[1]), -1,
+                                            dtype=torch.long)
+                    e3fp_ids = torch.cat([e3fp_ids, pad_tensor], dim=1)
+                else:
+                    e3fp_ids = e3fp_ids[:, :self.e3fp_width]
 
                 num_atoms = e3fp_ids.shape[0]
                 atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
@@ -145,7 +160,6 @@ class GenerativeHybridDataset(Dataset):
                                 if atom_idx < num_atoms:
                                     atom_to_motif_map[atom_idx] = target_pos
 
-                # 🚨🚨🚨 核心修正 2：文本假原子绝对使用 -1 填充！
                 dummy_e3fp = torch.full((len_t, self.e3fp_width), -1, dtype=torch.long)
                 final_e3fp = torch.cat([dummy_e3fp, e3fp_ids])
 
@@ -157,18 +171,18 @@ class GenerativeHybridDataset(Dataset):
                     "e3fp_ids": final_e3fp, "atom_to_motif_map": final_map
                 }
             except Exception as e:
+                # 遇到毒数据直接抛弃，跳到下一条
                 if self.is_eval: return None
                 idx = (idx + 1) % self.length
         return None
 
 
 # ==========================================
-# 2. Generative Collator (极简原生版)
+# 2. Generative Collator
 # ==========================================
 class GenerativeCollator:
-    def __init__(self, text_pad_id, e3fp_pad_id=-1):
+    def __init__(self, text_pad_id):
         self.text_pad_id = text_pad_id
-        self.e3fp_pad_id = e3fp_pad_id
 
     def __call__(self, batch):
         valid_batch = [f for f in batch if f is not None]
@@ -186,18 +200,23 @@ class GenerativeCollator:
                                  padding_value=self.text_pad_id)
         labels = pad_sequence([f['labels'] for f in valid_batch], batch_first=True, padding_value=-100)
 
-        # 🚨🚨🚨 核心修正 3：直接透传 -1，绝不在 Collator 里画蛇添足！让 modeling.py 去处理它！
-        e3fp_ids = pad_sequence([f['e3fp_ids'] for f in valid_batch], batch_first=True, padding_value=self.e3fp_pad_id)
+        e3fp_ids = pad_sequence([f['e3fp_ids'] for f in valid_batch], batch_first=True, padding_value=-1)
         atom_to_motif_map = pad_sequence([f['atom_to_motif_map'] for f in valid_batch], batch_first=True,
                                          padding_value=-1)
+
+        atom_attention_mask = (e3fp_ids[:, :, 0] != -1).long()
+
+        safe_atom_to_motif_map = atom_to_motif_map.clone()
+        max_seq_len = input_ids.shape[1]
+        safe_atom_to_motif_map[safe_atom_to_motif_map >= max_seq_len] = -1
 
         return {
             "input_ids": input_ids,
             "attention_mask": (input_ids != self.text_pad_id).long(),
             "labels": labels,
             "e3fp_ids": e3fp_ids,
-            "atom_attention_mask": (e3fp_ids[:, :, 0] != self.e3fp_pad_id).long(),
-            "atom_to_motif_map": atom_to_motif_map
+            "atom_attention_mask": atom_attention_mask,
+            "atom_to_motif_map": safe_atom_to_motif_map
         }
 
 
@@ -225,15 +244,17 @@ def compute_metrics(eval_preds, tokenizer):
 
 
 # ==========================================
-# 4. 主函数
+# 4. 主函数 (全架构注册 + AdamW 稳定版)
 # ==========================================
 def main():
     parser = ArgumentParser()
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=3e-5)
     args = parser.parse_args()
     set_seed(42)
+
+    AutoConfig.register("most-t5", MoStT5Config)
 
     text_tokenizer = TextTokenizer("google/t5-v1_1-base", max_len=768)
     motif_tokenizer = MotifTokenizer("asset/mol_vocabs/vocab_phase2_25k.txt", "google/t5-v1_1-base", max_len=768)
@@ -254,14 +275,20 @@ def main():
         per_device_train_batch_size=4,
         gradient_accumulation_steps=32,
         per_device_eval_batch_size=4,
-        optim="adafactor",
-        learning_rate=args.lr,
-        lr_scheduler_type="constant_with_warmup",
-        warmup_steps=5000,
+
+        # 🚨 AdamW 对于这种深层微调是最稳健的！
+        optim="adamw_torch",
+        learning_rate=3e-5,
+        weight_decay=0.01,
+        max_grad_norm=1.0,
+        lr_scheduler_type="cosine",
+        warmup_steps=1000,
+
         max_steps=100000,
         eval_strategy="steps", eval_steps=2500,
         save_strategy="steps", save_steps=2500,
         logging_steps=10,
+
         bf16=False, fp16=False,
         gradient_checkpointing=False,
         predict_with_generate=True,
@@ -274,7 +301,7 @@ def main():
         report_to="none"
     )
 
-    collator = GenerativeCollator(text_pad_id=text_tokenizer.tokenizer.pad_token_id, e3fp_pad_id=-1)
+    collator = GenerativeCollator(text_pad_id=text_tokenizer.tokenizer.pad_token_id)
 
     trainer = Seq2SeqTrainer(
         model=model, args=training_args, train_dataset=train_dataset, eval_dataset=eval_dataset,
@@ -283,7 +310,7 @@ def main():
         callbacks=[EarlyStoppingCallback(5)]
     )
 
-    logger.info("🚀 Starting 100% PURE Aligned Fine-Tuning...")
+    logger.info("🚀 Data Firewall Active. Starting Aligned Fine-Tuning with AdamW...")
     trainer.train()
 
 

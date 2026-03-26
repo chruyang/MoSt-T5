@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
-# 1. 核心数据集类 (终极完全体：支持非连续CID映射)
+# 1. 核心数据集类 (终极完全体：支持非连续CID映射 + 截断防爆安全锁)
 # ==========================================
 class GSMATDataset(Dataset):
     def __init__(self, lmdb_path: str,
@@ -63,16 +63,12 @@ class GSMATDataset(Dataset):
         else:
             logger.info("🔓 未配置白名单，允许全量数据参与训练。")
 
-        # ==========================================
-        # 🚀 核心架构升级：将真实的 Key 扫描进内存，彻底解决断层/非连续问题
-        # ==========================================
         is_subdir = os.path.isdir(lmdb_path)
         temp_env = lmdb.open(
             lmdb_path, readonly=True, lock=False, readahead=False, meminit=False, subdir=is_subdir
         )
         with temp_env.begin() as txn:
             logger.info("📋 正在扫描主数据库中的真实 Key 映射表...")
-            # 过滤掉诸如 b'__len__' 这类的元数据标签
             self.keys = [k for k in txn.cursor().iternext(keys=True, values=False) if k != b'__len__']
             self.length = len(self.keys)
 
@@ -80,9 +76,6 @@ class GSMATDataset(Dataset):
         self.env = None
         logger.info(f"✅ 主数据库 Key 映射表建立完成，共 {self.length:,} 条有效数据。")
 
-        # ==========================================
-        # C4 数据集 (纯文本流，一般是连续生成的，如果也是稀疏的，可以采用同上逻辑)
-        # ==========================================
         self.c4_length = 0
         self.c4_env = None
         if self.c4_lmdb_path and os.path.exists(self.c4_lmdb_path):
@@ -118,16 +111,12 @@ class GSMATDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.env is None: self._init_db()
-
-        # 🚀 修复 UnboundLocalError：提前定义 last_error
         last_error = None
 
-        # 🛡️ 连续失败熔断机制
         for attempt in range(10):
             try:
                 roll = np.random.rand()
 
-                # 🚀 分流：前往 C4 库抽取纯英文文本
                 if roll >= sum(self.task_probs.values()) - self.task_probs["denoise"] and getattr(self, 'c4_length',
                                                                                                   0) > 0:
                     task = "denoise"
@@ -137,11 +126,8 @@ class GSMATDataset(Dataset):
                         text = c4_data.get('text', '')
                     prompt_text = f"[Denoise]: {text}"
                     smiles = ""
-
-                # 🧪 常规：抽取 PubChem 分子
                 else:
                     with self.env.begin() as txn:
-                        # 🚀 核心修复：拿着 DataLoader 传来的数字 idx，去查询真实的 CID Key！
                         real_key = self.keys[idx]
                         data = txn.get(real_key)
 
@@ -174,7 +160,6 @@ class GSMATDataset(Dataset):
                         prompt_text = f"[Denoise]: {text}"
                         smiles = ""
 
-                # 🧠 动态注水截断 (Water-filling)
                 max_total_len = getattr(self, 'max_seq_len', 768)
 
                 text_enc = self.text_tokenizer.tokenizer(prompt_text, padding=False, truncation=True,
@@ -205,6 +190,8 @@ class GSMATDataset(Dataset):
                     if len_t < half_quota:
                         allow_m = max_total_len - len_t
                         motif_ids = motif_ids[:allow_m]
+                        # 🚀 致命防御一：强制闭合序列，保护 <eom>
+                        if len(motif_ids) > 0: motif_ids[-1] = self.motif_tokenizer.eom_id
                     elif len_m < half_quota:
                         allow_t = max_total_len - len_m
                         text_ids = text_ids[:allow_t]
@@ -214,13 +201,19 @@ class GSMATDataset(Dataset):
                             target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                     else:
                         allow_t = half_quota
-                        allow_m = half_quota
+                        allow_m = max_total_len - allow_t
                         text_ids = text_ids[:allow_t]
                         text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                         if task == "caption":
                             target_text_ids = target_text_ids[:allow_t]
                             target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                         motif_ids = motif_ids[:allow_m]
+                        # 🚀 致命防御一：强制闭合序列，保护 <eom>
+                        if len(motif_ids) > 0: motif_ids[-1] = self.motif_tokenizer.eom_id
+
+                        # 重新计算切片后的真实长度
+                    len_t = text_ids.shape[0]
+                    len_m = motif_ids.shape[0]
 
                 # 3D E3FP 处理
                 if task in ["mmm", "caption"] and smiles:
@@ -237,11 +230,11 @@ class GSMATDataset(Dataset):
                     for motif_idx, atom_indices in enumerate(atom_mapping):
                         if motif_idx >= len(motif_mapping): break
                         real_token_idx = motif_mapping[motif_idx]
-                        if real_token_idx < motif_ids.shape[0]:
 
+                        # 🚀 致命防御二：被截断的原子必须失联，绝不可强行贴到边界符 <eom> 上！
+                        if real_token_idx < len_m - 1:
                             if isinstance(atom_indices, int):
                                 atom_indices = [atom_indices]
-
                             for atom_idx in atom_indices:
                                 if atom_idx < num_atoms:
                                     atom_to_motif_map[atom_idx] = real_token_idx
@@ -259,20 +252,19 @@ class GSMATDataset(Dataset):
                 }
 
             except Exception as e:
-                last_error = e  # 记录最后的错误
+                last_error = e
                 if getattr(self, 'error_count', 0) < getattr(self, 'max_log_errors', 50):
                     logger.warning(f"⚠️ [Data Error] 样本 {idx} 解析失败 ({type(e).__name__}): {e}. 正在重试下一个...")
                     self.error_count = getattr(self, 'error_count', 0) + 1
                 idx = (idx + 1) % self.length
 
-        # 🚨 触发硬熔断：明确打印真正的崩溃原因
         error_msg = str(last_error) if last_error else "该区块附近的 LMDB 数据可能全为空！请检查键值是否映射成功。"
         logger.error(f"❌ 检测到连续 10 次数据解析失败，触发系统硬熔断！最后的报错信息: {error_msg}")
         raise RuntimeError(f"数据集连续读取失败超过 10 次！致命 Bug 或 LMDB 已损坏: {error_msg}")
 
 
 # ==========================================
-# 2. 预训练 Phase 1 Collator
+# 2. 预训练 Phase 1 Collator (加入物理防爆盾)
 # ==========================================
 class GSMATPretrainingCollator:
     def __init__(self, motif_tokenizer: MotifTokenizer, e3fp_pad_id: int = -1, mask_ratio: float = 0.15,
@@ -357,12 +349,16 @@ class GSMATPretrainingCollator:
         motif_mask = (masked_motif_ids != self.pad_id).long()
         atom_mask = (masked_e3fp_ids[:, :, 0] != self.e3fp_pad_id).long()
 
+        # 🚀 致命防御三：防止 Map 中残留未被拦截的越界指针
+        safe_map = batch_map.clone()
+        safe_map[safe_map >= masked_motif_ids.shape[1]] = -1
+
         return {
             "input_ids": masked_motif_ids,
             "attention_mask": motif_mask,
             "e3fp_ids": masked_e3fp_ids,
             "atom_attention_mask": atom_mask,
-            "atom_to_motif_map": batch_map,
+            "atom_to_motif_map": safe_map,  # 使用安全锁后的字典
             "labels": labels,
             "unmasked_e3fp_ids": batch_e3fp,
             "mask_positions": geometric_mask_positions
@@ -370,7 +366,7 @@ class GSMATPretrainingCollator:
 
 
 # ==========================================
-# 3. 🌟 Phase 2 全新大一统多模态 Collator
+# 3. 🌟 Phase 2 全新大一统多模态 Collator (加入物理防爆盾)
 # ==========================================
 class GSMATPhase2Collator:
     def __init__(self, motif_tokenizer, text_tokenizer, text_weight_path, e3fp_pad_id=-1, mask_ratio=0.15):
@@ -578,6 +574,10 @@ class GSMATPhase2Collator:
         atom_mask_padded = pad_sequence(batch_atom_masks, batch_first=True, padding_value=0)
         mask_positions_padded = pad_sequence(batch_mask_positions, batch_first=True, padding_value=False)
 
+        # 🚀 致命防御三：防止动态拼接中产生的越界指针
+        safe_map = map_padded.clone()
+        safe_map[safe_map >= input_ids_padded.shape[1]] = -1
+
         return {
             "input_ids": input_ids_padded,
             "attention_mask": attention_mask,
@@ -585,6 +585,6 @@ class GSMATPhase2Collator:
             "e3fp_ids": e3fp_padded,
             "unmasked_e3fp_ids": unmasked_e3fp_padded,
             "atom_attention_mask": atom_mask_padded,
-            "atom_to_motif_map": map_padded,
+            "atom_to_motif_map": safe_map,  # 使用安全锁后的字典
             "mask_positions": mask_positions_padded,
         }

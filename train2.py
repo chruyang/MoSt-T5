@@ -34,95 +34,85 @@ def main():
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     # 🚨 致命防御：禁止 HuggingFace Trainer 自动剔除"未在forward中显式声明"的列
-    # 这保证了 e3fp_ids, unmasked_e3fp_ids 和 mask_positions 能安全送达模型！
     training_args.remove_unused_columns = False
 
-    # 配置日志
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        handlers=[logging.StreamHandler(sys.stdout)],
         level=logging.INFO if training_args.local_rank in [-1, 0] else logging.WARN,
     )
+
+    logger.info(f"Model Args: {model_args}")
+    logger.info(f"Data Args: {data_args}")
+    logger.info(f"Training Args: {training_args}")
+
     set_seed(training_args.seed)
 
     # ==========================================
-    # 📦 2. 初始化分词器 (加载 Phase 2 扩充词表)
+    # 🛠️ 2. 初始化 Tokenizers (核心：串联词表共享机制)
     # ==========================================
-    logger.info("Initializing tokenizers...")
+    # 步骤 1：先初始化 TextTokenizer（它会加载 T5 基础词汇并注入 [MMM]: 等任务特殊符）
+    text_tokenizer = TextTokenizer(model_args.model_name_or_path, max_len=768)
 
-    # 获取 Phase 2 新词表路径
-    vocab_file_path = getattr(data_args, 'vocab_file', "asset/mol_vocabs/vocab_phase2_25k.txt")
-    if not os.path.exists(vocab_file_path):
-        logger.warning(f"⚠️ 未找到 Phase 2 词表 {vocab_file_path}，将尝试回退旧词表！")
-        vocab_file_path = "asset/mol_vocabs/vocab_20k.txt"
-
-    motif_tokenizer = MotifTokenizer(vocab_file=vocab_file_path)
-    text_tokenizer = TextTokenizer(model_name="google/t5-v1_1-base")
-
-    # fp_level=3 对应 4 层 E3FP 特征 (0, 1, 2, 3)
-    e3fp_tokenizer = E3FPTokenizer(fp_level=3, fp_bits=4096)
-
-    new_vocab_size = len(motif_tokenizer.tokenizer)
-    logger.info(f"✅ Tokenizers loaded. Motif Vocab Size: {new_vocab_size}")
-
-    # ==========================================
-    # 🚀 3. 加载基座权重 & 强制注入 3D Config
-    # ==========================================
-    logger.info(f"🚀 Loading Base Model from: {model_args.model_name_or_path}")
-
-    # 🌟 致命修复：显式实例化自定义 Config，拒绝退化为普通 T5Config
-    config = MoStT5Config.from_pretrained(
-        model_args.model_name_or_path,
-        e3fp_num_levels=4,  # 强制指定 3D 物理层数
-        e3fp_vocab_size=4096  # 强制指定 3D 词表大小
+    # 步骤 2：将 text_tokenizer 的底层 C++ tokenizer 实例传递给 MotifTokenizer
+    # 这样 Motif 会在 Text 扩充过的 ID 之后继续追加 25000 个化学基团，绝不碰撞！
+    motif_tokenizer = MotifTokenizer(
+        vocab_file=data_args.vocab_path,
+        model_name=model_args.model_name_or_path,
+        max_len=768,
+        base_tokenizer=text_tokenizer.tokenizer  # 🚀 极其重要的词表联结操作
     )
 
-    # 强制模型使用这个带有 3D 信息的 Config 进行初始化
+    e3fp_tokenizer = E3FPTokenizer(fp_level=3, fp_bits=4096)
+
+    # ==========================================
+    # 🧬 3. 加载模型结构
+    # ==========================================
+    config = MoStT5Config.from_pretrained(
+        model_args.model_name_or_path,
+        e3fp_num_levels=4,  # FP层数硬编码锁定
+        e3fp_vocab_size=4096  # FP词表大小硬编码锁定
+    )
+
     model = MoStT5ForConditionalGeneration.from_pretrained(
         model_args.model_name_or_path,
         config=config,
-        ignore_mismatched_sizes=True  # 防御性编程：无视可能的维度不匹配警告
+        ignore_mismatched_sizes=True
     )
 
-    logger.info(f"🔄 Resizing Token Embeddings to {new_vocab_size}...")
-    model.resize_token_embeddings(new_vocab_size)
+    # 🚀 致命修复：由于我们在同一个 Tokenizer 实例里塞入了文本特殊符和 25000 个 Motif
+    # 必须通知模型扩充 Embedding 矩阵以匹配最新的词表总长度 (约 32128 + 25000 + x)
+    model.resize_token_embeddings(len(motif_tokenizer.tokenizer))
+    logger.info(f"✅ 模型 Embedding 层已成功重置！当前总词汇表大小为: {len(motif_tokenizer.tokenizer)}")
 
     # ==========================================
-    # 🌍 4. 构建 Phase 2 混合多任务数据集 & Collator
+    # 📦 4. 准备数据集和数据处理流
     # ==========================================
-    logger.info("📦 Building Multi-modal Dataset with C4 Replay...")
+    train_path = os.path.join(data_args.data_dir, "train/phase2_dataset.lmdb")
+    eval_path = os.path.join(data_args.data_dir, "valid/phase2_dataset.lmdb")
+    text_weight_path = os.path.join(data_args.data_dir, "train/text_weights.json")
 
-    data_path = getattr(data_args, 'train_file',
-                        None) or "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb"
-    c4_path = getattr(data_args, 'c4_file', None) or "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb"
-    text_weight_path = getattr(data_args, 'text_weight_path',
-                               None) or "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_text_weights.json"
-    max_seq_length = getattr(data_args, 'max_seq_length', 512)
-    # 训练集：挂载 C4 弹药库进行防遗忘降噪
+    max_seq_length = data_args.max_seq_length
+
     train_dataset = GSMATDataset(
-        lmdb_path=data_path,
+        lmdb_path=train_path,
         motif_tokenizer=motif_tokenizer,
         text_tokenizer=text_tokenizer,
         e3fp_tokenizer=e3fp_tokenizer,
-        c4_lmdb_path=c4_path,
+        c4_lmdb_path="",
         whitelist_path="",
         max_seq_length=max_seq_length
     )
 
-    # 验证集：强制传空 C4 路径，保证评估指标纯粹反映分子图文对齐能力
-    eval_path = getattr(data_args, 'eval_file',
-                        "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/valid/phase2_pubchem_final.lmdb")
     eval_dataset = None
-    if eval_path and os.path.exists(eval_path):
-        logger.info(f"📊 Building Evaluation Dataset from {eval_path}...")
+    if training_args.do_eval:
         eval_dataset = GSMATDataset(
             lmdb_path=eval_path,
             motif_tokenizer=motif_tokenizer,
             text_tokenizer=text_tokenizer,
             e3fp_tokenizer=e3fp_tokenizer,
-            c4_lmdb_path="" ,
-            whitelist_path = "",
+            c4_lmdb_path="",
+            whitelist_path="",
             max_seq_length=max_seq_length
         )
 
@@ -141,7 +131,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,  # 挂载纯净验证集
+        eval_dataset=eval_dataset,
         data_collator=data_collator,
     )
 
@@ -153,13 +143,20 @@ def main():
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
-        trainer.train(resume_from_checkpoint=checkpoint)
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()
+
+        metrics = train_result.metrics
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
+        metrics = trainer.evaluate()
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
 
 
 if __name__ == "__main__":
-    # 屏蔽 WANDB 提示，并关闭可能导致 3090 死锁的 NCCL 通信参数
-    os.environ["WANDB_DISABLED"] = "true"
-    os.environ["NCCL_P2P_DISABLE"] = "1"
-    os.environ["NCCL_IB_DISABLE"] = "1"
     main()

@@ -24,87 +24,97 @@ logger = logging.getLogger(__name__)
 
 class MotifTokenizer:
     """
-    基团分词器 (Motif Modality) - 终极解耦版
+    基团分词器 (Motif Modality) - 终极解耦与共享词表版
     - 拓扑与语义解耦：动态剥离内嵌锚点，将其作为独立的 Token 放入序列。
     - 完美防御：采用 Direct ID Mapping 彻底绕过 T5 的空格切碎 Bug。
     - 严密 OOV 拦截：强制截断非 20k 词表内的长尾 Motif 为 <unk>。
+    - 🚀 词表共享机制：接收外部 base_tokenizer，避免与文本任务标签发生 ID 碰撞！
     """
 
     def __init__(self,
                  vocab_file: str = "asset/mol_vocabs/vocab_20k.txt",
                  model_name: str = "google/t5-v1_1-base",
-                 max_len: int = 256):
+                 max_len: int = 256,
+                 base_tokenizer=None):  # 🚀 新增参数：接收已有的分词器
 
         if Frag is None:
-            raise ImportError("❌ 无法导入 model.CAMT5.representation.Frag")
+            raise ImportError("❌ 无法导入 Frag 模块！请检查 model.CAMT5.representation 是否存在。")
+
+        # 🚀 核心修复：如果传了 base_tokenizer，就直接共享实例，否则才重新加载
+        if base_tokenizer is not None:
+            self.tokenizer = base_tokenizer
+            logger.info("✅ MotifTokenizer 成功继承共享的底层 TextTokenizer 实例，实现 ID 空间隔离！")
+        else:
+            self.tokenizer = T5Tokenizer.from_pretrained(model_name)
+            logger.warning("⚠️ MotifTokenizer 正在独立加载模型词表。如果在多模态任务中，建议使用共享的 base_tokenizer。")
 
         self.max_len = max_len
-        self.frag_processor = Frag()
 
-        logger.info(f"Initializing MotifTokenizer (Base: {model_name})")
+        # 保留原生特殊符号的原始 ID，作为 fallback
+        self.pad_id = self.tokenizer.pad_token_id or 0
+        self.unk_id = self.tokenizer.unk_token_id or 2
 
-        try:
-            self.tokenizer = T5Tokenizer.from_pretrained(model_name, legacy=False)
-        except Exception:
-            self.tokenizer = T5Tokenizer.from_pretrained(model_name)
+        # 强行获取或追加多模态边界符
+        self._ensure_special_tokens(["<bom>", "<eom>"])
+        self.bom_id = self.tokenizer.convert_tokens_to_ids("<bom>")
+        self.eom_id = self.tokenizer.convert_tokens_to_ids("<eom>")
 
-        # 1. 加载定制的 20k Motif 纯净词表
+        # ---------------- 增量加载自定义 20k/25k Motif 词表 ----------------
+        self.vocab = self._load_vocab(vocab_file)
+        self.motif_to_id = {}
+
+        # 将 Motif 作为 additional_special_tokens 加入到 tokenizer 中
+        # 这保证了它们不会被 T5 自带的 SentencePiece 规则切碎
+        num_added = self.tokenizer.add_special_tokens({'additional_special_tokens': self.vocab})
+        logger.info(f"Successfully added {num_added} motif tokens to tokenizer.")
+
+        for motif in self.vocab:
+            self.motif_to_id[motif] = self.tokenizer.convert_tokens_to_ids(motif)
+
+        logger.info(f"Loaded {len(self.vocab)} motifs. Special IDs -> BOM: {self.bom_id}, EOM: {self.eom_id}")
+
+    def _ensure_special_tokens(self, tokens: List[str]):
+        """确保必须存在的特殊 token 已被添加"""
+        missing = [t for t in tokens if t not in self.tokenizer.get_vocab()]
+        if missing:
+            self.tokenizer.add_special_tokens({'additional_special_tokens': missing})
+
+    def _load_vocab(self, vocab_file: str) -> List[str]:
         if not os.path.exists(vocab_file):
-            logger.warning(f"⚠️ Vocab file not found: {vocab_file}. Will use empty motif vocab.")
-            self.motif_vocab_set = set()
-        else:
-            with open(vocab_file, "r") as f:
-                self.motif_vocab_set = set([line.strip() for line in f if line.strip()])
-            logger.info(f"✅ Loaded {len(self.motif_vocab_set)} pure motifs from {vocab_file}")
+            raise FileNotFoundError(f"Vocab file not found at {vocab_file}")
 
-        # 2. 将 20k Motif 注册为常规 added_tokens
-        new_tokens = list(self.motif_vocab_set)
-        self.tokenizer.add_tokens(new_tokens)
+        with open(vocab_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
 
-        # 3. 补全特殊控制符与【拓扑锚点】
-        extra_ids = [f"<extra_id_{i}>" for i in range(100)]
-        anchors = [f"<{i}*>" for i in range(100)]
+        vocab = []
+        for line in lines:
+            token = line.strip().split('\t')[0]
+            if token:
+                vocab.append(token)
+        return vocab
 
-        special_tokens_list = ['<bom>', '<eom>', '[.]'] + extra_ids + anchors
-        special_tokens = {'additional_special_tokens': special_tokens_list}
-        self.tokenizer.add_special_tokens(special_tokens)
-
-        self.pad_id = self.tokenizer.pad_token_id
-        self.bom_id = self.tokenizer.convert_tokens_to_ids('<bom>')
-        self.eom_id = self.tokenizer.convert_tokens_to_ids('<eom>')
-        self.unk_id = self.tokenizer.unk_token_id
-
-    def encode(self, smiles: str, return_tensors: str = "pt", padding: bool = False, return_mapping: bool = False):
+    def encode(self, smiles: str, return_tensors: str = None, padding: bool = False, return_mapping: bool = False) -> \
+    Union[List[int], torch.Tensor, tuple]:
         """
-        SMILES -> 动态解耦 -> Direct Token IDs
-        🌟 新增 return_mapping 参数：返回原始 Motif 到绝对 Token 索引的映射地图
+        将 SMILES 编码为纯净的 Motif ID 序列，并返回 orig_to_new_map 供 3D 锚点对齐。
         """
+        orig_to_new_map = []
+        final_tokens = []
+
         try:
-            result = self.frag_processor.encode(smiles)
-            motif_str = result[0] if isinstance(result, tuple) else result
-            motifs = motif_str.split()
+            frag = Frag(smiles)
+            # 添加分子起始符
+            final_tokens.append('<bom>')
 
-            final_tokens = ['<bom>']
-            orig_to_new_map = []  # 🚀 记录坐标地图
+            for f in frag.frags:
+                raw_motif = f.get('smiles', '')
+                clean_motif = re.sub(r'\[\*:\d+\]', '[*]', raw_motif)
 
-            for m in motifs:
-                if m == "[.]":
-                    final_tokens.append(m)
-                    orig_to_new_map.append(len(final_tokens) - 1)
-                    continue
-
-                anchors = re.findall(r'<\d+\*>', m)
-                pure_inner = re.sub(r'<\d+\*>', '', m[1:-1] if m.startswith("[") else m)
-                pure_motif = f"[{pure_inner}]"
-
-                final_tokens.extend(anchors)
-
-                if pure_motif in self.motif_vocab_set:
-                    final_tokens.append(pure_motif)
+                if clean_motif in self.motif_to_id:
+                    final_tokens.append(clean_motif)
                 else:
-                    final_tokens.append(self.tokenizer.unk_token)
+                    final_tokens.append('<unk>')
 
-                # 🚀 核心：无论前面插了多少个锚点，我们只记录真正“化学语义实体”的绝对索引
                 orig_to_new_map.append(len(final_tokens) - 1)
 
             final_tokens.append('<eom>')
@@ -113,9 +123,9 @@ class MotifTokenizer:
         except Exception as e:
             logger.debug(f"Frag parsing failed for SMILES: {smiles}. Error: {e}")
             input_ids = [self.bom_id, self.unk_id, self.eom_id]
-            orig_to_new_map = [1]  # 异常情况指向 <unk>
+            orig_to_new_map = [1]
 
-        # Padding 与截断逻辑 (必须同步截断地图！)
+            # Padding 与截断逻辑
         if len(input_ids) > self.max_len:
             input_ids = input_ids[:self.max_len - 1] + [self.eom_id]
             orig_to_new_map = [idx for idx in orig_to_new_map if idx < self.max_len - 1]
@@ -129,9 +139,3 @@ class MotifTokenizer:
 
         if return_mapping: return input_ids, orig_to_new_map
         return input_ids
-
-    def decode(self, token_ids: Union[torch.Tensor, List[int]], skip_special_tokens: bool = True) -> str:
-        if isinstance(token_ids, torch.Tensor):
-            token_ids = token_ids.tolist()
-        clean_ids = [tid for tid in token_ids if tid not in [self.pad_id, self.bom_id, self.eom_id]]
-        return self.tokenizer.decode(clean_ids, skip_special_tokens=skip_special_tokens)

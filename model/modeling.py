@@ -139,13 +139,21 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
         super().__init__(config)
         self.encoder = MoStT5Encoder(config, embed_tokens=self.shared)
 
-        # 🚀 Geometric Head
+        # 🔴 Geometric Head (添加正确的权重初始化)
         self.geometric_head = nn.Sequential(
             nn.Linear(config.d_model, config.d_model),
             nn.GELU(),
             nn.LayerNorm(config.d_model, eps=config.layer_norm_epsilon),
             nn.Linear(config.d_model, config.d_model)
         )
+
+        # 🔴 关键修复：对 Geometric Head 进行正交初始化，防止梯度爆炸
+        for module in self.geometric_head:
+            if isinstance(module, nn.Linear):
+                nn.init.orthogonal_(module.weight, gain=0.1)  # 使用较小的正交初始化
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
         self.post_init()
 
     def _init_weights(self, module):
@@ -199,7 +207,7 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
 
         outputs = super().forward(input_ids=None, attention_mask=attention_mask, labels=labels, **kwargs)
 
-        # 🚀 核心升级三：防坍缩 Cosine Loss 计算
+        # 🔴 核心升级三：防坍缩 Cosine Loss 计算
         if outputs.loss is not None and target_3d_pooled is not None:
             encoder_hidden_states = kwargs["encoder_outputs"][0]
             predicted_3d = self.geometric_head(encoder_hidden_states)
@@ -208,15 +216,29 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
             target_masked = target_3d_pooled[mask_positions]
 
             if pred_masked.numel() > 0:
-                # 强制 L2 归一化，学习结构方向而非幅度
+                # 🔴 关键修复：添加数值稳定性保护
+                # 1. 强制 L2 归一化，学习结构方向而非幅度
                 pred_masked_norm = torch.nn.functional.normalize(pred_masked, p=2, dim=-1)
                 target_masked_norm = torch.nn.functional.normalize(target_masked, p=2, dim=-1)
 
-                loss_fct_3d = nn.CosineEmbeddingLoss()
+                # 2. 清除可能的 NaN 和 Inf
+                pred_masked_norm = torch.nan_to_num(pred_masked_norm, nan=0.0, posinf=0.0, neginf=0.0)
+                target_masked_norm = torch.nan_to_num(target_masked_norm, nan=0.0, posinf=0.0, neginf=0.0)
+
+                # 3. 限制余弦相似度的数值范围，避免极端值
+                pred_masked_norm = torch.clamp(pred_masked_norm, min=-1.0, max=1.0)
+                target_masked_norm = torch.clamp(target_masked_norm, min=-1.0, max=1.0)
+
+                loss_fct_3d = nn.CosineEmbeddingLoss(reduction='mean')
                 # 目标设为 1，希望向量方向完全一致
                 target_labels = torch.ones(pred_masked_norm.size(0), device=pred_masked_norm.device)
 
                 loss_3d = loss_fct_3d(pred_masked_norm, target_masked_norm, target_labels)
+
+                # 🔴 最终保险：如果 loss_3d 异常大，说明出现了数值不稳定，直接丢弃该项
+                if loss_3d.isnan() or loss_3d.isinf():
+                    logger.warning(f"⚠️ 3D Loss 出现 NaN/Inf，已自动丢弃该批次。Loss: {loss_3d.item()}")
+                    loss_3d = torch.tensor(0.0, device=loss_3d.device)
 
                 lambda_3d = getattr(self.config, 'lambda_3d', 0.1)
                 outputs.loss = outputs.loss + lambda_3d * loss_3d
