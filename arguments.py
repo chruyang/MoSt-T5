@@ -14,6 +14,14 @@ class ModelArguments:
         default="asset/mol_vocabs/my_dataset_vocab.txt",
         metadata={"help": "Path to the motif vocabulary file"}
     )
+    tokenizer_name: Optional[str] = field(
+        default="google/t5-v1_1-base",
+        metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
+    )
+    cache_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"}
+    )
     # E3FP 参数
     e3fp_num_levels: int = field(
         default=4,
@@ -71,8 +79,12 @@ class DataArguments:
     c4_file: Optional[str] = field(
         default=None, metadata={"help": "The input C4 generic text data file (lmdb)."}
     )
+    vocab_file: str = field(
+        default="asset/mol_vocabs/vocab_20k.txt",
+        metadata={"help": "Path to the motif vocabulary file."}
+    )
     max_seq_length: Optional[int] = field(
-        default=768,
+        default=512,
         metadata={
             "help": "The maximum total input sequence length after tokenization. Sequences longer "
                     "than this will be dynamically truncated, sequences shorter will be padded."

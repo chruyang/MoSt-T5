@@ -168,7 +168,14 @@ class MoStT5Encoder(T5Stack):
 # 4. MoStT5ForConditionalGeneration
 # =========================================================================
 class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
-    _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight"]
+    # 🚀 修复核心：必须显式列出所有权重共享路径，包含嵌套在子模块中的路径
+    _tied_weights_keys = [
+        "encoder.embed_tokens.weight",
+        "decoder.embed_tokens.weight",
+        "shared.weight",
+        "encoder.gsm_embeddings.word_embeddings.weight"
+    ]
+
     _keys_to_ignore_on_load_unexpected = [
         "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias.weight",
     ]
@@ -184,18 +191,12 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
         )
 
         # 🚀 步骤 1：先执行通用的 post_init
-        # 这会完成权重绑定，并给所有层一份 T5 默认的学习率分布 (Truncated Normal)
         self.post_init()
 
         # 🚀 步骤 2：执行“覆盖式”特殊初始化
-        # 此时的初始化发生在 post_init 之后，所以它会覆盖掉默认值，确保你的设置最终生效
-
-        # 针对新增 3D 层的定点初始化
         self.encoder.fusion_layer.apply(self._init_weights)
         self.encoder.gsm_embeddings.e3fp_embeddings.apply(self._init_weights)
 
-        # 为 3D 几何回归头做正交防爆处理
-        # 放在最后，确保正交特性绝对保留，不被任何逻辑篡改
         for module in self.geometric_head:
             if isinstance(module, nn.Linear):
                 nn.init.orthogonal_(module.weight, gain=0.1)
@@ -246,7 +247,7 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
                         atom_mask=unmasked_atom_mask
                     ).detach()
 
-        # 2. 让大模型自己走一遍完整前向（必须在自己定义的 loss 之前，保持 DDP 树形结构完整）
+        # 2. 让大模型自己走一遍完整前向
         if kwargs.get("encoder_outputs") is None:
             kwargs["encoder_outputs"] = self.encoder(
                 input_ids=input_ids,
@@ -259,23 +260,18 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
 
         outputs = super().forward(input_ids=None, attention_mask=attention_mask, labels=labels, **kwargs)
 
-        # 3. 计算 3D 几何 Loss 并注入【虚拟梯度】（为了防止 DDP 卡死）
+        # 3. 计算 3D 几何 Loss
         lambda_3d = getattr(self.config, 'lambda_3d', 0.1)
 
         if outputs.loss is not None:
-            # 安全防护：主线语言模型 Loss 崩溃时清零
+            # 🚀 注入点 1：记录原始文本 Loss
+            outputs.main_lm_loss = outputs.loss.detach().clone()
+
             if outputs.loss.isnan() or outputs.loss.isinf():
-                outputs.loss = outputs.loss * 0.0  # 保持梯度连接，但数值归零
+                outputs.loss = outputs.loss * 0.0
 
-            # ====================================================================
-            # 🚀 救命补丁：为 Geometric Head 建立【绝对不断裂】的梯度流
-            # ====================================================================
             encoder_hidden_states = kwargs["encoder_outputs"][0]
-            # 无论这批数据有没有 3D MASK，我们都让隐状态过一遍 Head，保持 DDP 同步
             predicted_3d_full = self.geometric_head(encoder_hidden_states)
-
-            # 建立一个伴随始终的基础 dummy_loss (值为 0，但携带了所有的梯度树信息)
-            # 这就相当于给 DDP 发信号：“我用到这个层了！别报错！”
             dummy_loss_3d = predicted_3d_full.sum() * 0.0
 
             valid_3d_loss = None
@@ -293,12 +289,14 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
                     if not (current_loss.isnan() or current_loss.isinf()):
                         valid_3d_loss = current_loss
 
-            # 合并 Loss：如果算出了有效的 3D Loss 就加上，否则只加那个值为 0 的 dummy_loss
             if valid_3d_loss is not None:
                 final_3d_loss = valid_3d_loss + dummy_loss_3d
             else:
                 final_3d_loss = dummy_loss_3d
 
             outputs.loss = outputs.loss + lambda_3d * final_3d_loss
+
+            # 🚀 注入点 2：记录 3D Loss
+            outputs.geom_3d_loss = final_3d_loss.detach().clone()
 
         return outputs

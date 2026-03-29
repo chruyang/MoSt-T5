@@ -21,6 +21,24 @@ from arguments import ModelArguments, DataArguments
 logger = logging.getLogger(__name__)
 
 
+# ==========================================
+# 🚀 自定义 Trainer：负责在 TensorBoard 中显示子 Loss
+# ==========================================
+class MoStTrainer(Trainer):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        outputs = model(**inputs)
+        loss = outputs.loss
+
+        # 仅在训练阶段且 outputs 包含子 Loss 时记录
+        if self.model.training and hasattr(outputs, "main_lm_loss"):
+            self.log({
+                "loss/main_lm": outputs.main_lm_loss.item(),
+                "loss/geom_3d": outputs.geom_3d_loss.item()
+            })
+
+        return (loss, outputs) if return_outputs else loss
+
+
 def main():
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -28,6 +46,8 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    # 🚀 Dataloader 线程数与预取支持
+    training_args.dataloader_num_workers = data_args.num_workers
     training_args.remove_unused_columns = False
 
     logging.basicConfig(
@@ -38,7 +58,7 @@ def main():
     set_seed(training_args.seed)
 
     # ==========================================
-    # 1. 复合 Tokenizer 构建
+    # 1. 复合 Tokenizer 构建 (保留原样)
     # ==========================================
     text_tokenizer = TextTokenizer(model_args.tokenizer_name, max_len=data_args.max_seq_length)
     motif_tokenizer = MotifTokenizer(
@@ -51,7 +71,7 @@ def main():
     final_vocab_size = len(motif_tokenizer.tokenizer)
 
     # ==========================================
-    # 2. Config & 模型初始化 (读取原生 32128 权重)
+    # 2. Config & 模型初始化 (保留原样)
     # ==========================================
     config = MoStT5Config.from_pretrained(
         model_args.model_name_or_path,
@@ -71,21 +91,30 @@ def main():
 
     old_vocab_size = model.config.vocab_size
 
-    # 🚀 扩容词表
+    # 🚀 扩容词表与定点覆盖初始化 (完整保留你的初始化逻辑)
     model.resize_token_embeddings(final_vocab_size)
 
+    # 针对新增 3D 层的覆盖式特殊处理
+    for module in model.geometric_head:
+        if isinstance(module, torch.nn.Linear):
+            torch.nn.init.orthogonal_(module.weight, gain=0.1)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+    # 手动触发 3D 层的权重初始化（补救 resize 带来的潜在不确定性）
+    model.encoder.fusion_layer.apply(model._init_weights)
+    model.encoder.gsm_embeddings.e3fp_embeddings.apply(model._init_weights)
+
     # =========================================================================
-    # 3. 🚀 双矩阵方差对齐 (Variance Alignment)
+    # 3. 🚀 双矩阵方差对齐 (Variance Alignment - 完整保留)
     # =========================================================================
     if final_vocab_size > old_vocab_size:
         logger.info(f"⚖️ 执行词表方差强制对齐: {old_vocab_size} -> {final_vocab_size}")
         with torch.no_grad():
-            # 修复 Shared Embeddings (~10.26)
             old_embeddings = model.shared.weight[:old_vocab_size]
             new_embeddings = model.shared.weight[old_vocab_size:]
             new_embeddings.normal_(mean=old_embeddings.mean().item(), std=old_embeddings.std().item())
 
-            # 修复独立 LM Head (~0.55)
             lm_head = model.get_output_embeddings()
             if lm_head is not None and lm_head.weight is not model.shared.weight:
                 old_lm_head = lm_head.weight[:old_vocab_size]
@@ -93,17 +122,17 @@ def main():
                 new_lm_head.normal_(mean=old_lm_head.mean().item(), std=old_lm_head.std().item())
 
     # =========================================================================
-    # 4. 数据集与训练器
+    # 4. 数据集与训练器 (保留所有路径与白名单参数)
     # =========================================================================
     train_dataset = GSMATDataset(
         lmdb_path=data_args.train_file,
         text_tokenizer=text_tokenizer,
         motif_tokenizer=motif_tokenizer,
         e3fp_tokenizer=e3fp_tokenizer,
-        c4_lmdb_path="",
-        whitelist_path="",
+        c4_lmdb_path="",  # 依照原样
+        whitelist_path="",  # 依照原样
         max_seq_length=data_args.max_seq_length,
-        task_probs={"mmm": 1.0}  # 🚀 已修复语法错误
+        task_probs={"mmm": 1.0}
     )
 
     eval_dataset = None
@@ -116,7 +145,7 @@ def main():
             c4_lmdb_path="",
             whitelist_path="",
             max_seq_length=data_args.max_seq_length,
-            task_probs={"mmm": 1.0}  # 🚀 已修复语法错误
+            task_probs={"mmm": 1.0}
         )
 
     data_collator = GSMATPretrainingCollator(
@@ -128,7 +157,8 @@ def main():
         is_train=True
     )
 
-    trainer = Trainer(
+    # 🚀 使用 MoStTrainer 替换原生 Trainer
+    trainer = MoStTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -136,6 +166,7 @@ def main():
         data_collator=data_collator
     )
 
+    # 🚀 完整保留 Weight Sanity Check
     logger.info("=" * 40)
     logger.info("🔍 WEIGHT SANITY CHECK (Before Training)")
     std_shared = model.shared.weight.std().item()
@@ -147,6 +178,7 @@ def main():
         logger.info(f"  -> Final LM Head STD: {std_lm:.6f} (Target: ~0.55)")
     logger.info("=" * 40)
 
+    # 开始训练与指标保存
     if training_args.do_train:
         train_result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
         trainer.save_model()
