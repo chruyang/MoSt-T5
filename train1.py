@@ -20,7 +20,6 @@ from arguments import ModelArguments, DataArguments
 
 logger = logging.getLogger(__name__)
 
-
 def main():
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -28,7 +27,6 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # 🚨 必须保留：禁止 Trainer 删除我们的 3D 多模态数据列
     training_args.remove_unused_columns = False
 
     logging.basicConfig(
@@ -38,98 +36,62 @@ def main():
     )
     set_seed(training_args.seed)
 
-    # 🌟 新增：配置追踪器，确保明确知道使用的是新方案
-    logger.info("=" * 60)
-    logger.info(f"🧪 [VOCAB SCHEME] 加载的新词表路径: {model_args.vocab_path}")
-    logger.info(f"💾 [DATA SOURCE] 加载的新数据集库: {data_args.train_file}")
-    logger.info("=" * 60)
+    text_tokenizer = TextTokenizer(model_args.tokenizer_name, max_len=data_args.max_seq_length)
+    motif_tokenizer = MotifTokenizer(data_args.vocab_file, model_name=model_args.tokenizer_name, max_len=data_args.max_seq_length)
+    e3fp_tokenizer = E3FPTokenizer(fp_level=model_args.e3fp_num_levels - 1, fp_bits=model_args.e3fp_vocab_size)
 
-    # --- Tokenizers ---
-    logger.info("Loading Tokenizers...")
-    text_tokenizer = TextTokenizer(model_name=model_args.model_name_or_path, max_len=data_args.max_len)
-    motif_tokenizer = MotifTokenizer(vocab_file=model_args.vocab_path, model_name=model_args.model_name_or_path)
-    e3fp_tokenizer = E3FPTokenizer(padding_idx=-1)
+    # ==========================================
+    # 🚀 Phase 1 专属策略：全功率启动 3D Huber Loss！
+    # ==========================================
+    config = MoStT5Config.from_pretrained(
+        model_args.model_name_or_path,
+        cache_dir=model_args.cache_dir,
+        vocab_size=len(motif_tokenizer.tokenizer),
+        e3fp_vocab_size=model_args.e3fp_vocab_size,
+        e3fp_num_levels=model_args.e3fp_num_levels,
+    )
+    config.lambda_3d = 1.0  # 核心：第一阶段 3D Loss 全开
 
-    # --- Datasets ---
-    logger.info("Loading Datasets...")
+    model = MoStT5ForConditionalGeneration.from_pretrained(
+        model_args.model_name_or_path,
+        from_tf=bool(".ckpt" in model_args.model_name_or_path),
+        config=config,
+        cache_dir=model_args.cache_dir,
+        ignore_mismatched_sizes=True
+    )
+
+    model.resize_token_embeddings(len(motif_tokenizer.tokenizer))
+
     train_dataset = GSMATDataset(
         lmdb_path=data_args.train_file,
         text_tokenizer=text_tokenizer,
         motif_tokenizer=motif_tokenizer,
-        e3fp_tokenizer=e3fp_tokenizer
+        e3fp_tokenizer=e3fp_tokenizer,
+        c4_lmdb_path="",
+        whitelist_path="",
+        max_seq_length=data_args.max_seq_length
     )
 
     eval_dataset = None
     if data_args.validation_file:
-        logger.info(f"Loading Validation Dataset...")
         eval_dataset = GSMATDataset(
             lmdb_path=data_args.validation_file,
             text_tokenizer=text_tokenizer,
             motif_tokenizer=motif_tokenizer,
-            e3fp_tokenizer=e3fp_tokenizer
+            e3fp_tokenizer=e3fp_tokenizer,
+            c4_lmdb_path="",
+            whitelist_path="",
+            max_seq_length=data_args.max_seq_length
         )
 
-    if data_args.max_eval_samples is not None and eval_dataset is not None:
-        num_samples = min(len(eval_dataset), data_args.max_eval_samples)
-        eval_dataset = torch.utils.data.Subset(eval_dataset, range(num_samples))
-        logger.info(f"🔧 Debug Mode: Truncated eval_dataset to {num_samples} samples.")
-
-    # --- Model Config & Init ---
-    logger.info("Initializing MoSt-T5 Model for Pre-training...")
-    config = MoStT5Config.from_pretrained(model_args.model_name_or_path)
-    config.update({
-        'e3fp_num_levels': model_args.e3fp_num_levels,
-        'e3fp_vocab_size': model_args.e3fp_vocab_size,
-        'fusion_type': model_args.fusion_type,
-        'dropout_rate': model_args.dropout_rate,
-        'lambda_3d': 0.1  # 动态注入 3D 几何 MSE Loss 的权重
-    })
-
-    model = MoStT5ForConditionalGeneration.from_pretrained(
-        model_args.model_name_or_path,
-        config=config,
-        ignore_mismatched_sizes=True
-    )
-
-    # 💡 读取原始词表大小
-    old_vocab_size = model.shared.weight.shape[0]
-
-    # 🚀 核心对齐：严谨地将模型 Embedding 矩阵大小与补全后的 Tokenizer 词表大小对齐
-    # ✅ 致命 Bug 已修复：使用 len(motif_tokenizer.tokenizer) 捕获真实的底层长度
-    new_vocab_size = len(motif_tokenizer.tokenizer)
-    logger.info(f"🔄 Resizing Token Embeddings: {old_vocab_size} -> {new_vocab_size}")
-    model.resize_token_embeddings(new_vocab_size)
-
-    # 🚀 终极 SOTA 初始化：动态分布匹配
-    with torch.no_grad():
-        if hasattr(model, "shared") and model.shared.weight.shape[0] > old_vocab_size:
-            # 1. 精准计算 T5 原始词表的统计分布
-            old_weight = model.shared.weight[:old_vocab_size]
-            old_mean = old_weight.mean().item()
-            old_std = old_weight.std().item()
-
-            # 2. 将新增的 Motif 权重严格限制在这个原生分布内
-            model.shared.weight[old_vocab_size:].normal_(mean=old_mean, std=old_std)
-
-            # 3. 同步处理 LM Head
-            if hasattr(model, "lm_head") and model.lm_head.weight.shape[0] > old_vocab_size:
-                model.lm_head.weight[old_vocab_size:].normal_(mean=old_mean, std=old_std)
-
-            logger.info(f"✨ 动态分布匹配完成: 新增 Token 权重已对齐原始分布 (Mean: {old_mean:.4f}, STD: {old_std:.4f})")
-
-    # 强制补全所有必要的 Token ID
-    pad_token_id = text_tokenizer.tokenizer.pad_token_id
-    if model.config.decoder_start_token_id is None:
-        model.config.decoder_start_token_id = pad_token_id
-    if model.config.bos_token_id is None:
-        model.config.bos_token_id = pad_token_id
-
-    # --- Trainer ---
+    # 训练集 Collator 开启 Shell Dropout
     data_collator = GSMATPretrainingCollator(
         motif_tokenizer=motif_tokenizer,
+        text_tokenizer=text_tokenizer,
+        text_weight_path=data_args.text_weight_path,
         e3fp_pad_id=-1,
-        mask_ratio=0.15,      # 任务 A (1D+3D同步掩码) 比例
-        task_b_ratio=0.15     # 任务 B (纯3D熔断) 比例
+        mask_ratio=0.15,
+        is_train=True
     )
 
     trainer = Trainer(
@@ -140,13 +102,12 @@ def main():
         data_collator=data_collator
     )
 
-    # 保持原有的“照妖镜”权重检测逻辑
     logger.info("=" * 40)
     logger.info("🔍 WEIGHT SANITY CHECK (Before Training)")
     if hasattr(model, "shared"):
         std = model.shared.weight.std().item()
         logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: match Base Model)")
-        if std > 10.5: # 稍微调高阈值，匹配真实的 t5 方差 (~10.26)
+        if std > 10.5:
             logger.warning("⚠️ WARNING: Shared Embeddings are exceptionally large!")
     if hasattr(model, "lm_head"):
         std = model.lm_head.weight.std().item()
@@ -159,14 +120,10 @@ def main():
     if training_args.do_train:
         train_result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
         trainer.save_model()
-        trainer.log_metrics("train", train_result.metrics)
-        trainer.save_metrics("train", train_result.metrics)
-
-    if training_args.do_eval and eval_dataset:
-        metrics = trainer.evaluate()
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
+        metrics = train_result.metrics
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
 
 if __name__ == "__main__":
     main()

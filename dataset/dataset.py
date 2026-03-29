@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
-# 1. 核心数据集类 (终极完全体：支持非连续CID映射 + 截断防爆安全锁)
+# 1. 核心数据集类 (保留您完美的四大任务调度与C4弹药库)
 # ==========================================
 class GSMATDataset(Dataset):
     def __init__(self, lmdb_path: str,
@@ -190,7 +190,6 @@ class GSMATDataset(Dataset):
                     if len_t < half_quota:
                         allow_m = max_total_len - len_t
                         motif_ids = motif_ids[:allow_m]
-                        # 🚀 致命防御一：强制闭合序列，保护 <eom>
                         if len(motif_ids) > 0: motif_ids[-1] = self.motif_tokenizer.eom_id
                     elif len_m < half_quota:
                         allow_t = max_total_len - len_m
@@ -208,10 +207,8 @@ class GSMATDataset(Dataset):
                             target_text_ids = target_text_ids[:allow_t]
                             target_text_ids[-1] = self.text_tokenizer.tokenizer.eos_token_id
                         motif_ids = motif_ids[:allow_m]
-                        # 🚀 致命防御一：强制闭合序列，保护 <eom>
                         if len(motif_ids) > 0: motif_ids[-1] = self.motif_tokenizer.eom_id
 
-                        # 重新计算切片后的真实长度
                     len_t = text_ids.shape[0]
                     len_m = motif_ids.shape[0]
 
@@ -231,7 +228,6 @@ class GSMATDataset(Dataset):
                         if motif_idx >= len(motif_mapping): break
                         real_token_idx = motif_mapping[motif_idx]
 
-                        # 🚀 致命防御二：被截断的原子必须失联，绝不可强行贴到边界符 <eom> 上！
                         if real_token_idx < len_m - 1:
                             if isinstance(atom_indices, int):
                                 atom_indices = [atom_indices]
@@ -264,16 +260,17 @@ class GSMATDataset(Dataset):
 
 
 # ==========================================
-# 2. 预训练 Phase 1 Collator (加入物理防爆盾)
+# 2. 预训练 Phase 1 Collator
 # ==========================================
 class GSMATPretrainingCollator:
     def __init__(self, motif_tokenizer: MotifTokenizer, e3fp_pad_id: int = -1, mask_ratio: float = 0.15,
-                 task_b_ratio: float = 0.15):
+                 task_b_ratio: float = 0.15, is_train: bool = True):
         self.motif_tokenizer = motif_tokenizer
         self.pad_id = motif_tokenizer.pad_id
         self.e3fp_pad_id = e3fp_pad_id
         self.mask_ratio = mask_ratio
         self.task_b_ratio = task_b_ratio
+        self.is_train = is_train
 
         try:
             from model.CAMT5.representation import Frag
@@ -349,16 +346,30 @@ class GSMATPretrainingCollator:
         motif_mask = (masked_motif_ids != self.pad_id).long()
         atom_mask = (masked_e3fp_ids[:, :, 0] != self.e3fp_pad_id).long()
 
-        # 🚀 致命防御三：防止 Map 中残留未被拦截的越界指针
         safe_map = batch_map.clone()
         safe_map[safe_map >= masked_motif_ids.shape[1]] = -1
+
+        # =========================================================================
+        # 🚀 终极防惰性机制：E3FP 壳层随机失活 (Shell Dropout)
+        # =========================================================================
+        if getattr(self, 'is_train', True):
+            batch_size = masked_e3fp_ids.shape[0]
+            rand_probs = torch.rand(batch_size)
+
+            mask_l3 = rand_probs < 0.15
+            if mask_l3.any():
+                masked_e3fp_ids[mask_l3, :, 3] = self.e3fp_pad_id
+
+            mask_l2 = rand_probs < 0.05
+            if mask_l2.any():
+                masked_e3fp_ids[mask_l2, :, 2:] = self.e3fp_pad_id
 
         return {
             "input_ids": masked_motif_ids,
             "attention_mask": motif_mask,
             "e3fp_ids": masked_e3fp_ids,
             "atom_attention_mask": atom_mask,
-            "atom_to_motif_map": safe_map,  # 使用安全锁后的字典
+            "atom_to_motif_map": safe_map,
             "labels": labels,
             "unmasked_e3fp_ids": batch_e3fp,
             "mask_positions": geometric_mask_positions
@@ -366,14 +377,16 @@ class GSMATPretrainingCollator:
 
 
 # ==========================================
-# 3. 🌟 Phase 2 全新大一统多模态 Collator (加入物理防爆盾)
+# 3. 🌟 Phase 2 全新大一统多模态 Collator
 # ==========================================
 class GSMATPhase2Collator:
-    def __init__(self, motif_tokenizer, text_tokenizer, text_weight_path, e3fp_pad_id=-1, mask_ratio=0.15):
+    def __init__(self, motif_tokenizer, text_tokenizer, text_weight_path, e3fp_pad_id=-1, mask_ratio=0.15,
+                 is_train=True):
         self.motif_pad_id = motif_tokenizer.pad_id
         self.text_pad_id = text_tokenizer.tokenizer.pad_token_id
         self.e3fp_pad_id = e3fp_pad_id
         self.mask_ratio = mask_ratio
+        self.is_train = is_train
 
         self.mask_token_id = motif_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
 
@@ -574,9 +587,23 @@ class GSMATPhase2Collator:
         atom_mask_padded = pad_sequence(batch_atom_masks, batch_first=True, padding_value=0)
         mask_positions_padded = pad_sequence(batch_mask_positions, batch_first=True, padding_value=False)
 
-        # 🚀 致命防御三：防止动态拼接中产生的越界指针
         safe_map = map_padded.clone()
         safe_map[safe_map >= input_ids_padded.shape[1]] = -1
+
+        # =========================================================================
+        # 🚀 终极防惰性机制：E3FP 壳层随机失活 (Shell Dropout)
+        # =========================================================================
+        if getattr(self, 'is_train', True):
+            batch_size = e3fp_padded.shape[0]
+            rand_probs = torch.rand(batch_size)
+
+            mask_l3 = rand_probs < 0.15
+            if mask_l3.any():
+                e3fp_padded[mask_l3, :, 3] = self.e3fp_pad_id
+
+            mask_l2 = rand_probs < 0.05
+            if mask_l2.any():
+                e3fp_padded[mask_l2, :, 2:] = self.e3fp_pad_id
 
         return {
             "input_ids": input_ids_padded,
@@ -585,6 +612,6 @@ class GSMATPhase2Collator:
             "e3fp_ids": e3fp_padded,
             "unmasked_e3fp_ids": unmasked_e3fp_padded,
             "atom_attention_mask": atom_mask_padded,
-            "atom_to_motif_map": safe_map,  # 使用安全锁后的字典
+            "atom_to_motif_map": safe_map,
             "mask_positions": mask_positions_padded,
         }
