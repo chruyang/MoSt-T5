@@ -3,6 +3,9 @@ import torch.nn as nn
 from transformers import T5ForConditionalGeneration
 from transformers.models.t5.modeling_t5 import T5Stack
 from .configuration import MoStT5Config
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # =========================================================================
@@ -38,20 +41,17 @@ class GSMATEmbeddings(nn.Module):
 # =========================================================================
 class GeoSemanticFusion(nn.Module):
     """
-    几何语义融合层 (GeoSemanticFusion) - SOTA 终极重构版
+    几何语义融合层 (GeoSemanticFusion) - SOTA 防弹重构版
     """
 
     def __init__(self, config):
         super().__init__()
         self.dim = config.d_model
 
-        # 🚀 1. 引入 3D 几何注意力映射 (Attention Pooling)
-        # 替代原始粗暴的均值池化，赋予模型空间拓扑的敏感度
         self.q_proj = nn.Linear(self.dim, self.dim)
         self.k_proj = nn.Linear(self.dim, self.dim)
         self.v_proj = nn.Linear(self.dim, self.dim)
 
-        # 🚀 2. 门控投影网络
         self.projector = nn.Sequential(
             nn.Linear(self.dim, self.dim),
             nn.GELU(),
@@ -65,7 +65,6 @@ class GeoSemanticFusion(nn.Module):
             nn.Sigmoid()
         )
 
-        self.norm = nn.LayerNorm(self.dim)
         self.dropout = nn.Dropout(config.dropout_rate)
 
     def compute_pooled_3d(self, motif_emb, e3fp_emb, atom_to_motif_map, atom_mask):
@@ -76,17 +75,37 @@ class GeoSemanticFusion(nn.Module):
         scores = torch.bmm(Q, K.transpose(1, 2)) / (self.dim ** 0.5)
 
         device = motif_emb.device
-        n_motifs = motif_emb.size(1)
-        motif_indices = torch.arange(n_motifs, device=device).view(1, n_motifs, 1)
+        B, L_m, _ = motif_emb.shape
+        L_a = e3fp_emb.shape[1]
+
+        motif_indices = torch.arange(L_m, device=device).view(1, L_m, 1)
         atom_map_expanded = atom_to_motif_map.unsqueeze(1)
 
         valid_connection = (atom_map_expanded == motif_indices) & atom_mask.unsqueeze(1).bool()
-        scores.masked_fill_(~valid_connection, float('-inf'))
 
+        # 🚀 终极防爆修复：张量广播级安全防护盾
+        valid_rows = valid_connection.any(dim=-1, keepdim=True)  # [B, L_m, 1]
+
+        # 如果有一行没有任何连接，我们在它的第 0 位打个标记（假装它连接了第 0 个原子）
+        # 先创建一个 [1, 1, L_a] 的标记，只有第一列为 True
+        dummy_mask = torch.zeros((1, 1, L_a), dtype=torch.bool, device=device)
+        if L_a > 0:
+            dummy_mask[0, 0, 0] = True
+
+        # 将空行替换为 dummy_mask
+        safe_valid_connection = torch.where(
+            valid_rows,
+            valid_connection,  # 有原子的行，保持原样
+            dummy_mask  # 没有原子的行，用假标记
+        )
+
+        scores.masked_fill_(~safe_valid_connection, float('-inf'))
         attn_weights = torch.nn.functional.softmax(scores, dim=-1)
-        attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
 
-        return torch.bmm(attn_weights, V)  # 返回高空间分辨率的 pooled_3d
+        # 安全计算完 Softmax 后，把真正空行的权重强制清零！
+        attn_weights = attn_weights * valid_rows.float()
+
+        return torch.bmm(attn_weights, V)
 
     def forward(self, motif_emb, e3fp_emb, atom_to_motif_map, atom_mask):
         # 1. 获取高分辨率 3D 融合特征
@@ -106,10 +125,10 @@ class GeoSemanticFusion(nn.Module):
         has_atoms = valid_connection.any(dim=-1, keepdim=True).float()
         gate = gate * has_atoms
 
-        # 🚀 3. 纯粹的凸组合，彻底斩断残差泄漏！
+        # 3. 纯粹的凸组合
         fused_emb = (1.0 - gate) * motif_emb + gate * projected_3d
 
-        return self.norm(self.dropout(fused_emb))
+        return self.dropout(fused_emb)
 
 
 # =========================================================================
@@ -149,7 +168,7 @@ class MoStT5Encoder(T5Stack):
 # 4. MoStT5ForConditionalGeneration
 # =========================================================================
 class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
-    _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight", "lm_head.weight"]
+    _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight"]
     _keys_to_ignore_on_load_unexpected = [
         "decoder.block.0.layer.1.EncDecAttention.relative_attention_bias.weight",
     ]
@@ -158,22 +177,30 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
         super().__init__(config)
         self.encoder = MoStT5Encoder(config, embed_tokens=self.shared)
 
-        # 🔴 Geometric Head (添加正确的权重初始化)
         self.geometric_head = nn.Sequential(
             nn.Linear(config.d_model, config.d_model),
             nn.GELU(),
-            nn.LayerNorm(config.d_model, eps=config.layer_norm_epsilon),
             nn.Linear(config.d_model, config.d_model)
         )
 
-        # 🔴 关键修复：对 Geometric Head 进行正交初始化，防止梯度爆炸
+        # 🚀 步骤 1：先执行通用的 post_init
+        # 这会完成权重绑定，并给所有层一份 T5 默认的学习率分布 (Truncated Normal)
+        self.post_init()
+
+        # 🚀 步骤 2：执行“覆盖式”特殊初始化
+        # 此时的初始化发生在 post_init 之后，所以它会覆盖掉默认值，确保你的设置最终生效
+
+        # 针对新增 3D 层的定点初始化
+        self.encoder.fusion_layer.apply(self._init_weights)
+        self.encoder.gsm_embeddings.e3fp_embeddings.apply(self._init_weights)
+
+        # 为 3D 几何回归头做正交防爆处理
+        # 放在最后，确保正交特性绝对保留，不被任何逻辑篡改
         for module in self.geometric_head:
             if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight, gain=0.1)  # 使用较小的正交初始化
+                nn.init.orthogonal_(module.weight, gain=0.1)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-
-        self.post_init()
 
     def _init_weights(self, module):
         factor = self.config.initializer_factor
@@ -202,17 +229,16 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
         unmasked_e3fp_ids = kwargs.pop("unmasked_e3fp_ids", None)
 
         target_3d_pooled = None
+
+        # 1. 获取 Encoder 内部特征
         if mask_positions is not None and mask_positions.any():
             target_e3fp_ids = unmasked_e3fp_ids if unmasked_e3fp_ids is not None else e3fp_ids
             if target_e3fp_ids is not None:
                 with torch.no_grad():
-                    # 提取基础 Embedding
                     _, e3fp_emb_target = self.encoder.gsm_embeddings(input_ids, target_e3fp_ids)
                     motif_emb_target = self.encoder.gsm_embeddings.word_embeddings(input_ids)
-
                     unmasked_atom_mask = (target_e3fp_ids[:, :, 0] != -1).long()
 
-                    # 🚀 接口同步升级：传入 motif_emb_target 作为 Attention Pooling 的 Query
                     target_3d_pooled = self.encoder.fusion_layer.compute_pooled_3d(
                         motif_emb=motif_emb_target,
                         e3fp_emb=e3fp_emb_target,
@@ -220,6 +246,7 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
                         atom_mask=unmasked_atom_mask
                     ).detach()
 
+        # 2. 让大模型自己走一遍完整前向（必须在自己定义的 loss 之前，保持 DDP 树形结构完整）
         if kwargs.get("encoder_outputs") is None:
             kwargs["encoder_outputs"] = self.encoder(
                 input_ids=input_ids,
@@ -232,31 +259,46 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
 
         outputs = super().forward(input_ids=None, attention_mask=attention_mask, labels=labels, **kwargs)
 
-        # 🔴 核心升级三：防坍缩 SmoothL1Loss 计算 (彻底解除归一化封印)
-        if outputs.loss is not None and target_3d_pooled is not None:
+        # 3. 计算 3D 几何 Loss 并注入【虚拟梯度】（为了防止 DDP 卡死）
+        lambda_3d = getattr(self.config, 'lambda_3d', 0.1)
+
+        if outputs.loss is not None:
+            # 安全防护：主线语言模型 Loss 崩溃时清零
+            if outputs.loss.isnan() or outputs.loss.isinf():
+                outputs.loss = outputs.loss * 0.0  # 保持梯度连接，但数值归零
+
+            # ====================================================================
+            # 🚀 救命补丁：为 Geometric Head 建立【绝对不断裂】的梯度流
+            # ====================================================================
             encoder_hidden_states = kwargs["encoder_outputs"][0]
-            predicted_3d = self.geometric_head(encoder_hidden_states)
+            # 无论这批数据有没有 3D MASK，我们都让隐状态过一遍 Head，保持 DDP 同步
+            predicted_3d_full = self.geometric_head(encoder_hidden_states)
 
-            pred_masked = predicted_3d[mask_positions]
-            target_masked = target_3d_pooled[mask_positions]
+            # 建立一个伴随始终的基础 dummy_loss (值为 0，但携带了所有的梯度树信息)
+            # 这就相当于给 DDP 发信号：“我用到这个层了！别报错！”
+            dummy_loss_3d = predicted_3d_full.sum() * 0.0
 
-            if pred_masked.numel() > 0:
-                # 1. 清除可能的 NaN 和 Inf，保留原始幅度和方向！
-                pred_masked = torch.nan_to_num(pred_masked, nan=0.0, posinf=0.0, neginf=0.0)
-                target_masked = torch.nan_to_num(target_masked, nan=0.0, posinf=0.0, neginf=0.0)
+            valid_3d_loss = None
+            if target_3d_pooled is not None and mask_positions is not None and mask_positions.any():
+                pred_masked = predicted_3d_full[mask_positions]
+                target_masked = target_3d_pooled[mask_positions]
 
-                # 2. 暴力回归真实三维特征：采用对异常值鲁棒的 SmoothL1Loss (Huber Loss)
-                loss_fct_3d = nn.SmoothL1Loss(reduction='mean')
-                loss_3d = loss_fct_3d(pred_masked, target_masked)
+                if pred_masked.numel() > 0:
+                    pred_masked = torch.nan_to_num(pred_masked, nan=0.0, posinf=0.0, neginf=0.0)
+                    target_masked = torch.nan_to_num(target_masked, nan=0.0, posinf=0.0, neginf=0.0)
 
-                # 3. 最终保险：如果 loss_3d 异常大，说明出现了数值不稳定，直接丢弃该项
-                if loss_3d.isnan() or loss_3d.isinf():
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"⚠️ 3D Loss 出现 NaN/Inf，已自动丢弃该批次。")
-                    loss_3d = torch.tensor(0.0, device=loss_3d.device)
+                    loss_fct_3d = nn.SmoothL1Loss(reduction='mean')
+                    current_loss = loss_fct_3d(pred_masked, target_masked)
 
-                lambda_3d = getattr(self.config, 'lambda_3d', 0.1)
-                outputs.loss = outputs.loss + lambda_3d * loss_3d
+                    if not (current_loss.isnan() or current_loss.isinf()):
+                        valid_3d_loss = current_loss
+
+            # 合并 Loss：如果算出了有效的 3D Loss 就加上，否则只加那个值为 0 的 dummy_loss
+            if valid_3d_loss is not None:
+                final_3d_loss = valid_3d_loss + dummy_loss_3d
+            else:
+                final_3d_loss = dummy_loss_3d
+
+            outputs.loss = outputs.loss + lambda_3d * final_3d_loss
 
         return outputs

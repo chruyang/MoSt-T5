@@ -20,6 +20,7 @@ from arguments import ModelArguments, DataArguments
 
 logger = logging.getLogger(__name__)
 
+
 def main():
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -36,21 +37,29 @@ def main():
     )
     set_seed(training_args.seed)
 
+    # ==========================================
+    # 1. 复合 Tokenizer 构建
+    # ==========================================
     text_tokenizer = TextTokenizer(model_args.tokenizer_name, max_len=data_args.max_seq_length)
-    motif_tokenizer = MotifTokenizer(data_args.vocab_file, model_name=model_args.tokenizer_name, max_len=data_args.max_seq_length)
+    motif_tokenizer = MotifTokenizer(
+        vocab_file=data_args.vocab_file,
+        base_tokenizer=text_tokenizer.tokenizer,
+        max_len=data_args.max_seq_length
+    )
     e3fp_tokenizer = E3FPTokenizer(fp_level=model_args.e3fp_num_levels - 1, fp_bits=model_args.e3fp_vocab_size)
 
+    final_vocab_size = len(motif_tokenizer.tokenizer)
+
     # ==========================================
-    # 🚀 Phase 1 专属策略：全功率启动 3D Huber Loss！
+    # 2. Config & 模型初始化 (读取原生 32128 权重)
     # ==========================================
     config = MoStT5Config.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
-        vocab_size=len(motif_tokenizer.tokenizer),
         e3fp_vocab_size=model_args.e3fp_vocab_size,
         e3fp_num_levels=model_args.e3fp_num_levels,
     )
-    config.lambda_3d = 1.0  # 核心：第一阶段 3D Loss 全开
+    config.lambda_3d = 1.0
 
     model = MoStT5ForConditionalGeneration.from_pretrained(
         model_args.model_name_or_path,
@@ -60,8 +69,32 @@ def main():
         ignore_mismatched_sizes=True
     )
 
-    model.resize_token_embeddings(len(motif_tokenizer.tokenizer))
+    old_vocab_size = model.config.vocab_size
 
+    # 🚀 扩容词表
+    model.resize_token_embeddings(final_vocab_size)
+
+    # =========================================================================
+    # 3. 🚀 双矩阵方差对齐 (Variance Alignment)
+    # =========================================================================
+    if final_vocab_size > old_vocab_size:
+        logger.info(f"⚖️ 执行词表方差强制对齐: {old_vocab_size} -> {final_vocab_size}")
+        with torch.no_grad():
+            # 修复 Shared Embeddings (~10.26)
+            old_embeddings = model.shared.weight[:old_vocab_size]
+            new_embeddings = model.shared.weight[old_vocab_size:]
+            new_embeddings.normal_(mean=old_embeddings.mean().item(), std=old_embeddings.std().item())
+
+            # 修复独立 LM Head (~0.55)
+            lm_head = model.get_output_embeddings()
+            if lm_head is not None and lm_head.weight is not model.shared.weight:
+                old_lm_head = lm_head.weight[:old_vocab_size]
+                new_lm_head = lm_head.weight[old_vocab_size:]
+                new_lm_head.normal_(mean=old_lm_head.mean().item(), std=old_lm_head.std().item())
+
+    # =========================================================================
+    # 4. 数据集与训练器
+    # =========================================================================
     train_dataset = GSMATDataset(
         lmdb_path=data_args.train_file,
         text_tokenizer=text_tokenizer,
@@ -69,7 +102,8 @@ def main():
         e3fp_tokenizer=e3fp_tokenizer,
         c4_lmdb_path="",
         whitelist_path="",
-        max_seq_length=data_args.max_seq_length
+        max_seq_length=data_args.max_seq_length,
+        task_probs={"mmm": 1.0}  # 🚀 已修复语法错误
     )
 
     eval_dataset = None
@@ -81,10 +115,10 @@ def main():
             e3fp_tokenizer=e3fp_tokenizer,
             c4_lmdb_path="",
             whitelist_path="",
-            max_seq_length=data_args.max_seq_length
+            max_seq_length=data_args.max_seq_length,
+            task_probs={"mmm": 1.0}  # 🚀 已修复语法错误
         )
 
-    # 训练集 Collator 开启 Shell Dropout
     data_collator = GSMATPretrainingCollator(
         motif_tokenizer=motif_tokenizer,
         text_tokenizer=text_tokenizer,
@@ -104,17 +138,13 @@ def main():
 
     logger.info("=" * 40)
     logger.info("🔍 WEIGHT SANITY CHECK (Before Training)")
-    if hasattr(model, "shared"):
-        std = model.shared.weight.std().item()
-        logger.info(f"  -> Shared Embeddings STD: {std:.6f} (Target: match Base Model)")
-        if std > 10.5:
-            logger.warning("⚠️ WARNING: Shared Embeddings are exceptionally large!")
-    if hasattr(model, "lm_head"):
-        std = model.lm_head.weight.std().item()
-        logger.info(f"  -> LM Head Weights STD:   {std:.6f}")
-    if hasattr(model.encoder, "gsm_embeddings"):
-        std = model.encoder.gsm_embeddings.word_embeddings.weight.std().item()
-        logger.info(f"  -> Encoder Embeddings STD: {std:.6f}")
+    std_shared = model.shared.weight.std().item()
+    logger.info(f"  -> Final Shared Embeddings STD: {std_shared:.6f} (Target: ~10.26)")
+
+    lm_head = model.get_output_embeddings()
+    if lm_head is not None:
+        std_lm = lm_head.weight.std().item()
+        logger.info(f"  -> Final LM Head STD: {std_lm:.6f} (Target: ~0.55)")
     logger.info("=" * 40)
 
     if training_args.do_train:
@@ -124,6 +154,7 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
+
 
 if __name__ == "__main__":
     main()

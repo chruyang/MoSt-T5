@@ -389,8 +389,8 @@ class GSMATPretrainingCollator(BaseGSMATCollator):
                 motif_ids, self.motif_weight_lookup, self.motif_pad_id, self.motif_tokenizer.tokenizer, 0
             )
 
-            if counter > 0:
-                labels_list.append(base_sentinel_id - counter)
+            # 🚀 强制追加闭合哨兵，防 _shift_right 越界崩溃
+            labels_list.append(base_sentinel_id - counter)
             labels_tensor = torch.tensor(labels_list, dtype=torch.long)
 
             masked_e3fp_ids = e3fp_ids.clone()
@@ -480,7 +480,8 @@ class GSMATPhase2Collator(BaseGSMATCollator):
                 input_ids = torch.cat([masked_text_ids, masked_motif_ids])
 
                 all_labels = text_labels + motif_labels
-                if counter > 0: all_labels.append(base_sentinel_id - counter)
+                # 🚀 强制追加闭合哨兵
+                all_labels.append(base_sentinel_id - counter)
                 labels = torch.tensor(all_labels, dtype=torch.long)
 
                 text_len = len(text_ids)
@@ -531,7 +532,8 @@ class GSMATPhase2Collator(BaseGSMATCollator):
                     text_ids, self.text_weight_lookup, self.text_pad_id, self.text_tokenizer.tokenizer, 0
                 )
                 input_ids = masked_text_ids
-                if counter > 0: text_labels.append(base_sentinel_id - counter)
+                # 🚀 强制追加闭合哨兵
+                text_labels.append(base_sentinel_id - counter)
                 labels = torch.tensor(text_labels, dtype=torch.long)
 
                 final_e3fp = torch.empty((0, fp_dim), dtype=torch.long)
