@@ -9,7 +9,7 @@ class TextTokenizer:
     负责处理所有自然语言指令和多模态前缀标签。
     """
     def __init__(self, model_name: str = "google/t5-v1_1-base", max_len: int = 512):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
         self.max_len = max_len
 
         # ====================================================================

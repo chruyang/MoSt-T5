@@ -29,10 +29,14 @@ class MotifTokenizer:
 
     def __init__(self,
                  vocab_file: str = "asset/mol_vocabs/vocab_phase2_25k.txt",
+                 base_tokenizer=None,
                  model_name: str = "google/t5-v1_1-base",
                  max_len: int = 768):
 
-        self.tokenizer = T5Tokenizer.from_pretrained(model_name, use_fast=False)
+        if base_tokenizer is not None:
+            self.tokenizer = base_tokenizer
+        else:
+            self.tokenizer = T5Tokenizer.from_pretrained(model_name, use_fast=False)
         self.max_len = max_len
         self.vocab = self.load_vocab(vocab_file)
 
