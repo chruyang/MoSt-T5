@@ -4,7 +4,6 @@ import torch
 import logging
 import re
 from typing import List, Union
-# 🚀 引入 AddedToken 赋予特殊字符免疫权
 from transformers import T5Tokenizer, AddedToken
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -13,62 +12,57 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 try:
-    from model.CAMT5.representation import Frag
+    from model.CAMT5.representation import linearize, Frag
 except ImportError:
     try:
-        from most_t5.model.CAMT5.representation import Frag
+        from most_t5.model.CAMT5.representation import linearize, Frag
     except ImportError:
-        Frag = None
+        linearize = None
 
 logger = logging.getLogger(__name__)
 
 
 class MotifTokenizer:
     """
-    基团分词器 (Motif Modality) - 模态隔离重构版
+    基团分词器 (Motif Modality) - 锚点解耦与拓扑保留版
     """
 
     def __init__(self,
-                 vocab_file: str = "asset/mol_vocabs/vocab_phase2_25k.txt",  # 确保指向您新生成的干净词表
+                 vocab_file: str = "asset/mol_vocabs/vocab_phase2_25k.txt",
                  model_name: str = "google/t5-v1_1-base",
                  max_len: int = 768):
 
-        # 必须关闭 use_fast，否则无法精细控制底层 BPE
         self.tokenizer = T5Tokenizer.from_pretrained(model_name, use_fast=False)
         self.max_len = max_len
         self.vocab = self.load_vocab(vocab_file)
 
         # ====================================================================
-        # 🚀 核心修复：使用 AddedToken 严格隔离特殊字符
-        # lstrip=False, rstrip=False 确保它们拼接时不会吞掉相邻的化学键
+        # 🚀 核心一：批量注册拓扑锚点 (Topology Anchors)
+        # 假设一分子最多有 200 个连接点，我们一次性将 <1*> 到 <200*> 设为神圣不可侵犯的 Token
         # ====================================================================
+        anchor_tokens = [
+            AddedToken(f"<{i}*>", lstrip=False, rstrip=False, normalized=False, special=True)
+            for i in range(1, 201)
+        ]
+
         special_control_tokens = [
             AddedToken("<bom>", lstrip=False, rstrip=False, normalized=False, special=True),
             AddedToken("<eom>", lstrip=False, rstrip=False, normalized=False, special=True),
             AddedToken("<s>", lstrip=False, rstrip=False, normalized=False, special=True)
         ]
 
-        # 1. 注册特殊控制字符
-        self.tokenizer.add_special_tokens({'additional_special_tokens': special_control_tokens})
+        # 将边界符和所有的锚点一起注册
+        self.tokenizer.add_special_tokens({'additional_special_tokens': special_control_tokens + anchor_tokens})
 
-        # 2. 将化学骨架作为普通词汇加入
+        # 加入您的 25k 纯净结构词表 (如 [C()=O])
         self.tokenizer.add_tokens(self.vocab, special_tokens=False)
-
         self.token2id = self.tokenizer.get_vocab()
 
-        # ====================================================================
-        # 🚀 核心修复：安全提取 ID，绝不重复制造 pad 和 unk
-        # ====================================================================
         self.bom_id = self.token2id.get("<bom>")
         self.eom_id = self.token2id.get("<eom>")
         self.bos_id = self.token2id.get("<s>")
-
-        # 直接使用 T5 原生的机制，防止 Mask 混乱
         self.pad_id = self.tokenizer.pad_token_id
         self.unk_id = self.tokenizer.unk_token_id
-
-        if None in [self.bom_id, self.eom_id, self.bos_id, self.pad_id, self.unk_id]:
-            raise ValueError("🚨 Tokenizer 初始化失败：特殊字符未能成功挂载到词表！")
 
     def load_vocab(self, filepath: str) -> List[str]:
         if not os.path.exists(filepath):
@@ -78,21 +72,35 @@ class MotifTokenizer:
 
     def encode(self, smiles: str, return_tensors: str = 'pt', padding: bool = False, return_mapping: bool = False):
         try:
-            frag = Frag(smiles)
-            final_tokens = ['<s>', '<bom>']  # 🚀 规范化起始符的拼接
-            orig_to_new_map = []
+            # ====================================================================
+            # 🚀 核心二：使用 linearize 获取包含锚点的完整 1D 拓扑序列
+            # 例如: frag_str = "[C] <1*> [C()=O] <1*>"
+            # ====================================================================
+            frag_str, _, _ = linearize(smiles)
+            raw_tokens = frag_str.split()
 
-            for f in frag.frags:
-                raw_motif = f.get('smiles', '')
-                clean_motif = re.sub(r'\[\*:\d+\]', '[*]', raw_motif)
+            final_tokens = ['<s>', '<bom>']
+            orig_to_new_map = []  # 记录 RDKit 的原子映射应该指向哪个绝对位置
 
-                if clean_motif in self.token2id:
-                    final_tokens.append(clean_motif)
+            for tok in raw_tokens:
+                # 判断当前 token 是锚点还是 Motif
+                if re.match(r'^<\d+\*>$', tok):
+                    # 这是一个锚点 (如 <1*>)
+                    if tok in self.token2id:
+                        final_tokens.append(tok)
+                    else:
+                        final_tokens.append('<unk>')
                 else:
-                    final_tokens.append('<unk>')
+                    # 这是一个 Motif (如 [C()=O])
+                    # (由于您的 linearize 已经输出了带 [] 和 () 的格式，直接查表即可)
+                    if tok in self.token2id:
+                        final_tokens.append(tok)
+                    else:
+                        final_tokens.append('<unk>')
 
-                # 记录映射位置，注意减去开头的 <s> 和 <bom> 的偏移量
-                orig_to_new_map.append(len(final_tokens) - 1)
+                    # 🚀 核心三：仅当遇到 Motif 时，才记录它的绝对索引位置！
+                    # 这保证了 atom_to_motif_map 永远指向真实的化学实体，而不是锚点！
+                    orig_to_new_map.append(len(final_tokens) - 1)
 
             final_tokens.append('<eom>')
             input_ids = self.tokenizer.convert_tokens_to_ids(final_tokens)
@@ -102,7 +110,7 @@ class MotifTokenizer:
             input_ids = [self.bos_id, self.bom_id, self.unk_id, self.eom_id]
             orig_to_new_map = [2]
 
-        # Padding 与截断逻辑
+        # Padding 与截断逻辑 (精确保护 eom_id)
         if len(input_ids) > self.max_len:
             input_ids = input_ids[:self.max_len - 1] + [self.eom_id]
             orig_to_new_map = [idx for idx in orig_to_new_map if idx < self.max_len - 1]
