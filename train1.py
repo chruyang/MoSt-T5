@@ -22,21 +22,43 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
-# 🚀 自定义 Trainer：负责在 TensorBoard 中显示子 Loss
+# 🚀 自定义 Trainer：负责在 TensorBoard 中聚合并显示子 Loss
 # ==========================================
 class MoStTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 🚀 缓冲区：用于累加一个 logging_steps 周期内的 Loss 平均值
+        self._sub_loss_buffer = {"lm": 0.0, "geom": 0.0, "steps": 0}
+
     def compute_loss(self, model, inputs, return_outputs=False):
         outputs = model(**inputs)
         loss = outputs.loss
 
-        # 仅在训练阶段且 outputs 包含子 Loss 时记录
+        # 🚀 在训练阶段，将子项 Loss 记录到缓冲区
         if self.model.training and hasattr(outputs, "main_lm_loss"):
-            self.log({
-                "loss/main_lm": outputs.main_lm_loss.item(),
-                "loss/geom_3d": outputs.geom_3d_loss.item()
-            })
+            # 使用 .detach().item() 避免显存泄漏，并获取标量数值
+            self._sub_loss_buffer["lm"] += outputs.main_lm_loss.detach().item()
+            self._sub_loss_buffer["geom"] += outputs.geom_3d_loss.detach().item()
+            self._sub_loss_buffer["steps"] += 1
 
         return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: dict) -> None:
+        """
+        重写 log 方法，在达到 logging_steps 触发日志记录时注入分项平均值
+        """
+        if self._sub_loss_buffer["steps"] > 0:
+            avg_lm = self._sub_loss_buffer["lm"] / self._sub_loss_buffer["steps"]
+            avg_geom = self._sub_loss_buffer["geom"] / self._sub_loss_buffer["steps"]
+
+            # 注入新键名，TensorBoard 会自动将其归类到 "loss" 组下
+            logs["loss/main_lm"] = avg_lm
+            logs["loss/geom_3d"] = avg_geom
+
+            # 记录完成后重置缓冲区
+            self._sub_loss_buffer = {"lm": 0.0, "geom": 0.0, "steps": 0}
+
+        super().log(logs)
 
 
 def main():
@@ -46,9 +68,13 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # 🚀 Dataloader 线程数与预取支持
+    # 🚀 Dataloader 线程数打通
     training_args.dataloader_num_workers = data_args.num_workers
     training_args.remove_unused_columns = False
+
+    # 🚀 关键修复：由于模型存在嵌套共享权重，强制回退到传统的 .bin 格式保存
+    # 这样可以避开 safetensors 对于 "shared tensors mismatch" 的严格路径校验
+    training_args.save_safetensors = False
 
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -91,22 +117,22 @@ def main():
 
     old_vocab_size = model.config.vocab_size
 
-    # 🚀 扩容词表与定点覆盖初始化 (完整保留你的初始化逻辑)
+    # 🚀 扩容词表与定点覆盖初始化 (保留业务逻辑)
     model.resize_token_embeddings(final_vocab_size)
 
-    # 针对新增 3D 层的覆盖式特殊处理
+    # 针对 3D 几何回归头的正交初始化
     for module in model.geometric_head:
         if isinstance(module, torch.nn.Linear):
             torch.nn.init.orthogonal_(module.weight, gain=0.1)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
 
-    # 手动触发 3D 层的权重初始化（补救 resize 带来的潜在不确定性）
+    # 对新增 3D 层应用自定义初始化逻辑
     model.encoder.fusion_layer.apply(model._init_weights)
     model.encoder.gsm_embeddings.e3fp_embeddings.apply(model._init_weights)
 
     # =========================================================================
-    # 3. 🚀 双矩阵方差对齐 (Variance Alignment - 完整保留)
+    # 3. 🚀 双矩阵方差对齐 (Variance Alignment - 保留原样)
     # =========================================================================
     if final_vocab_size > old_vocab_size:
         logger.info(f"⚖️ 执行词表方差强制对齐: {old_vocab_size} -> {final_vocab_size}")
@@ -122,15 +148,15 @@ def main():
                 new_lm_head.normal_(mean=old_lm_head.mean().item(), std=old_lm_head.std().item())
 
     # =========================================================================
-    # 4. 数据集与训练器 (保留所有路径与白名单参数)
+    # 4. 数据集与训练器 (保留原样逻辑)
     # =========================================================================
     train_dataset = GSMATDataset(
         lmdb_path=data_args.train_file,
         text_tokenizer=text_tokenizer,
         motif_tokenizer=motif_tokenizer,
         e3fp_tokenizer=e3fp_tokenizer,
-        c4_lmdb_path="",  # 依照原样
-        whitelist_path="",  # 依照原样
+        c4_lmdb_path="",
+        whitelist_path="",
         max_seq_length=data_args.max_seq_length,
         task_probs={"mmm": 1.0}
     )
@@ -157,7 +183,7 @@ def main():
         is_train=True
     )
 
-    # 🚀 使用 MoStTrainer 替换原生 Trainer
+    # 🚀 关键修正：确保使用自定义的子类 MoStTrainer 而非原生类
     trainer = MoStTrainer(
         model=model,
         args=training_args,
