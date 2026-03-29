@@ -5,7 +5,19 @@ from transformers.models.t5.modeling_t5 import T5Stack
 from .configuration import MoStT5Config
 import logging
 
+from dataclasses import dataclass
+from typing import Optional
+from transformers.modeling_outputs import Seq2SeqLMOutput
+
 logger = logging.getLogger(__name__)
+
+# =========================================================================
+# 🚀 新增：定义 DDP 兼容的自定义输出类
+# =========================================================================
+@dataclass
+class MoStT5Output(Seq2SeqLMOutput):
+    main_lm_loss: Optional[torch.FloatTensor] = None
+    geom_3d_loss: Optional[torch.FloatTensor] = None
 
 
 # =========================================================================
@@ -168,7 +180,7 @@ class MoStT5Encoder(T5Stack):
 # 4. MoStT5ForConditionalGeneration
 # =========================================================================
 class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
-    # 🚀 修复核心：必须显式列出所有权重共享路径，包含嵌套在子模块中的路径
+    # 🚀 修复核心：显式列出所有权重共享路径，包含嵌套在子模块中的路径
     _tied_weights_keys = [
         "encoder.embed_tokens.weight",
         "decoder.embed_tokens.weight",
@@ -264,11 +276,10 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
         lambda_3d = getattr(self.config, 'lambda_3d', 0.1)
 
         if outputs.loss is not None:
-            # 🚀 注入点 1：记录原始文本 Loss
-            outputs.main_lm_loss = outputs.loss.detach().clone()
+            # 🚀 提取原始文本 Loss
+            main_lm_loss_val = outputs.loss.detach().clone()
 
-            if outputs.loss.isnan() or outputs.loss.isinf():
-                outputs.loss = outputs.loss * 0.0
+            # ！！！已彻底移除 NaN 抑制逻辑，允许真实报错！！！
 
             encoder_hidden_states = kwargs["encoder_outputs"][0]
             predicted_3d_full = self.geometric_head(encoder_hidden_states)
@@ -294,9 +305,22 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
             else:
                 final_3d_loss = dummy_loss_3d
 
-            outputs.loss = outputs.loss + lambda_3d * final_3d_loss
+            # 更新总 loss 用于梯度的反向传播
+            new_total_loss = outputs.loss + lambda_3d * final_3d_loss
 
-            # 🚀 注入点 2：记录 3D Loss
-            outputs.geom_3d_loss = final_3d_loss.detach().clone()
+            # 🚀 封装成 MoStT5Output 返回，完美兼容 DDP 并透传子 Loss
+            return MoStT5Output(
+                loss=new_total_loss,
+                logits=outputs.logits,
+                past_key_values=outputs.past_key_values,
+                decoder_hidden_states=outputs.decoder_hidden_states,
+                decoder_attentions=outputs.decoder_attentions,
+                cross_attentions=outputs.cross_attentions,
+                encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+                encoder_hidden_states=outputs.encoder_hidden_states,
+                encoder_attentions=outputs.encoder_attentions,
+                main_lm_loss=main_lm_loss_val,
+                geom_3d_loss=final_3d_loss.detach().clone()
+            )
 
         return outputs

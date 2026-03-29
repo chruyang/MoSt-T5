@@ -35,11 +35,16 @@ class MoStTrainer(Trainer):
         loss = outputs.loss
 
         # 🚀 在训练阶段，将子项 Loss 记录到缓冲区
-        if self.model.training and hasattr(outputs, "main_lm_loss"):
-            # 使用 .detach().item() 避免显存泄漏，并获取标量数值
-            self._sub_loss_buffer["lm"] += outputs.main_lm_loss.detach().item()
-            self._sub_loss_buffer["geom"] += outputs.geom_3d_loss.detach().item()
-            self._sub_loss_buffer["steps"] += 1
+        if self.model.training:
+            # 稳健提取，支持 DDP 返回的对象
+            lm_loss = getattr(outputs, "main_lm_loss", None)
+            gm_loss = getattr(outputs, "geom_3d_loss", None)
+
+            if lm_loss is not None and gm_loss is not None:
+                # 使用 .item() 提取标量，避免显存泄漏
+                self._sub_loss_buffer["lm"] += lm_loss.item()
+                self._sub_loss_buffer["geom"] += gm_loss.item()
+                self._sub_loss_buffer["steps"] += 1
 
         return (loss, outputs) if return_outputs else loss
 
@@ -51,9 +56,9 @@ class MoStTrainer(Trainer):
             avg_lm = self._sub_loss_buffer["lm"] / self._sub_loss_buffer["steps"]
             avg_geom = self._sub_loss_buffer["geom"] / self._sub_loss_buffer["steps"]
 
-            # 注入新键名，TensorBoard 会自动将其归类到 "loss" 组下
-            logs["loss/main_lm"] = avg_lm
-            logs["loss/geom_3d"] = avg_geom
+            # 使用 train/ 前缀，TensorBoard 会自动将其与总 loss 归类到一组
+            logs["train/loss_main_lm"] = avg_lm
+            logs["train/loss_geom_3d"] = avg_geom
 
             # 记录完成后重置缓冲区
             self._sub_loss_buffer = {"lm": 0.0, "geom": 0.0, "steps": 0}
@@ -196,12 +201,12 @@ def main():
     logger.info("=" * 40)
     logger.info("🔍 WEIGHT SANITY CHECK (Before Training)")
     std_shared = model.shared.weight.std().item()
-    logger.info(f"  -> Final Shared Embeddings STD: {std_shared:.6f} (Target: ~10.26)")
+    logger.info(f"  -> Final Shared Embeddings STD: {std_shared:.6f}")
 
     lm_head = model.get_output_embeddings()
     if lm_head is not None:
         std_lm = lm_head.weight.std().item()
-        logger.info(f"  -> Final LM Head STD: {std_lm:.6f} (Target: ~0.55)")
+        logger.info(f"  -> Final LM Head STD: {std_lm:.6f}")
     logger.info("=" * 40)
 
     # 开始训练与指标保存
