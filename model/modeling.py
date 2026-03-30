@@ -11,6 +11,7 @@ from transformers.modeling_outputs import Seq2SeqLMOutput
 
 logger = logging.getLogger(__name__)
 
+
 # =========================================================================
 # 🚀 新增：定义 DDP 兼容的自定义输出类
 # =========================================================================
@@ -26,25 +27,51 @@ class MoStT5Output(Seq2SeqLMOutput):
 class GSMATEmbeddings(nn.Module):
     def __init__(self, config: MoStT5Config, word_embeddings=None):
         super().__init__()
+        # 1. 初始化 1D Motif 词嵌入
         if word_embeddings is not None:
             self.word_embeddings = word_embeddings
         else:
             self.word_embeddings = nn.Embedding(config.vocab_size, config.d_model)
 
+        # 2. 初始化 3D E3FP 多层特征嵌入
         self.e3fp_embeddings = nn.ModuleList([
             nn.Embedding(config.e3fp_vocab_size + 1, config.d_model, padding_idx=0)
             for _ in range(config.e3fp_num_levels)
         ])
 
+        # 🚀 3. 效仿 3DMOLT5：强制锁定 Padding 位并注册零梯度钩子
+        for layer in self.e3fp_embeddings:
+            # 显式重置第 0 位为全 0，防止初始化随机值漂移
+            layer.weight.data[0] = torch.zeros(config.d_model)
+            # 注册钩子，确保该位置梯度永远为 0，避免权重衰减或更新带来的噪声
+            layer.weight.register_hook(self._zero_hook)
+
+    def _zero_hook(self, grad):
+        """
+        参考 3DMOLT5 的梯度消除机制。
+        即使优化器在反向传播时尝试修改 Padding 位，该钩子也会强制将其梯度抹除。
+        """
+        if grad is not None:
+            grad[0] = 0
+        return grad
+
     def set_word_embeddings(self, new_embeddings):
+        """用于权重共享机制的 Embedding 设置"""
         self.word_embeddings = new_embeddings
 
     def forward(self, input_ids, e3fp_ids):
-        motif_embeds = self.word_embeddings(input_ids)
+        # 处理 1D 语义特征
+        motif_embeds = self.word_embeddings(input_ids)  # [B, L_m, D]
+
+        # 处理 3D 几何特征
+        # 索引平移 (+1) 以适配底层 e3fp_embeddings 的 vocab_size+1 结构
         e3fp_ids_shifted = e3fp_ids + 1
         e3fp_embeds = 0
+
         for i, layer in enumerate(self.e3fp_embeddings):
-            e3fp_embeds += layer(e3fp_ids_shifted[:, :, i])
+            # 将不同 shell 层级的几何特征线性累加
+            e3fp_embeds += layer(e3fp_ids_shifted[:, :, i])  # [B, L_a, D]
+
         return motif_embeds, e3fp_embeds
 
 
@@ -211,7 +238,7 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
 
         for module in self.geometric_head:
             if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight, gain=0.1)
+                nn.init.orthogonal_(module.weight, gain=1)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
@@ -222,7 +249,7 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=0.002)
+            module.weight.data.normal_(mean=0.0, std=0.1)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, nn.LayerNorm):
@@ -273,7 +300,7 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
         outputs = super().forward(input_ids=None, attention_mask=attention_mask, labels=labels, **kwargs)
 
         # 3. 计算 3D 几何 Loss
-        lambda_3d = getattr(self.config, 'lambda_3d', 0.1)
+        lambda_3d = getattr(self.config, 'lambda_3d', 10.0)
 
         if outputs.loss is not None:
             # 🚀 提取原始文本 Loss
@@ -294,8 +321,17 @@ class MoStT5ForConditionalGeneration(T5ForConditionalGeneration):
                     pred_masked = torch.nan_to_num(pred_masked, nan=0.0, posinf=0.0, neginf=0.0)
                     target_masked = torch.nan_to_num(target_masked, nan=0.0, posinf=0.0, neginf=0.0)
 
-                    loss_fct_3d = nn.SmoothL1Loss(reduction='mean')
+                    loss_fct_3d = nn.MSELoss(reduction='mean')
                     current_loss = loss_fct_3d(pred_masked, target_masked)
+                    if torch.distributed.is_initialized():
+                        is_rank0 = torch.distributed.get_rank() == 0
+                    else:
+                        is_rank0 = True
+
+                    if is_rank0 and torch.randint(0, 100, (1,)).item() == 0:
+                        print(f"\n[3D-DEBUG] Target Mean: {target_masked.abs().mean().item():.6f}, "
+                              f"Pred Mean: {pred_masked.abs().mean().item():.6f}, "
+                              f"Raw 3D Loss: {current_loss.item():.8f}")
 
                     if not (current_loss.isnan() or current_loss.isinf()):
                         valid_3d_loss = current_loss

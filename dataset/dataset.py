@@ -219,6 +219,10 @@ class GSMATDataset(Dataset):
                         smiles)
                     e3fp_ids = self.handle_dimension_mismatch(e3fp_ids)
 
+                    if e3fp_ids.shape[0] == 0:
+                        idx = (idx + 1) % self.length
+                        continue
+
                     num_atoms = e3fp_ids.shape[0]
                     atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
                     atom_mapping = entry.get('atom_mapping', [])
@@ -391,6 +395,7 @@ class GSMATPretrainingCollator(BaseGSMATCollator):
 
             # 🚀 强制追加闭合哨兵，防 _shift_right 越界崩溃
             labels_list.append(base_sentinel_id - counter)
+            labels_list.append(self.motif_tokenizer.tokenizer.eos_token_id)
             labels_tensor = torch.tensor(labels_list, dtype=torch.long)
 
             masked_e3fp_ids = e3fp_ids.clone()
@@ -482,6 +487,7 @@ class GSMATPhase2Collator(BaseGSMATCollator):
                 all_labels = text_labels + motif_labels
                 # 🚀 强制追加闭合哨兵
                 all_labels.append(base_sentinel_id - counter)
+                all_labels.append(self.text_tokenizer.tokenizer.eos_token_id)
                 labels = torch.tensor(all_labels, dtype=torch.long)
 
                 text_len = len(text_ids)
@@ -534,6 +540,7 @@ class GSMATPhase2Collator(BaseGSMATCollator):
                 input_ids = masked_text_ids
                 # 🚀 强制追加闭合哨兵
                 text_labels.append(base_sentinel_id - counter)
+                test_labels.append(self.text_tokenizer.tokenizer.eos_token_id)
                 labels = torch.tensor(text_labels, dtype=torch.long)
 
                 final_e3fp = torch.empty((0, fp_dim), dtype=torch.long)

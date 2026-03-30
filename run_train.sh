@@ -15,8 +15,8 @@ torchrun --nproc_per_node=$NUM_GPUS train1.py \
     --output_dir checkpoints/MoSt-T5-Phase1-Final \
     --do_train \
     --max_steps 100000 \
-    --per_device_train_batch_size 256 \
-    --gradient_accumulation_steps 1 \
+    --per_device_train_batch_size 64 \
+    --gradient_accumulation_steps 4 \
     --learning_rate 5e-4 \
     --weight_decay 0.0 \
     --warmup_steps 10000 \

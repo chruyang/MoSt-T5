@@ -31,6 +31,14 @@ class MoStTrainer(Trainer):
         self._sub_loss_buffer = {"lm": 0.0, "geom": 0.0, "steps": 0}
 
     def compute_loss(self, model, inputs, return_outputs=False):
+        if self.state.global_step == 1 and self.model.training:
+            print("\n" + "=" * 50)
+            print("🛑 [DEBUG] BATCH 0 SANITY CHECK")
+            print("Input IDs (前20个):", inputs["input_ids"][0][:20].tolist())
+            print("Labels (前20个):", inputs["labels"][0][:20].tolist())
+            print("Labels 中非 -100 的数量:", (inputs["labels"][0] != -100).sum().item())
+            print("Mask Positions 为 True 的数量:", inputs.get("mask_positions", torch.zeros(1))[0].sum().item())
+            print("=" * 50 + "\n")
         outputs = model(**inputs)
         loss = outputs.loss
 
@@ -110,7 +118,7 @@ def main():
         e3fp_vocab_size=model_args.e3fp_vocab_size,
         e3fp_num_levels=model_args.e3fp_num_levels,
     )
-    config.lambda_3d = 1.0
+    config.lambda_3d = 500.0
 
     model = MoStT5ForConditionalGeneration.from_pretrained(
         model_args.model_name_or_path,
