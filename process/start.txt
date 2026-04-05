@@ -127,4 +127,31 @@ nohup torchrun --nproc_per_node=2 --master_port=29501 train1.py \
     --remove_unused_columns False \
     --report_to "tensorboard"
 
- 第二阶段预训练中存在特殊符号问题
+ 逐个字符生成
+
+ # ⚠️ 第一处：请将数字 8 替换为你当前 AutoDL 实例的实际 GPU 数量（如 2, 4, 8）
+torchrun --nproc_per_node=1 test2.py \
+    --model_name_or_path "./checkpoints/MoSt-T5-Phase1-Final/checkpoint-100000" \
+    --tokenizer_name google/t5-v1_1-base \
+    --vocab_file asset/mol_vocabs/vocab_phase2_25k.txt \
+    --train_file /root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb \
+    --c4_file /root/autodl-tmp/3D-MoIT/3d-mol-dataset/c4_pretrain.lmdb \
+    --output_dir checkpoints/MoSt-T5-Phase2-Alignment \
+    --do_train \
+    --max_steps 100 \
+    --per_device_train_batch_size 4 \
+    --gradient_accumulation_steps 2 \
+    --learning_rate 5e-5 \
+    --max_seq_length 512 \
+    --e3fp_num_levels 4 \
+    --e3fp_vocab_size 4096 \
+    --bf16 True \
+    --tf32 True \
+    --dataloader_num_workers 16 \
+    --dataloader_prefetch_factor 4 \
+    --dataloader_pin_memory True \
+    --ddp_find_unused_parameters True
+
+
+微调3D
+torchrun --nproc_per_node=4 run_generative_property.py      --data_dir autodl-tmp/3D-MoIT/3d-mol-dataset/pubchemqc      --model_path ./checkpoints/MoSt-T5-Phase1-Final/checkpoint-100000      --target_property all      --lr 3e-4      --warmup_steps 10000      --total_steps 100000

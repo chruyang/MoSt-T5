@@ -25,6 +25,9 @@ class TextTokenizer:
             AddedToken("[Denoise]:", lstrip=False, rstrip=False, normalized=False, special=True)
         ]
 
+        digits = [f"{i}" for i in range(10)]
+        self.tokenizer.add_tokens(digits, special_tokens=True)
+
         # 将这些符号加入分词器，防止它们被切碎
         num_added = self.tokenizer.add_special_tokens({'additional_special_tokens': special_tokens})
         if num_added > 0:

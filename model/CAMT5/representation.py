@@ -189,6 +189,9 @@ def linearize(smile: str) -> Tuple[str, List[List[int]], List[Tuple[int, int]]]:
             new_atom.SetFormalCharge(atom.GetFormalCharge())
             new_atom.SetIsotope(atom.GetIsotope())
             new_atom.SetNumExplicitHs(atom.GetNumExplicitHs())
+            new_atom.SetNumRadicalElectrons(atom.GetNumRadicalElectrons())
+            new_atom.SetNoImplicit(atom.GetNoImplicit())
+
             parent_to_sub[a_idx] = em.AddAtom(new_atom)
 
         for a1, a2 in product(motif_atoms, motif_atoms):

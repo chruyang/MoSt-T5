@@ -20,9 +20,10 @@ from tokenization.motif_tokenizer import MotifTokenizer
 from tokenization.e3fp_tokenizer import E3FPTokenizer
 from model.CAMT5.representation import linearize
 
+
 def get_atom_mapping(smiles, motif_tokenizer):
     mol = Chem.MolFromSmiles(smiles)
-    if not mol: return []
+    if not mol: return [], smiles  # 🚀 修复1：失败时也把字符串退回去
     try:
         Chem.Kekulize(mol)
         smi_kekule = Chem.MolToSmiles(mol, kekuleSmiles=True)
@@ -41,64 +42,68 @@ def get_atom_mapping(smiles, motif_tokenizer):
             if m_tmp: atom_offset += m_tmp.GetNumAtoms()
         except:
             pass
-    return atom_mapping
 
-def main():
-    input_lmdb = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/3d-pubchem.lmdb"
-    output_lmdb = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_ready.lmdb"
-    
-    # 🚨 词表与特征器初始化
-    vocab_path = os.path.join(PROJECT_ROOT, "asset/mol_vocabs/vocab_phase2_25k.txt")
-    
-    print("🚀 加载 Motif 与 E3FP Tokenizers...")
-    motif_tokenizer = MotifTokenizer(vocab_file=vocab_path, model_name="google/t5-v1_1-base")
-    e3fp_tokenizer = E3FPTokenizer() # 初始化 E3FP 计算器
+    # 🚀 修复2：强制返回生成 Mapping 的基准字符串！
+    return atom_mapping, smi_kekule
 
-    env_in = lmdb.open(input_lmdb, subdir=False, readonly=True, lock=False)
-    env_out = lmdb.open(output_lmdb, subdir=False, map_size=50*1024*1024*1024)
-    
+
+def build_lmdb():
+    input_lmdb_path = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem.lmdb"
+    output_lmdb_path = "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_final.lmdb"
+    vocab_path = "asset/mol_vocabs/vocab_phase2_25k.txt"
+
+    print("🚀 初始化 Tokenizers...")
+    motif_tokenizer = MotifTokenizer(vocab_file=vocab_path)
+    e3fp_tokenizer = E3FPTokenizer(fp_level=3, fp_bits=4096)
+
+    print(f"📂 打开输入数据库: {input_lmdb_path}")
+    env_in = lmdb.open(input_lmdb_path, readonly=True, lock=False)
+
+    # 获取总条目数
+    with env_in.begin() as txn:
+        total_entries = txn.stat()['entries']
+
+    print(f"📝 创建输出数据库: {output_lmdb_path}")
+    env_out = lmdb.open(output_lmdb_path, map_size=int(1e12))
+
     valid_count = 0
     error_count = 0
-    
+
     with env_in.begin() as txn_in, env_out.begin(write=True) as txn_out:
-        total_entries = txn_in.stat()['entries']
         cursor = txn_in.cursor()
-        
-        for key, value in tqdm(cursor, total=total_entries, desc="🛠️ 计算 Mapping & E3FP"):
+
+        for key, value in tqdm(cursor.iternext(), total=total_entries, desc="🛠️ 计算 Mapping & E3FP"):
             data = pickle.loads(value)
             smiles = data.get('smiles', '')
-            
+
             if smiles:
                 try:
-                    # 1. 替代 process_qc_step2_mapping.py 的功能
-                    mapping = get_atom_mapping(smiles, motif_tokenizer)
+                    # 🚀 修复3：接收 Mapping 的同时，接收基准字符串
+                    mapping, smi_kekule = get_atom_mapping(smiles, motif_tokenizer)
                     data['atom_mapping'] = mapping
-                    
-                    # 2. 替代 process_qc_step1_e3fp.py 的功能 (预计算 3D 矩阵)
-                    # 🚀 核心修复：强制使用 from_smiles，避免不存在的方法报错
-                    e3fp_tensor = e3fp_tokenizer.from_smiles(smiles)
-                        
-                    data['e3fp'] = e3fp_tensor.numpy() # 转回 numpy 存储以节省 LMDB 空间
 
-                    # 3. 写入新库 (原封不动保留了 description 文本)
+                    # 🚀 修复4：把基准字符串硬编码进数据库，供 dataset.py 切词使用！
+                    data['smiles_kekule'] = smi_kekule
+
+                    # 🚀 修复5：强制 E3FP 使用这个重排后的基准字符串生成 3D 坐标！
+                    e3fp_tensor = e3fp_tokenizer.from_smiles(smi_kekule)
+
+                    data['e3fp'] = e3fp_tensor.numpy()
+
+                    # 写入新库
                     txn_out.put(str(valid_count).encode('utf-8'), pickle.dumps(data))
                     valid_count += 1
                 except Exception as e:
                     error_count += 1
-                    # 打印前 3 个错误以防再次出现不可见的致命错误
                     if error_count <= 3:
                         print(f"\n⚠️ [Debug] 样本处理报错 (SMILES: {smiles[:30]}...): {e}")
-                        traceback.print_exc()
-                
+
         txn_out.put(b'__len__', str(valid_count).encode('utf-8'))
-        
+
     env_in.close()
     env_out.close()
-    
-    print(f"\n✅ Phase 2 满血版 LMDB 构建完成！")
-    print(f"   -> 成功处理并入库: {valid_count} 条多模态数据。")
-    print(f"   -> 异常跳过: {error_count} 条。")
-    print(f"💾 保存在: {output_lmdb}")
+    print(f"✅ 处理完成！成功写入 {valid_count} 条有效数据，失败 {error_count} 条。")
+
 
 if __name__ == "__main__":
-    main()
+    build_lmdb()

@@ -116,13 +116,15 @@ class GSMATDataset(Dataset):
 
         for attempt in range(10):
             try:
-                roll = np.random.rand()
 
-                # 任务分配路由
-                if roll >= sum(self.task_probs.values()) - self.task_probs.get("denoise", 0) and getattr(self,
-                                                                                                         'c4_length',
-                                                                                                         0) > 0:
-                    task = "denoise"
+                # ==========================================
+                # 🚀 新版：严格 25% 均等任务分配路由
+                # ==========================================
+                available_tasks = ["mmm", "caption", "text2mol", "denoise"]
+
+                task = np.random.choice(available_tasks)
+
+                if task == "denoise":
                     c4_idx = np.random.randint(0, self.c4_length)
                     with self.c4_env.begin() as txn:
                         c4_data = pickle.loads(txn.get(str(c4_idx).encode()))
@@ -139,29 +141,25 @@ class GSMATDataset(Dataset):
                             continue
                         entry = pickle.loads(data)
 
+                    # 白名单拦截逻辑保持不变
                     if getattr(self, 'whitelist', None):
-                        cid = str(entry.get('cid', entry.get('index', entry.get('id', entry.get('input', ''))))).strip()
+                        cid = str(entry.get('cid', entry.get('index',
+                                                             entry.get('id', entry.get('input', ''))))).strip()
                         if cid and cid not in self.whitelist:
                             idx = (idx + 1) % self.length
                             continue
 
                     smiles = entry.get('smiles_kekule') or entry.get('smiles', '')
-                    text = entry.get('enriched_description', '') or entry.get('description', '') or entry.get('text',
-                                                                                                              '')
+                    text = entry.get('enriched_description', '') or entry.get('description', '') or entry.get(
+                        'text', '')
 
-                    if roll < self.task_probs.get("mmm", 1.0):
-                        task = "mmm"
+                    # 组装具体任务的 Prompt
+                    if task == "mmm":
                         prompt_text = f"[MMM]: {text}" if text else "[MMM]:"
-                    elif roll < self.task_probs.get("mmm", 0) + self.task_probs.get("caption", 0):
-                        task = "caption"
+                    elif task == "caption":
                         prompt_text = f"[Caption]: Generate description for the molecule:"
-                    elif roll < sum(self.task_probs.values()) - self.task_probs.get("denoise", 0):
-                        task = "text2mol"
+                    elif task == "text2mol":
                         prompt_text = f"[Text2Mol]: {text}"
-                    else:
-                        task = "denoise"
-                        prompt_text = f"[Denoise]: {text}"
-                        smiles = ""
 
                 # 文本 Tokenizer
                 text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=self.max_seq_len,
@@ -330,13 +328,14 @@ class BaseGSMATCollator:
 
         valid_len = (input_ids != pad_id).sum().item()
 
+
         # 1. 抽取 MLM 掩码 (同时影响 1D 和 3D)
         weights_A = weights.clone()
         if weights_A.sum() > 0:
             num_A = max(1, int(valid_len * self.mask_ratio))
             num_A = min(num_A, (weights_A > 0).sum().item())
             if num_A > 0:
-                # 🚀 严格保证原来是 0.0 的权重，加了 1e-6 后立刻再被压回 0.0
+                # 🚀 绝对零度补丁：物理销毁特殊符号的 1e-6 概率
                 safe_weights_A = weights_A + 1e-6
                 safe_weights_A[weights_A <= 0.0] = 0.0
 
@@ -351,7 +350,7 @@ class BaseGSMATCollator:
             num_B = max(1, int(valid_len * self.task_b_ratio))
             num_B = min(num_B, (weights_B > 0).sum().item())
             if num_B > 0:
-                # 🚀 同理，实施绝对零度保护
+                # 🚀 绝对零度补丁
                 safe_weights_B = weights_B + 1e-6
                 safe_weights_B[weights_B <= 0.0] = 0.0
 
@@ -481,11 +480,17 @@ class GSMATPhase2Collator(BaseGSMATCollator):
             atom_map = item["atom_to_motif_map"]
 
             fp_dim = e3fp_ids.shape[1] if e3fp_ids.shape[0] > 0 else 4
-
             if task == "mmm":
-                masked_text_ids, text_labels, _, counter = self._apply_non_collapsing_t5_mask(
-                    text_ids, self.text_weight_lookup, self.text_pad_id, self.text_tokenizer.tokenizer, 0
+                # 🚀 前缀隔离：切分指令标识与核心文本
+                prefix_tensor = text_ids[:1]
+                core_text_ids = text_ids[1:]
+
+                masked_core_text_ids, text_labels, _, counter = self._apply_non_collapsing_t5_mask(
+                    core_text_ids, self.text_weight_lookup, self.text_pad_id, self.text_tokenizer.tokenizer, 0
                 )
+                # 重新拼装前缀
+                masked_text_ids = torch.cat([prefix_tensor, masked_core_text_ids])
+
                 masked_motif_ids, motif_labels, geo_mask_pos, counter = self._apply_non_collapsing_t5_mask(
                     motif_ids, self.motif_weight_lookup, self.motif_pad_id, self.motif_tokenizer.tokenizer, counter
                 )
@@ -493,12 +498,11 @@ class GSMATPhase2Collator(BaseGSMATCollator):
                 input_ids = torch.cat([masked_text_ids, masked_motif_ids])
 
                 all_labels = text_labels + motif_labels
-                # 🚀 强制追加闭合哨兵
                 all_labels.append(base_sentinel_id - counter)
                 all_labels.append(self.text_tokenizer.tokenizer.eos_token_id)
                 labels = torch.tensor(all_labels, dtype=torch.long)
 
-                text_len = len(text_ids)
+                text_len = len(masked_text_ids)  # 必须使用掩码后的真实长度进行位移
                 shifted_map = atom_map.clone()
                 shifted_map[shifted_map != -1] += text_len
 
@@ -542,13 +546,18 @@ class GSMATPhase2Collator(BaseGSMATCollator):
                 item_mask_pos = torch.zeros(len(input_ids), dtype=torch.bool)
 
             elif task == "denoise":
-                masked_text_ids, text_labels, _, counter = self._apply_non_collapsing_t5_mask(
-                    text_ids, self.text_weight_lookup, self.text_pad_id, self.text_tokenizer.tokenizer, 0
+                # 🚀 前缀隔离
+                prefix_tensor = text_ids[:1]
+                core_text_ids = text_ids[1:]
+
+                masked_core_text_ids, text_labels, _, counter = self._apply_non_collapsing_t5_mask(
+                    core_text_ids, self.text_weight_lookup, self.text_pad_id, self.text_tokenizer.tokenizer, 0
                 )
-                input_ids = masked_text_ids
-                # 🚀 强制追加闭合哨兵
+                # 重新拼装前缀
+                input_ids = torch.cat([prefix_tensor, masked_core_text_ids])
+
                 text_labels.append(base_sentinel_id - counter)
-                test_labels.append(self.text_tokenizer.tokenizer.eos_token_id)
+                text_labels.append(self.text_tokenizer.tokenizer.eos_token_id)
                 labels = torch.tensor(text_labels, dtype=torch.long)
 
                 final_e3fp = torch.empty((0, fp_dim), dtype=torch.long)
