@@ -81,12 +81,9 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # 🚀 Dataloader 线程数打通
     training_args.dataloader_num_workers = data_args.num_workers
     training_args.remove_unused_columns = False
 
-    # 🚀 关键修复：由于模型存在嵌套共享权重，强制回退到传统的 .bin 格式保存
-    # 这样可以避开 safetensors 对于 "shared tensors mismatch" 的严格路径校验
     training_args.save_safetensors = False
 
     logging.basicConfig(

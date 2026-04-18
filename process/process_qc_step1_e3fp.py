@@ -80,12 +80,22 @@ def worker_process_molecule(data_tuple):
                          'exclude_floating': False}
         _, fingerprinter = fprints_from_mol_verbose(mol, fprint_params=fprint_params)
 
+        # feature_matrix = -1 * np.ones((num_atoms, FP_LEVEL + 1), dtype=np.int32)
+        # for shell in fingerprinter.all_shells:
+        #     c_idx, r_idx = int(shell.center_atom), int(shell.radius)
+        #     if c_idx < num_atoms and r_idx <= FP_LEVEL:
+        #         feature_matrix[c_idx, r_idx] = identifier_to_bit(shell.identifier, bits=FP_BITS)
         feature_matrix = -1 * np.ones((num_atoms, FP_LEVEL + 1), dtype=np.int32)
-        for shell in fingerprinter.all_shells:
-            c_idx, r_idx = int(shell.center_atom), int(shell.radius)
-            if c_idx < num_atoms and r_idx <= FP_LEVEL:
-                feature_matrix[c_idx, r_idx] = identifier_to_bit(shell.identifier, bits=FP_BITS)
 
+        if len(fingerprinter.level_shells.keys()) > 0:
+            fp_num_atom = len(fingerprinter.all_shells) // len(fingerprinter.level_shells.keys())
+
+            for i, shell in enumerate(fingerprinter.all_shells):
+                c_idx = int(shell.center_atom)
+                if c_idx < num_atoms:
+                    lvl = i // fp_num_atom
+                    if lvl <= FP_LEVEL:
+                        feature_matrix[c_idx, lvl] = identifier_to_bit(shell.identifier, bits=FP_BITS)
         record['smiles'] = smiles
         record['e3fp'] = feature_matrix
 

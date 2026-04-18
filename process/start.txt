@@ -155,3 +155,43 @@ torchrun --nproc_per_node=1 test2.py \
 
 微调3D
 torchrun --nproc_per_node=4 run_generative_property.py      --data_dir autodl-tmp/3D-MoIT/3d-mol-dataset/pubchemqc      --model_path ./checkpoints/MoSt-T5-Phase1-Final/checkpoint-100000      --target_property all      --lr 3e-4      --warmup_steps 10000      --total_steps 100000
+
+
+torchrun --nproc_per_node=4 run_qm9_property.py \
+    --data_dir ./autodl-tmp/e3fp-mol-instructions-qm9 \
+    --model_path ./checkpoints/MoSt-T5-Phase2-Final \
+    --target_property all \
+    --lr 3e-4 \
+    --warmup_steps 10000 \
+    --total_steps 100000
+
+torchrun --nproc_per_node=8 run_chebi_text2mol.py \
+    --data_dir ./autodl-tmp/e3fp-chebi-molgen \
+    --model_path ./checkpoints/MoSt-T5-Phase2-Final
+
+
+torchrun --nproc_per_node=4 \
+    --master_port=29500 \
+    run_pubchem_property.py \
+    --data_dir ./autodl-tmp/e3fp-pubchem-com \
+    --model_path ./MoSt-T5-Phase2-Final \
+    --target_property all \
+    --lr 2e-4 \
+    --warmup_steps 2000 \
+    --total_steps 20000 \
+    --gradient_accumulation_steps 2 \
+    --grad_clip 1.0
+
+
+
+torchrun --nproc_per_node=4 run_generative_property.py \
+    --data_dir ./autodl-tmp/e3fp-pubchemqc-prop \
+    --model_path ./checkpoints/gen_prop_all/checkpoint-epoch_4_end-30796 \
+    --target_property all \
+    --lr 3e-4 \
+    --warmup_steps 500 \
+    --num_train_epochs 65
+
+[-1-1-1-1]问题
+E3FP每层失活问题以及整体利用问题
+特殊词问题

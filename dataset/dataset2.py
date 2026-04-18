@@ -23,10 +23,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
-# ==========================================
-# 1. 核心数据集类 (支持多任务调度与动态截断)
-# ==========================================
 class GSMATDataset(Dataset):
     def __init__(self, lmdb_path: str,
                  text_tokenizer: TextTokenizer,
@@ -121,8 +117,11 @@ class GSMATDataset(Dataset):
                 # 🚀 新版：严格 25% 均等任务分配路由
                 # ==========================================
                 available_tasks = ["mmm", "caption", "text2mol", "denoise"]
-
                 task = np.random.choice(available_tasks)
+                if task == "mmm":
+                    current_max_len = 768  # 匹配 256(motif) + 512(text)
+                else:
+                    current_max_len = 512  # 维持通用任务的 512 长度
 
                 if task == "denoise":
                     c4_idx = np.random.randint(0, self.c4_length)
@@ -162,14 +161,14 @@ class GSMATDataset(Dataset):
                         prompt_text = f"[Text2Mol]: {text}"
 
                 # 文本 Tokenizer
-                text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=self.max_seq_len,
+                text_enc = self.text_tokenizer(prompt_text, padding=False, truncation=True, max_length=current_max_len,
                                                return_tensors="pt")
                 text_ids = text_enc['input_ids'].squeeze(0)
                 len_t = text_ids.shape[0]
 
                 target_text_ids = torch.tensor([], dtype=torch.long)
                 if task == "caption":
-                    target_enc = self.text_tokenizer(text, padding=False, truncation=True, max_length=self.max_seq_len,
+                    target_enc = self.text_tokenizer(text, padding=False, truncation=True, max_length=512,
                                                      return_tensors="pt")
                     target_text_ids = target_enc['input_ids'].squeeze(0)
 
@@ -375,92 +374,6 @@ class BaseGSMATCollator:
 
         return masked_input_ids, labels, geo_mask_pos, counter
 
-
-# ==========================================
-# 3. Phase 1 专属 Collator (纯粹的 1D-3D 几何对齐)
-# ==========================================
-class GSMATPretrainingCollator(BaseGSMATCollator):
-    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        valid_batch = [item for item in batch if item is not None]
-        if not valid_batch: return {}
-
-        batch_input_ids, batch_labels = [], []
-        batch_e3fp_ids, batch_unmasked_e3fp = [], []
-        batch_atom_maps, batch_atom_masks, batch_mask_positions = [], [], []
-
-        base_sentinel_id = self.motif_tokenizer.tokenizer.convert_tokens_to_ids("<extra_id_0>")
-        if base_sentinel_id is None: base_sentinel_id = 32099
-
-        for item in valid_batch:
-            motif_ids = item['motif_input_ids']
-            e3fp_ids = item['e3fp_input_ids']
-            atom_map = item['atom_to_motif_map']
-
-            masked_motif_ids, labels_list, geo_mask_pos, counter = self._apply_non_collapsing_t5_mask(
-                motif_ids, self.motif_weight_lookup, self.motif_pad_id, self.motif_tokenizer.tokenizer, 0
-            )
-
-            # 🚀 强制追加闭合哨兵，防 _shift_right 越界崩溃
-            labels_list.append(base_sentinel_id - counter)
-            labels_list.append(self.motif_tokenizer.tokenizer.eos_token_id)
-            labels_tensor = torch.tensor(labels_list, dtype=torch.long)
-
-            masked_e3fp_ids = e3fp_ids.clone()
-            mask_indices = geo_mask_pos.nonzero(as_tuple=True)[0]
-            for m_idx in mask_indices:
-                atom_indices = (atom_map == m_idx).nonzero(as_tuple=True)[0]
-                if len(atom_indices) > 0:
-                    masked_e3fp_ids[atom_indices] = self.e3fp_pad_id
-
-            batch_input_ids.append(masked_motif_ids)
-            batch_labels.append(labels_tensor)
-            batch_e3fp_ids.append(masked_e3fp_ids)
-            batch_unmasked_e3fp.append(e3fp_ids.clone())
-            batch_atom_maps.append(atom_map)
-            batch_mask_positions.append(geo_mask_pos)
-
-            atom_mask = (masked_e3fp_ids[:, 0] != self.e3fp_pad_id).long() if masked_e3fp_ids.shape[
-                                                                                  0] > 0 else torch.zeros(0,
-                                                                                                          dtype=torch.long)
-            batch_atom_masks.append(atom_mask)
-
-        input_ids_padded = pad_sequence(batch_input_ids, batch_first=True, padding_value=self.motif_pad_id)
-        attention_mask = (input_ids_padded != self.motif_pad_id).long()
-        labels_padded = pad_sequence(batch_labels, batch_first=True, padding_value=-100)
-
-        e3fp_padded = pad_sequence(batch_e3fp_ids, batch_first=True, padding_value=self.e3fp_pad_id)
-        unmasked_e3fp_padded = pad_sequence(batch_unmasked_e3fp, batch_first=True, padding_value=self.e3fp_pad_id)
-        map_padded = pad_sequence(batch_atom_maps, batch_first=True, padding_value=-1)
-        atom_mask_padded = pad_sequence(batch_atom_masks, batch_first=True, padding_value=0)
-        mask_positions_padded = pad_sequence(batch_mask_positions, batch_first=True, padding_value=False)
-
-        safe_map = map_padded.clone()
-        safe_map[safe_map >= input_ids_padded.shape[1]] = -1
-
-        # 🚀 E3FP 壳层随机失活
-        if self.is_train:
-            batch_size = e3fp_padded.shape[0]
-            rand_probs = torch.rand(batch_size)
-            mask_l3 = rand_probs < 0.15
-            if mask_l3.any(): e3fp_padded[mask_l3, :, 3] = self.e3fp_pad_id
-            mask_l2 = rand_probs < 0.05
-            if mask_l2.any(): e3fp_padded[mask_l2, :, 2:] = self.e3fp_pad_id
-
-        return {
-            "input_ids": input_ids_padded,
-            "attention_mask": attention_mask,
-            "labels": labels_padded,
-            "e3fp_ids": e3fp_padded,
-            "unmasked_e3fp_ids": unmasked_e3fp_padded,
-            "atom_attention_mask": atom_mask_padded,
-            "atom_to_motif_map": safe_map,
-            "mask_positions": mask_positions_padded
-        }
-
-
-# ==========================================
-# 4. Phase 2 跨模态大一统 Collator (包含四大任务)
-# ==========================================
 class GSMATPhase2Collator(BaseGSMATCollator):
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         valid_batch = [item for item in batch if item is not None]

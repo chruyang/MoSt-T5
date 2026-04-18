@@ -1,415 +1,519 @@
 import torch
-import torch.nn as nn
-import numpy as np
-import os
+import shutil
+import glob
+import json
+import lmdb
 import pickle
-import pandas as pd
+import os
+import re
+import csv
+import logging
+from tqdm import tqdm
 from argparse import ArgumentParser
-from transformers import Trainer, TrainingArguments, set_seed, EarlyStoppingCallback
-from transformers.modeling_outputs import SequenceClassifierOutput
-from peft import get_peft_model, LoraConfig
-from sklearn.metrics import roc_auc_score, mean_squared_error
-from rdkit import Chem
+from torch.utils.data import DataLoader, Dataset
+from torch.nn.utils.rnn import pad_sequence
+from transformers import AutoConfig, get_linear_schedule_with_warmup, set_seed
+import numpy as np
+from sklearn.metrics import mean_absolute_error
+import collections
 
+# 引入原生 DDP 组件
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import torch.multiprocessing as mp
+
+from model.configuration import MoStT5Config
 from model.modeling import MoStT5ForConditionalGeneration
+from tokenization.text_tokenizer import TextTokenizer
 from tokenization.motif_tokenizer import MotifTokenizer
 from tokenization.e3fp_tokenizer import E3FPTokenizer
-from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Dataset
+
+torch.backends.cudnn.benchmark = True
+logger = logging.getLogger(__name__)
+MoStT5ForConditionalGeneration.config_class = MoStT5Config
+
 
 # ==========================================
-# 🌍 1. MoleculeNet 全局任务注册表 (精简与更新版)
+# 1. 专为 Mol2Text (属性预测) 打造的 Dataset
 # ==========================================
-MOLECULE_NET_CONFIG = {
-    # --- 您专属的数据集 ---
-    "estrogen": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["alpha", "beta"]},
-    "metstab": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["high", "low"]},
-    
-    # --- 分类任务 (Classification) ---
-    "bbbp": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["p_np"]},
-    "bace": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["Class"]},
-    "clintox": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["FDA_APPROVED", "CT_TOX"]}, 
-    "sider": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ['Hepatobiliary disorders', 'Metabolism and nutrition disorders', 'Product issues', 'Eye disorders', 'Investigations', 'Musculoskeletal and connective tissue disorders', 'Gastrointestinal disorders', 'Social circumstances', 'Immune system disorders', 'Reproductive system and breast disorders', 'Neoplasms benign, malignant and unspecified (incl cysts and polyps)', 'General disorders and administration site conditions', 'Endocrine disorders', 'Surgical and medical procedures', 'Vascular disorders', 'Blood and lymphatic system disorders', 'Skin and subcutaneous tissue disorders', 'Congenital, familial and genetic disorders', 'Infections and infestations', 'Respiratory, thoracic and mediastinal disorders', 'Psychiatric disorders', 'Renal and urinary disorders', 'Pregnancy, puerperium and perinatal conditions', 'Ear and labyrinth disorders', 'Cardiac disorders', 'Nervous system disorders', 'Injury, poisoning and procedural complications']},
-    
-    # --- 毒性预测双雄 ---
-    "tox21": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ['NR-AR', 'NR-AR-LBD', 'NR-AhR', 'NR-Aromatase', 'NR-ER', 'NR-ER-LBD', 'NR-PPAR-gamma', 'SR-ARE', 'SR-ATAD5', 'SR-HSE', 'SR-MMP', 'SR-p53']},
-    "toxcast": {"task_type": "classification", "smiles_col": "smiles", "target_cols": "AUTO"}, # 🌟 核心：使用 AUTO 自动解析 617 个任务
+class GenerativeHybridDataset(Dataset):
+    def __init__(self, json_path, lmdb_path, text_tokenizer, motif_tokenizer, e3fp_tokenizer, target_property="all",
+                 is_eval=False):
+        self.text_tokenizer = text_tokenizer
+        self.motif_tokenizer = motif_tokenizer
+        self.e3fp_tokenizer = e3fp_tokenizer
+        self.e3fp_width = e3fp_tokenizer.fp_level + 1
+        self.e3fp_pad_id = self.e3fp_tokenizer.padding_idx
+        self.lmdb_path = lmdb_path
+        self.target_property = target_property.lower()
+        self.env = None
+        self.is_eval = is_eval
 
-    # --- 其他备用任务 ---
-    "hiv": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ["HIV_active"]},
-    "muv": {"task_type": "classification", "smiles_col": "smiles", "target_cols": ['MUV-466', 'MUV-548', 'MUV-600', 'MUV-644', 'MUV-652', 'MUV-689', 'MUV-692', 'MUV-712', 'MUV-713', 'MUV-733', 'MUV-737', 'MUV-810', 'MUV-832', 'MUV-846', 'MUV-852', 'MUV-858', 'MUV-859']},
-    "esol": {"task_type": "regression", "smiles_col": "smiles", "target_cols": ["measured log solubility in mols per litre"]},
-    "freesolv": {"task_type": "regression", "smiles_col": "smiles", "target_cols": ["expt"]},
-    "lipophilicity": {"task_type": "regression", "smiles_col": "smiles", "target_cols": ["exp"]},
-}
+        if int(os.environ.get("LOCAL_RANK", -1)) in [-1, 0]:
+            logger.info(f"📂 加载 JSON: {os.path.basename(json_path)} | 训练属性过滤: {target_property}")
 
-# ==========================================
-# 🚀 2. 原子级到 Motif 级映射
-# ==========================================
-def generate_atom_to_motif_map_online(smiles, motif_ids):
-    from model.CAMT5.representation import linearize
+        with open(json_path, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
 
-    mol = Chem.MolFromSmiles(smiles)
-    if not mol: return []
-    try:
-        Chem.Kekulize(mol)
-        smi_kekule = Chem.MolToSmiles(mol, kekuleSmiles=True)
-    except:
-        smi_kekule = smiles
+        self.qa_data = []
+        for item in raw_data:
+            # 🚀 动态适配 PubChem 的任务字段
+            task_name = str(item.get("Task", "Unknown")).lower()
+            if self.target_property == "all" or self.target_property in task_name:
+                self.qa_data.append(item)
 
-    full_mapping = []
-    atom_offset = 0
-    sub_mols = smi_kekule.split(".")
-    for sub_smi in sub_mols:
-        try:
-            _, _, mapping = linearize(sub_smi)
-            for frag_indices in mapping:
-                full_mapping.append([idx + atom_offset for idx in frag_indices])
-            m_tmp = Chem.MolFromSmiles(sub_smi)
-            if m_tmp: atom_offset += m_tmp.GetNumAtoms()
-        except: pass
+        self.length = len(self.qa_data)
 
-    num_atoms = mol.GetNumAtoms()
-    atom_to_motif_list = [0] * num_atoms  
-    
-    for motif_idx, atom_indices in enumerate(full_mapping):
-        token_idx = motif_idx + 1  
-        if token_idx >= len(motif_ids): break
-        for a_idx in atom_indices:
-            if a_idx < num_atoms: atom_to_motif_list[a_idx] = token_idx
-    return atom_to_motif_list
+        if int(os.environ.get("LOCAL_RANK", -1)) in [-1, 0]:
+            logger.info(f"✅ 过滤完毕，[{target_property}] 任务共提取出 {self.length} 条纯净数据！")
 
-# ==========================================
-# 🚀 3. 多任务属性预测器
-# ==========================================
-class MoStT5PropertyPredictor(nn.Module):
-    def __init__(self, encoder, config, num_tasks, task_type):
-        super().__init__()
-        self.encoder = encoder
-        self.config = config
-        self.num_tasks = num_tasks
-        self.task_type = task_type
-        
-        hidden_size = self.config.d_model
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_size, num_tasks)
-        )
-        
-    def forward(self, input_ids, attention_mask, e3fp_ids, atom_to_motif_map, atom_attention_mask, labels=None, **kwargs):
-        encoder_outputs = self.encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            e3fp_ids=e3fp_ids,
-            atom_to_motif_map=atom_to_motif_map,
-            atom_attention_mask=atom_attention_mask,
-            return_dict=True
-        )
-        hidden_states = encoder_outputs.last_hidden_state 
-        
-        input_mask_expanded = attention_mask.unsqueeze(-1).expand(hidden_states.size()).float()
-        sum_embeddings = torch.sum(hidden_states * input_mask_expanded, 1)
-        sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-        pooled_output = sum_embeddings / sum_mask
-        
-        logits = self.classifier(pooled_output)
-        
-        loss = None
-        if labels is not None:
-            valid_mask = (labels != -100.0).float()
-            safe_labels = labels.clone()
-            safe_labels[labels == -100.0] = 0.0
-            
-            if self.task_type == "classification":
-                loss_fct = nn.BCEWithLogitsLoss(reduction='none')
-            else:
-                loss_fct = nn.MSELoss(reduction='none')
-                
-            loss_matrix = loss_fct(logits, safe_labels)
-            loss = (loss_matrix * valid_mask).sum() / torch.clamp(valid_mask.sum(), min=1e-9)
-                
-        return SequenceClassifierOutput(loss=loss, logits=logits)
-
-SPLIT_TO_ID = {'train': 0, 'val': 1, 'test': 2, 'validation': 1}
-
-# ==========================================
-# 🚀 4. Dataset (含全局特征缓存与 AUTO 自愈机制)
-# ==========================================
-class MoleculeNetDataset(Dataset):
-    def __init__(self, data_dir, dataset_name, split_name, motif_tokenizer, e3fp_tokenizer, split_type="scaffold", seed=42):
-        self.data = []
-        
-        config = MOLECULE_NET_CONFIG[dataset_name]
-        smiles_col = config["smiles_col"]
-        target_cols = config["target_cols"]
-        self.task_type = config["task_type"]
-        
-        csv_path = f"{data_dir}/{dataset_name}/{dataset_name}.csv"
-        global_cache_path = f"{data_dir}/{dataset_name}_global_feature_cache.pt"
-
-        # 🌟 核心：防御型 AUTO 解析机制
-        if target_cols == "AUTO":
-            temp_df = pd.read_csv(csv_path, nrows=0, sep=None, engine='python')
-            target_cols = [col.strip() for col in temp_df.columns if col.strip() != smiles_col]
-            config["target_cols"] = target_cols 
-            if split_name == "train":
-                print(f"🔍 [{dataset_name}] AUTO: Automatically detected {len(target_cols)} task columns.")
-
-        if os.path.exists(global_cache_path):
-            if split_name == "train": 
-                print(f"📦 Loading GLOBAL feature cache from {global_cache_path}...")
-            with open(global_cache_path, 'rb') as f:
-                global_features = pickle.load(f)
-        else:
-            print(f"⏳ Global cache not found. Building for the ENTIRE [{dataset_name}] dataset (This only runs ONCE)...")
-            df_full = pd.read_csv(csv_path, sep=None, engine='python')
-            df_full.columns = [col.strip() for col in df_full.columns]
-            df_full = df_full.dropna(subset=[smiles_col])
-            
-            global_features = {}
-            unique_smiles = df_full[smiles_col].unique()
-            print(f"⚙️ Extracting 3D/2D features for {len(unique_smiles)} unique molecules...")
-            
-            for smiles in unique_smiles:
+        temp_env = lmdb.open(lmdb_path, readonly=True, lock=False, subdir=os.path.isdir(lmdb_path))
+        self.cid_to_key = {}
+        with temp_env.begin() as txn:
+            for key, value in txn.cursor():
+                if key == b'__len__': continue
                 try:
-                    motif_ids = motif_tokenizer.tokenizer.encode(smiles, add_special_tokens=True)
-                    if len(motif_ids) > 400: continue
-                    
-                    atom_map_list = generate_atom_to_motif_map_online(smiles, motif_ids)
-                    
-                    if hasattr(e3fp_tokenizer, 'from_smiles'): e3fp_out = e3fp_tokenizer.from_smiles(smiles)
-                    elif hasattr(e3fp_tokenizer, 'encode'): e3fp_out = e3fp_tokenizer.encode(smiles)
-                    else: e3fp_out = e3fp_tokenizer(smiles)
-                        
-                    e3fp_tensor = torch.tensor(e3fp_out['input_ids'] if isinstance(e3fp_out, dict) else e3fp_out, dtype=torch.long).clone().detach()
-                    if e3fp_tensor.dim() > 2: e3fp_tensor = e3fp_tensor.squeeze(0)
-
-                    num_e3fp_atoms = e3fp_tensor.shape[0]
-                    atom_map_list = atom_map_list[:num_e3fp_atoms]
-                    if len(atom_map_list) < num_e3fp_atoms:
-                        atom_map_list.extend([0] * (num_e3fp_atoms - len(atom_map_list)))
-                    atom_mask = (e3fp_tensor[:, 0] != e3fp_tokenizer.padding_idx).long().tolist()
-
-                    global_features[smiles] = {
-                        'motif_input_ids': torch.tensor(motif_ids, dtype=torch.long),
-                        'e3fp_input_ids': e3fp_tensor,
-                        'atom_to_motif_map': torch.tensor(atom_map_list, dtype=torch.long),
-                        'atom_attention_mask': torch.tensor(atom_mask, dtype=torch.long)
-                    }
-                except Exception:
+                    raw_cid = str(pickle.loads(value).get('cid', ''))
+                    numbers = re.findall(r'\d+', raw_cid)
+                    if numbers: self.cid_to_key[numbers[-1]] = key
+                except:
                     continue
-                    
-            os.makedirs(os.path.dirname(global_cache_path), exist_ok=True)
-            with open(global_cache_path, 'wb') as f:
-                pickle.dump(global_features, f)
-            print(f"✅ Global cache built successfully with {len(global_features)} valid molecules!")
+        temp_env.close()
 
-        if split_type == "scaffold":
-            split_path = f"{data_dir}/{dataset_name}/splits/scaffold-0.npy" if os.path.exists(f"{data_dir}/{dataset_name}/splits/scaffold-0.npy") else f"{data_dir}/{dataset_name}/splits/scaffold.npy"
-        else:
-            split_path = f"{data_dir}/{dataset_name}/splits/random-0.npy" if os.path.exists(f"{data_dir}/{dataset_name}/splits/random-0.npy") else f"{data_dir}/{dataset_name}/splits/random_seed{seed}.npy"
+    def __len__(self):
+        return self.length
 
-        if not os.path.exists(split_path):
-            raise FileNotFoundError(f"❌ Split index missing: {split_path}")
+    def __getitem__(self, idx):
+        if self.env is None:
+            self.env = lmdb.open(self.lmdb_path, readonly=True, lock=False, readahead=False, meminit=False,
+                                 subdir=os.path.isdir(self.lmdb_path))
 
-        df = pd.read_csv(csv_path, sep=None, engine='python')
-        df.columns = [col.strip() for col in df.columns]
-        
-        split_key = "val" if split_name == "validation" else split_name
-        use_idxs = np.load(split_path, allow_pickle=True)[SPLIT_TO_ID[split_key]]
-        df_split = df.iloc[use_idxs].dropna(subset=[smiles_col])
-        
-        target_smiles = df_split[smiles_col].tolist()
-        target_labels = np.nan_to_num(df_split[target_cols].values, nan=-100.0)
+        for attempt in range(self.length):
+            try:
+                item = self.qa_data[idx]
+                base_prompt = item.get("Instruction") or item.get("instruction") or item.get("prompt")
+                task_tag = item.get("Task") or "Property Prediction"
+                prompt = f"[{task_tag}]: {base_prompt}"
 
-        for i, smiles in enumerate(target_smiles):
-            if smiles in global_features:
-                feat_dict = global_features[smiles].copy() 
-                feat_dict['smiles'] = smiles
-                feat_dict['label'] = torch.tensor(target_labels[i], dtype=torch.float)
-                self.data.append(feat_dict)
-                
-        if split_name == "train":
-            print(f"✅ Successfully loaded {len(self.data)} molecules for [{split_name}] from global cache using {split_type} split.")
+                # 🚀 属性预测任务的目标是文本（数值）
+                target_text = str(item.get("Output") or item.get("output"))
+                real_id = item.get("id")
 
-    def __len__(self): return len(self.data)
-    def __getitem__(self, idx): return self.data[idx]
+                numbers = re.findall(r'\d+', str(real_id))
+                if not numbers: raise ValueError("无法找到分子的数字ID")
+                clean_cid = numbers[-1]
 
-class PropertyCollator:
-    def __init__(self, padding_value=0, e3fp_pad=-1):
-        self.pad = padding_value
-        self.e3fp_pad = e3fp_pad
+                lmdb_key = self.cid_to_key.get(clean_cid)
+                if not lmdb_key: raise ValueError(f"找不到CID {clean_cid} 的LMDB映射")
+
+                with self.env.begin() as txn:
+                    db_entry = pickle.loads(txn.get(lmdb_key))
+
+                # 提取去过立体化的 2D 骨架用于生成序列
+                smiles = db_entry.get('smiles', db_entry.get('smi', ''))
+
+                # ==========================================
+                # Encoder 输入: [Text Prompt] + [Motif Molecule]
+                # ==========================================
+                text_ids = self.text_tokenizer.tokenizer(
+                    prompt, truncation=True, max_length=128, return_tensors="pt"
+                )['input_ids'].squeeze(0)
+
+                # 剥离 </s> 以打通跨模态注意力
+                if text_ids[-1] == self.text_tokenizer.tokenizer.eos_token_id:
+                    text_ids = text_ids[:-1]
+                len_t = len(text_ids)
+
+                motif_result = self.motif_tokenizer.encode(smiles, return_tensors='pt', padding=False,
+                                                           return_mapping=True)
+                motif_ids, motif_mapping = motif_result if isinstance(motif_result, tuple) else (motif_result, [])
+                motif_ids = motif_ids.squeeze(0) if motif_ids.dim() > 1 else motif_ids
+                len_m = len(motif_ids)
+
+                if len_t + len_m > 768:
+                    motif_ids = motif_ids[:768 - len_t]
+                    motif_ids[-1] = self.motif_tokenizer.eom_id
+                    len_m = len(motif_ids)
+
+                input_ids = torch.cat([
+                    text_ids,
+                    motif_ids,
+                    torch.tensor([self.text_tokenizer.tokenizer.eos_token_id], dtype=torch.long)
+                ])
+
+                # Decoder 目标: [属性数值文本]
+                target_ids = self.text_tokenizer.tokenizer(
+                    target_text, truncation=True, max_length=36, return_tensors="pt"
+                )['input_ids'].squeeze(0)
+
+                # ==========================================
+                # 对齐 3D 坐标
+                # ==========================================
+                e3fp_ids = torch.tensor(db_entry.get('e3fp'), dtype=torch.long)
+                if e3fp_ids.shape[1] < self.e3fp_width:
+                    e3fp_ids = torch.cat([e3fp_ids,
+                                          torch.full((e3fp_ids.shape[0], self.e3fp_width - e3fp_ids.shape[1]),
+                                                     self.e3fp_pad_id, dtype=torch.long)], dim=1)
+
+                num_atoms = e3fp_ids.shape[0]
+                atom_to_motif_map = torch.full((num_atoms,), -1, dtype=torch.long)
+                seq_len = len(input_ids)
+
+                for motif_idx, atom_indices in enumerate(db_entry.get('atom_mapping', [])):
+                    if motif_idx < len(motif_mapping):
+                        real_token_idx = motif_mapping[motif_idx]
+                        if real_token_idx < len_m - 1 and real_token_idx + len_t < seq_len:
+                            if isinstance(atom_indices, int): atom_indices = [atom_indices]
+                            for atom_idx in atom_indices:
+                                if atom_idx < num_atoms:
+                                    atom_to_motif_map[atom_idx] = real_token_idx + len_t
+
+                safe_map = atom_to_motif_map.clone()
+                safe_map[safe_map >= seq_len] = -1
+
+                # 对齐补丁：前面 Text Token 的部分没有 3D 特征，全部填充 pad
+                dummy_e3fp = torch.full((len_t, self.e3fp_width), self.e3fp_pad_id, dtype=torch.long)
+                final_e3fp = torch.cat([dummy_e3fp, e3fp_ids])
+
+                dummy_map = torch.full((len_t,), -1, dtype=torch.long)
+                final_map = torch.cat([dummy_map, safe_map])
+
+                return {
+                    "input_ids": input_ids,
+                    "labels": target_ids,
+                    "e3fp_ids": final_e3fp,
+                    "atom_to_motif_map": final_map,
+                    "task_name": task_tag  # 🚀 动态传入 Task Name，供评估使用
+                }
+            except Exception as e:
+                idx = (idx + 1) % self.length
+
+        raise RuntimeError("数据集彻底损坏或过滤后无可用数据！")
+
+
+class GenerativeCollator:
+    def __init__(self, text_pad_id, e3fp_pad_id):
+        self.text_pad_id = text_pad_id
+        self.e3fp_pad_id = e3fp_pad_id
 
     def __call__(self, batch):
-        motif_ids = [item['motif_input_ids'] for item in batch]
-        e3fp_ids = [item['e3fp_input_ids'] for item in batch]
-        atom_maps = [item['atom_to_motif_map'] for item in batch]
-        atom_masks = [item['atom_attention_mask'] for item in batch]
-        labels = torch.stack([item['label'] for item in batch])
+        original_size = len(batch)
+        valid = [f for f in batch if f is not None]
+        if not valid: return {}
 
-        batch_motif = pad_sequence(motif_ids, batch_first=True, padding_value=self.pad)
-        batch_mask = (batch_motif != self.pad).long()
-        batch_e3fp = pad_sequence(e3fp_ids, batch_first=True, padding_value=self.e3fp_pad)
-        batch_map = pad_sequence(atom_maps, batch_first=True, padding_value=0)
-        batch_atom_mask = pad_sequence(atom_masks, batch_first=True, padding_value=0)
+        while len(valid) < original_size:
+            valid.append(valid[0])
+
+        input_ids = pad_sequence([f['input_ids'] for f in valid], batch_first=True, padding_value=self.text_pad_id)
+        labels = pad_sequence([f['labels'] for f in valid], batch_first=True, padding_value=-100)
+        e3fp_ids = pad_sequence([f['e3fp_ids'] for f in valid], batch_first=True, padding_value=self.e3fp_pad_id)
+        atom_to_motif_map = pad_sequence([f['atom_to_motif_map'] for f in valid], batch_first=True, padding_value=-1)
+
+        safe_map = atom_to_motif_map.clone()
+        safe_map[safe_map >= input_ids.shape[1]] = -1
+
+        # 🚀 提取出用于指标分类的 Task Name
+        task_names = [f['task_name'] for f in valid]
 
         return {
-            "input_ids": batch_motif,
-            "attention_mask": batch_mask,
-            "e3fp_ids": batch_e3fp,
-            "atom_to_motif_map": batch_map,
-            "atom_attention_mask": batch_atom_mask,
-            "labels": labels
+            "input_ids": input_ids,
+            "attention_mask": (input_ids != self.text_pad_id).long(),
+            "labels": labels,
+            "e3fp_ids": e3fp_ids,
+            "atom_attention_mask": (e3fp_ids[:, :, 0] != self.e3fp_pad_id).long(),
+            "atom_to_motif_map": safe_map,
+            "task_names": task_names
         }
 
-# ==========================================
-# 🚀 5. 对齐 Molformer 的宏平均评估
-# ==========================================
-def compute_metrics(eval_pred, task_type="classification"):
-    logits, labels = eval_pred
-    valid_mask = (labels != -100.0)
-    
-    if task_type == "classification":
-        probs = 1.0 / (1.0 + np.exp(-logits))
-        aucs = []
-        
-        for i in range(labels.shape[1]):
-            task_labels = labels[:, i]
-            task_probs = probs[:, i]
-            task_mask = valid_mask[:, i]
-            
-            valid_task_labels = task_labels[task_mask]
-            valid_task_probs = task_probs[task_mask]
-            
-            if len(np.unique(valid_task_labels)) > 1:
-                auc = roc_auc_score(valid_task_labels, valid_task_probs)
-                aucs.append(auc)
-                
-        return {"roc_auc": np.mean(aucs) if aucs else 0.5}
-        
-    else:
-        rmses = []
-        for i in range(labels.shape[1]):
-            task_labels = labels[:, i]
-            task_logits = logits[:, i]
-            task_mask = valid_mask[:, i]
-            
-            valid_task_labels = task_labels[task_mask]
-            valid_task_logits = task_logits[task_mask]
-            
-            if len(valid_task_labels) > 0:
-                rmses.append(np.sqrt(mean_squared_error(valid_task_labels, valid_task_logits)))
-                
-        return {"rmse": np.mean(rmses) if rmses else 0.0}
+
+def extract_float(text):
+    text = text.replace(" ", "")
+    # 🚀 强大的正则：兼容整数、小数、负数、科学计数法
+    matches = re.findall(r'-?\d+\.?\d*(?:[eE][-+]?\d+)?', text)
+    if matches:
+        try:
+            # 🚀 对齐 3DMOLT5：提取第一个匹配到的数值（防止后面的单位数字干扰）
+            return float(matches[0])
+        except ValueError:
+            return None
+    return None
+
+
+def pad_and_gather(tensor, pad_value, device):
+    if not dist.is_initialized(): return tensor
+    local_max = torch.tensor([tensor.shape[1]], dtype=torch.long, device=device)
+    global_max = local_max.clone()
+    dist.all_reduce(global_max, op=dist.ReduceOp.MAX)
+    max_len = global_max.item()
+
+    padded = torch.full((tensor.shape[0], max_len), pad_value, dtype=tensor.dtype, device=device)
+    padded[:, :tensor.shape[1]] = tensor
+
+    gathered = [torch.zeros_like(padded) for _ in range(dist.get_world_size())]
+    dist.all_gather(gathered, padded)
+    return torch.cat(gathered, dim=0)
+
 
 # ==========================================
-# 🚀 6. 主函数流程
+# 🚀 核心评估：动态支持 PubChem 各项属性指标
 # ==========================================
+def evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, output_dir, tag="",
+                      is_main_process=True):
+    if is_main_process:
+        logger.info(f"\n⏳ 正在进行 {tag} 评估 (Global Step: {global_step})...")
+
+    model.eval()
+    eval_loss_total, actual_val_steps = 0.0, 0
+    prop_metrics = collections.defaultdict(lambda: {"y_true": [], "y_pred": [], "total_count": 0})
+
+    current_beams = 5 if tag == "test_final" else 1
+    max_eval_steps = float('inf')
+    max_gen_length = 36
+    example_printed = False
+    unwrapped_model = model.module if hasattr(model, "module") else model
+
+    with torch.no_grad():
+        for val_step, val_batch in enumerate(tqdm(eval_loader, desc=f"Eval {tag}", disable=not is_main_process)):
+            if actual_val_steps >= max_eval_steps: break
+
+            # 🚀 取出非 Tensor 标签
+            task_names_list = val_batch.pop("task_names")
+            val_batch = {k: v.to(device) for k, v in val_batch.items()}
+
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                val_outputs = model(**val_batch)
+                eval_loss_total += val_outputs.loss.item()
+
+                encoder_outputs = unwrapped_model.get_encoder()(
+                    input_ids=val_batch["input_ids"], attention_mask=val_batch["attention_mask"],
+                    e3fp_ids=val_batch["e3fp_ids"], atom_to_motif_map=val_batch["atom_to_motif_map"],
+                    atom_attention_mask=val_batch["atom_attention_mask"]
+                )
+
+                generated_ids = unwrapped_model.generate(
+                    attention_mask=val_batch["attention_mask"], encoder_outputs=encoder_outputs,
+                    max_length=max_gen_length, num_beams=current_beams, early_stopping=True, do_sample=False
+                )
+
+            # Gather 回主卡
+            generated_ids = pad_and_gather(generated_ids, text_tokenizer.tokenizer.pad_token_id, device)
+            labels_ids = pad_and_gather(val_batch["labels"], -100, device)
+            gathered_input_ids = pad_and_gather(val_batch["input_ids"], text_tokenizer.tokenizer.pad_token_id, device)
+
+            # 🚀 跨卡 Gather 字符串列表
+            if dist.is_initialized():
+                gathered_tasks = [None for _ in range(dist.get_world_size())]
+                dist.all_gather_object(gathered_tasks, task_names_list)
+                gathered_tasks = [t for sublist in gathered_tasks for t in sublist]
+            else:
+                gathered_tasks = task_names_list
+
+            if is_main_process:
+                # 🚀 解码均为 Text Tokenizer，因为输出和标签全是数字/自然语言文本
+                preds = text_tokenizer.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+                labels = torch.where(labels_ids != -100, labels_ids, text_tokenizer.tokenizer.pad_token_id)
+                refs = text_tokenizer.tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+                if not example_printed:
+                    demo_prompt_str = text_tokenizer.tokenizer.decode(gathered_input_ids[0], skip_special_tokens=False)
+                    logger.info("\n" + "✨" * 25)
+                    logger.info(f"👀 [实时生成样例观测 - {tag}]")
+                    logger.info(f"🔹 【输入 序列】: {demo_prompt_str[:150]}... (截断)")
+                    logger.info(f"🔸 【真实 数值】: {refs[0]}")
+                    logger.info(f"🤖 【模型 预测】: {preds[0]}")
+                    logger.info("✨" * 25 + "\n")
+                    example_printed = True
+
+                # 动态分配 MAE 统计
+                for p_str, r_str, t_name in zip(preds, refs, gathered_tasks):
+                    p_val, r_val = extract_float(p_str), extract_float(r_str)
+
+                    prop_name = t_name if t_name else "Unknown_Property"
+                    prop_metrics[prop_name]["total_count"] += 1
+
+                    if r_val is not None and p_val is not None:
+                        # 🚀 解除了 QM9 那里 (-20 < p_val < 20) 的硬编码限制！
+                        # 现在支持数百(如分子量)甚至更大的合法数值区间
+                        if abs(p_val) < 1e6:
+                            prop_metrics[prop_name]["y_true"].append(r_val)
+                            prop_metrics[prop_name]["y_pred"].append(p_val)
+
+            actual_val_steps += 1
+
+    if is_main_process:
+        avg_val_loss = eval_loss_total / max(actual_val_steps, 1)
+        logger.info(f"✅ [{tag}] 属性预测 Eval Loss: {avg_val_loss:.4f}")
+        eval_result_str = f"Tag: {tag} | Step: {global_step} | Eval Loss: {avg_val_loss:.4f}\n"
+
+        for prop, data in prop_metrics.items():
+            y_t, y_p = data["y_true"], data["y_pred"]
+            total_samples = data["total_count"]
+            valid_samples = len(y_t)
+            valid_ratio = (valid_samples / total_samples * 100) if total_samples > 0 else 0.0
+
+            if valid_samples > 0:
+                mae = mean_absolute_error(y_t, y_p)
+                log_msg = f"   🎯 [{prop}] MAE: {mae:.4f} | Valid Format: {valid_ratio:.1f}% ({valid_samples}/{total_samples})"
+            else:
+                log_msg = f"   ❌ [{prop}] MAE: N/A | Valid Format: 0.0% (0/{total_samples})"
+
+            logger.info(log_msg)
+            eval_result_str += log_msg + "\n"
+
+        with open(os.path.join(output_dir, "eval_results.txt"), "a", encoding="utf-8") as f:
+            f.write(eval_result_str + "-" * 40 + "\n")
+
+        # ... (保存模型与 TSV 日志的代码保持不变) ...
+        save_path = os.path.join(output_dir, f"checkpoint-{tag}-{global_step}")
+        os.makedirs(save_path, exist_ok=True)
+        unwrapped_model.save_pretrained(save_path, safe_serialization=False)
+        logger.info(f"💾 模型已保存至: {save_path}")
+
+    model.train()
+
+
 def main():
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+
     parser = ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default="./datasets")
-    parser.add_argument("--dataset_name", type=str, required=True)
+    parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--split_type", type=str, default="scaffold", choices=["scaffold", "random"])
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--epochs", type=int, default=500)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--target_property", type=str, default="all")
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--warmup_steps", type=int, default=10000)
+    parser.add_argument("--total_steps", type=int, default=250000)
+    parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     args = parser.parse_args()
+    set_seed(42)
 
-    set_seed(args.seed)
-    
-    # 🌟 核心：在模型初始化前拦截并解析 AUTO
-    dataset_cfg = MOLECULE_NET_CONFIG[args.dataset_name]
-    if dataset_cfg["target_cols"] == "AUTO":
-        csv_path = f"{args.data_dir}/{args.dataset_name}/{args.dataset_name}.csv"
-        temp_df = pd.read_csv(csv_path, nrows=0, sep=None, engine='python')
-        dataset_cfg["target_cols"] = [col.strip() for col in temp_df.columns if col.strip() != dataset_cfg["smiles_col"]]
-        
-    TASK_TYPE = dataset_cfg["task_type"]
-    NUM_TASKS = len(dataset_cfg["target_cols"])
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    is_main_process = (local_rank in [-1, 0])
 
-    print(f"\n🚀 启动任务: {args.dataset_name.upper()} | 类型: {TASK_TYPE} | 标签数量: {NUM_TASKS}")
-    print(f"Loading base model from {args.model_path}...")
-    
-    from transformers import AutoConfig
-    from model.configuration import MoStT5Config
+    if local_rank != -1:
+        dist.init_process_group(backend="nccl")
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    output_dir = f"./checkpoints/gen_prop_{args.target_property}_PubChem_BF16"
+    if is_main_process:
+        os.makedirs(output_dir, exist_ok=True)
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
+                            handlers=[logging.FileHandler(os.path.join(output_dir, "training_property.log"),
+                                                          encoding='utf-8'), logging.StreamHandler()])
+
+    per_device_batch_size = 16  # 根据 3090 显存微调
+    num_train_epochs = 70
+    eval_steps = 10000
+
     AutoConfig.register("most-t5", MoStT5Config)
-    
-    base_model = MoStT5ForConditionalGeneration.from_pretrained(args.model_path)
+    text_tokenizer = TextTokenizer("google/t5-v1_1-base", max_len=768)
 
-    peft_config = LoraConfig(
-        inference_mode=False,
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.1,
-        target_modules=["q", "k", "v", "o"] 
-    )
-    encoder_with_lora = get_peft_model(base_model.encoder, peft_config)
-    
-    model = MoStT5PropertyPredictor(encoder=encoder_with_lora, config=base_model.config, num_tasks=NUM_TASKS, task_type=TASK_TYPE)
-    
-    for param in model.classifier.parameters():
-        param.requires_grad = True
+    motif_tokenizer = MotifTokenizer(vocab_file="asset/mol_vocabs/vocab_phase2_25k.txt",
+                                     base_tokenizer=text_tokenizer.tokenizer, max_len=768)
+    e3fp_tokenizer = E3FPTokenizer(fp_level=3, fp_bits=4096)
 
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"✅ Trainable params (Encoder LoRA + Head): {trainable_params:,}")
+    if is_main_process: logger.info("⚙️ 正在加载模型 (Mol2Text)...")
 
-    motif_tokenizer = MotifTokenizer(vocab_file="asset/mol_vocabs/my_dataset_vocab.txt", model_name="google/t5-v1_1-base")
-    e3fp_tokenizer = E3FPTokenizer(fp_level=4, fp_bits=4096)
+    config = MoStT5Config.from_pretrained(args.model_path, e3fp_num_levels=4, e3fp_vocab_size=4096)
+    model = MoStT5ForConditionalGeneration.from_pretrained(args.model_path, config=config, ignore_mismatched_sizes=True)
+    model.resize_token_embeddings(len(motif_tokenizer.tokenizer))
+    model.to(device)
 
-    train_dataset = MoleculeNetDataset(args.data_dir, args.dataset_name, "train", motif_tokenizer, e3fp_tokenizer, split_type=args.split_type, seed=args.seed)
-    val_dataset = MoleculeNetDataset(args.data_dir, args.dataset_name, "val", motif_tokenizer, e3fp_tokenizer, split_type=args.split_type, seed=args.seed)
-    test_dataset = MoleculeNetDataset(args.data_dir, args.dataset_name, "test", motif_tokenizer, e3fp_tokenizer, split_type=args.split_type, seed=args.seed)
-    
-    collator = PropertyCollator()
+    if local_rank != -1:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
 
-    training_args = TrainingArguments(
-        output_dir=f"./checkpoints/{args.dataset_name}_seed{args.seed}",
-        num_train_epochs=args.epochs,  
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size * 2,
-        learning_rate=args.lr,
-        
-        weight_decay=0.01,
-        warmup_ratio=0.1,
-        
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        metric_for_best_model="roc_auc" if TASK_TYPE == "classification" else "rmse",
-        greater_is_better=(TASK_TYPE == "classification"),
-        save_total_limit=1,
-        bf16=True,
-        report_to="none",
-        remove_unused_columns=False,
-        save_safetensors=False
-    )
+    # 实例化数据集
+    train_dataset = GenerativeHybridDataset(os.path.join(args.data_dir, "train/pubchem_properties.json"),
+                                            os.path.join(args.data_dir, "pubchem_final.lmdb"), text_tokenizer,
+                                            motif_tokenizer, e3fp_tokenizer, target_property=args.target_property)
+    eval_dataset = GenerativeHybridDataset(os.path.join(args.data_dir, "valid/pubchem_properties.json"),
+                                           os.path.join(args.data_dir, "pubchem_final.lmdb"), text_tokenizer,
+                                           motif_tokenizer, e3fp_tokenizer, target_property=args.target_property,
+                                           is_eval=True)
+    test_dataset = GenerativeHybridDataset(os.path.join(args.data_dir, "test/pubchem_properties.json"),
+                                           os.path.join(args.data_dir, "pubchem_final.lmdb"), text_tokenizer,
+                                           motif_tokenizer, e3fp_tokenizer, target_property=args.target_property,
+                                           is_eval=True)
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        data_collator=collator,
-        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, TASK_TYPE),
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=30)]
-    )
+    collator = GenerativeCollator(text_pad_id=text_tokenizer.tokenizer.pad_token_id,
+                                  e3fp_pad_id=e3fp_tokenizer.padding_idx)
 
-    print(f"🔥 Starting Fine-tuning for {args.dataset_name.upper()}...")
-    trainer.train()
+    train_sampler = DistributedSampler(train_dataset) if local_rank != -1 else None
+    val_sampler = DistributedSampler(eval_dataset, shuffle=False) if local_rank != -1 else None
+    test_sampler = DistributedSampler(test_dataset, shuffle=False) if local_rank != -1 else None
 
-    print(f"🧪 Evaluating on Blind Test Set...")
-    test_results = trainer.predict(test_dataset)
-    
-    print("\n" + "=" * 50)
-    print(f"✅ [FINAL RESULT] Dataset: {args.dataset_name.upper()} | Seed: {args.seed}")
-    if TASK_TYPE == "classification": print(f"✅ Test Macro-ROC-AUC: {test_results.metrics['test_roc_auc']:.4f}")
-    else: print(f"✅ Test Macro-RMSE: {test_results.metrics['test_rmse']:.4f}")
-    print("=" * 50 + "\n")
+    train_loader = DataLoader(train_dataset, batch_size=per_device_batch_size, shuffle=(train_sampler is None),
+                              sampler=train_sampler, collate_fn=collator, num_workers=4, pin_memory=True,
+                              persistent_workers=True)
+    eval_loader = DataLoader(eval_dataset, batch_size=per_device_batch_size * 2, shuffle=False, sampler=val_sampler,
+                             collate_fn=collator, num_workers=0, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=per_device_batch_size * 2, shuffle=False, sampler=test_sampler,
+                             collate_fn=collator, num_workers=0, pin_memory=True)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,
+                                                num_training_steps=args.total_steps)
+
+    if is_main_process:
+        logger.info("=" * 60)
+        logger.info(f"🚀 启动 PubChem 生成式属性预测微调")
+        logger.info("=" * 60)
+
+    global_step = 0
+    model.train()
+
+    for epoch in range(num_train_epochs):
+        if train_sampler: train_sampler.set_epoch(epoch)
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_train_epochs}", disable=not is_main_process,
+                            mininterval=2.0)
+
+        for step, batch in enumerate(progress_bar):
+            if global_step >= args.total_steps: break
+
+            # 🚀 训练前剥离自定义非 Tensor 参数
+            batch.pop("task_names", None)
+            batch = {k: v.to(device) for k, v in batch.items()}
+
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                outputs = model(**batch)
+                loss = outputs.loss / args.gradient_accumulation_steps
+
+            if torch.isnan(loss) or loss.item() * args.gradient_accumulation_steps > 50.0:
+                loss = sum(p.sum() for p in model.parameters() if p.requires_grad) * 0.0
+
+            loss.backward()
+
+            if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                global_step += 1
+
+                if is_main_process and global_step % 10 == 0:
+                    progress_bar.set_postfix({'loss': f"{loss.item() * args.gradient_accumulation_steps:.4f}",
+                                              'lr': f"{scheduler.get_last_lr()[0]:.2e}"})
+
+                if global_step % eval_steps == 0:
+                    evaluate_and_save(model, eval_loader, text_tokenizer, device, global_step, output_dir,
+                                      tag=f"step_{global_step}", is_main_process=is_main_process)
+
+        if global_step >= args.total_steps: break
+        if is_main_process: logger.info(f"🎉 Epoch {epoch + 1} 结束！")
+
+    if is_main_process: logger.info(f"🏁 训练完成！进行 Test 集全量预测...")
+    # 🚀 注意：最后评估传递的是 text_tokenizer，负责解出最终自然语言预测值
+    evaluate_and_save(model, test_loader, text_tokenizer, device, global_step, output_dir, tag="test_final",
+                      is_main_process=is_main_process)
+
 
 if __name__ == "__main__":
     main()

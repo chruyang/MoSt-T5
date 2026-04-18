@@ -163,7 +163,7 @@ class GenerativeHybridDataset(Dataset):
                 target_ids = self.text_tokenizer.tokenizer(
                     target_text,
                     truncation=True,
-                    max_length=16,
+                    max_length=36,
                     return_tensors="pt"
                 )['input_ids'].squeeze(0)
                 # ==========================================
@@ -284,7 +284,7 @@ def evaluate_and_save(model, eval_loader, motif_tokenizer, device, global_step, 
     current_beams = 5 if tag == "test_final" else 1
     max_eval_steps = float('inf')
 
-    max_gen_length = 16
+    max_gen_length = 36
     example_printed = False
     unwrapped_model = model.module if hasattr(model, "module") else model
 
@@ -347,6 +347,8 @@ def evaluate_and_save(model, eval_loader, motif_tokenizer, device, global_step, 
                         prop_name = 'HOMO'
                     elif 'lumo' in prompt_lower:
                         prop_name = 'LUMO'
+                    elif 'SCF' in prompt_lower:
+                        prop_name = 'SCF'
                     else:
                         prop_name = "Other"
 
@@ -464,7 +466,7 @@ def main():
         )
 
     per_device_batch_size = 64
-    num_train_epochs = 100
+    num_train_epochs = 70
     eval_steps = 100000
 
     AutoConfig.register("most-t5", MoStT5Config)
