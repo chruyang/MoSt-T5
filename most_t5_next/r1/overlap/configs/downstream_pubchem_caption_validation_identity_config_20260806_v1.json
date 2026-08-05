@@ -1,0 +1,66 @@
+{
+  "schema_version": "most-t5-r1/identity-collection-extraction-config/v1",
+  "extraction_id": "downstream-pubchem-caption-validation-identity-20260806-v1",
+  "contract_sha256": "c348834aa1a13c4d53db1977c16a9c2d445ef61a46295055d11ed1def94c9603",
+  "collection": {
+    "collection_id": "downstream-pubchem-caption-validation-identity-20260806-v1",
+    "dataset_id": "p2-pubchem-3d-captioning",
+    "release_id": "p2-pubchem-captioning-evidence-r0-v1",
+    "phase": "downstream",
+    "split": "validation",
+    "role": "downstream_validation",
+    "task_family": "molecule_captioning",
+    "source_identity_namespace": "pubchem_cid"
+  },
+  "source": {
+    "path": "/root/autodl-fs/most-t5-r1/sources/p2-pubchem-evidence-r0-v1/pubchem/valid/3d-pubchem.lmdb",
+    "format": "legacy_lmdb_pickle",
+    "expected_bytes": 4497408,
+    "expected_sha256": "2b8c285264c15403294d5d37e2356e2aad3115770191454779be1f9647c92030",
+    "format_options": {
+      "json_top_level": null,
+      "csv_dialect": null,
+      "parquet_batch_size": null,
+      "lmdb": {
+        "subdir": false,
+        "metadata_keys_permitted": [
+          "__len__"
+        ],
+        "metadata_keys_required": [],
+        "trusted_pickle_source_sha256": "2b8c285264c15403294d5d37e2356e2aad3115770191454779be1f9647c92030"
+      }
+    }
+  },
+  "identity": {
+    "normalization_contract_path": "../../contracts/pcqm4mv2_identity_normalization_contract.json",
+    "normalization_contract_sha256": "5f9be346294e08bf73d47c089a00be4c2f19d89612b5e4c09d0d7f5f6b23b044",
+    "normalizer_path": "../../gates/pcqm_identity_smoke.py",
+    "normalizer_sha256": "fd55ac5a519c2235cf3202814782b56ce674c032ace7948e0a36af4f91274abc",
+    "required_rdkit_version": "2024.03.5"
+  },
+  "mapping": {
+    "member_id": {
+      "source": "lmdb_key",
+      "field": null,
+      "prefix": "pubchem_cid:",
+      "crosscheck_field": "cid"
+    },
+    "smiles_field": "smiles",
+    "record_filter": null,
+    "text_identity": {
+      "status": "available",
+      "normalization": "unicode_nfkc_whitespace_v1",
+      "unit": {
+        "unit_name": "molecule_caption_decoder_target",
+        "semantic_role": "molecule_caption_decoder_target",
+        "serialization": "canonical_component_object_utf8_v1",
+        "components": [
+          {
+            "name": "target",
+            "field": "description"
+          }
+        ]
+      }
+    }
+  }
+}

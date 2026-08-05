@@ -1,0 +1,30 @@
+{
+  "accepted_input_roles": {
+    "p1": "p1_structure_train",
+    "p2": "p2_permitted_train_membership"
+  },
+  "admission_fields_fixed_false": [
+    "p1_training_admission",
+    "p2_training_admission",
+    "all_downstream_exclusion_proven",
+    "p1_p2_policy_compliance_proven"
+  ],
+  "output_filename": "p1_p2_candidate_overlap_fact_report.json",
+  "purpose": "Read-only factual diagnosis of identity overlap between exactly one P1 structure-training collection and one candidate P2 permitted-training-membership collection. It neither selects an overlap policy nor proves downstream exclusion or training admission.",
+  "report_schema_version": "most-t5-r1/p1-p2-candidate-overlap-fact-report/v1",
+  "reported_facts": [
+    "connectivity_identity_unique_overlap",
+    "stereo_identity_unique_overlap",
+    "members_impacted_on_each_side",
+    "connectivity_overlap_without_stereo_match"
+  ],
+  "required_shared_identity_specs": [
+    "connectivity_identity_spec_sha256",
+    "stereo_identity_spec_sha256"
+  ],
+  "schema_version": "most-t5-r1/p1-p2-candidate-overlap-fact-contract/v1",
+  "unavailable_dimensions": [
+    "conformer_identity",
+    "text_identity"
+  ]
+}

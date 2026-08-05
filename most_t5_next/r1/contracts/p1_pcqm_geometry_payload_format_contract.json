@@ -1,0 +1,59 @@
+{
+  "schema_version": "most-t5-r1/p1-pcqm-geometry-payload-format-contract/v2",
+  "purpose": "Non-executable LMDB value format for the bounded PCQM geometry sidecar v2. It replaces pickle entirely; historical v1 values are never accepted by this contract.",
+  "payload_schema_version": "most-t5-r1/p1-pcqm-geometry-sidecar-payload/v2",
+  "magic_ascii": "MST5PCQM2\u0000",
+  "framing": {
+    "prefix": "magic followed by a big-endian unsigned 32-bit canonical-JSON header length",
+    "max_header_bytes": 16777216,
+    "max_payload_bytes": 16777216,
+    "binary_blocks": "C-order raw native arrays, contiguous from offset zero after the header, with no gap, overlap, trailing byte, duplicate reference, or unreferenced block"
+  },
+  "header_required_fields": [
+    "payload_schema_version",
+    "record",
+    "array_blocks",
+    "logical_record_sha256"
+  ],
+  "array_block_required_fields": [
+    "index",
+    "dtype",
+    "shape",
+    "order",
+    "offset",
+    "nbytes",
+    "sha256"
+  ],
+  "allowed_dtypes": [
+    "int32",
+    "float32",
+    "bool"
+  ],
+  "json_rules": {
+    "encoding": "UTF-8",
+    "canonicalization": "sort_keys=true, compact separators, ensure_ascii=false, allow_nan=false",
+    "duplicate_keys": "forbidden",
+    "nonfinite_json_tokens": "forbidden",
+    "unknown_header_or_descriptor_fields": "forbidden"
+  },
+  "logical_hash_rule": "SHA-256 of the existing raw-free logical_projection: every ndarray projects to dtype, shape, C-order, and SHA-256 of its raw C bytes; offsets and wire layout do not affect record_content_sha256.",
+  "payload_index": {
+    "schema_version": "most-t5-r1/p1-pcqm-geometry-payload-index-row/v2",
+    "required_fields": [
+      "payload_index_schema_version",
+      "record_storage_key",
+      "record_wire_bytes",
+      "record_wire_sha256",
+      "record_content_sha256"
+    ],
+    "invariant": "The payload index, LMDB keys, and admitted membership rows are a one-to-one set; each index row binds a safe wire value to the existing logical record hash."
+  },
+  "prohibited": [
+    "pickle",
+    "cloudpickle",
+    "dill",
+    "numpy object dtype",
+    "NPZ or arbitrary archive decoding",
+    "legacy v1 payload fallback in builder, replay gate, or reference audit"
+  ]
+}

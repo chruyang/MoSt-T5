@@ -1,0 +1,83 @@
+{
+  "schema_version": "most-t5-r1/pcqm4mv2-identity-normalization-contract/v1",
+  "status": "bounded_gate_policy_only_not_a_p1_admission",
+  "purpose": "Define the reproducible molecule-level identity comparison and the single-source feature branch required before a PCQM4Mv2 P1 adapter is designed.",
+  "frozen_source_association": {
+    "sdf_record_i": "official train-3D SDF ordinal i",
+    "official_companion_row": "split_dict.pt['train'][i]",
+    "csv_row_identity": "official data.csv.gz zero-based row; CSV idx must be audited as equal to that row index before full release",
+    "forbidden": [
+      "nearest-neighbour row repair",
+      "silent reordering",
+      "CSV atom order as an atom-to-atom correspondence"
+    ]
+  },
+  "rdkit_identity_normalization": {
+    "sdf_parse": {
+      "sanitize": true,
+      "removeHs": false
+    },
+    "projection": {
+      "operation": "Chem.RemoveHs(Chem.Mol(mol), RemoveHsParameters(), sanitize=True)",
+      "only_nondefault_override": {
+        "removeDefiningBondStereo": true
+      },
+      "why": "RDKit default RemoveHs preserves a stereo-defining explicit H. The OGB SDF represents this H explicitly while the official CSV SMILES normally makes it implicit; the minimal override removes that representational false positive without broad isotope/query/mapped-atom removal.",
+      "rdkit_version_must_be_recorded": true
+    },
+    "keys": {
+      "strict_isomeric": "SHA-256 of RDKit canonical isomeric SMILES after the locked projection",
+      "connectivity": "SHA-256 of RDKit canonical non-isomeric SMILES after the locked projection"
+    }
+  },
+  "classification_policy": {
+    "strict_isomeric_match": "eligible to be considered by the later full adapter, subject to every other release gate",
+    "stereo_or_isomeric_representation_mismatch": {
+      "reject_reason": "PCQM_STEREO_2D3D_DIVERGENCE",
+      "default_action": "quarantine_from_strict_2d_text_3d_aligned_release",
+      "geometry_mse_enabled": false,
+      "exception_rule": "A later SDF-self-consistent 2D+3D-only ablation may retain it only with a separately frozen policy and comparative evaluation; it must never be silently mixed into the primary release."
+    },
+    "connectivity_graph_mismatch": {
+      "reject_reason": "PCQM_SDF_CSV_CONNECTIVITY_MISMATCH",
+      "default_action": "exclude_from_primary_release",
+      "geometry_mse_enabled": false
+    },
+    "parse_or_normalization_error": {
+      "reject_reason": "PCQM_PARSE_OR_NORMALIZATION_ERROR",
+      "default_action": "exclude_from_primary_release",
+      "geometry_mse_enabled": false
+    }
+  },
+  "single_source_feature_branch": {
+    "feature_mol": "the post-projection SDF RDKit Mol for one admitted SDF ordinal",
+    "derive_from_feature_mol": [
+      "canonical 2D representation and motif decomposition",
+      "retained conformer coordinates",
+      "E3FP atom features",
+      "atom_to_motif_map"
+    ],
+    "invariant": "All atom-indexed arrays must have the feature_mol atom count and use its atom order. Official CSV SMILES is an identity companion only, never an atom-order source.",
+    "forbidden": [
+      "mixing CSV-derived atom indices with SDF-derived coordinates",
+      "computing E3FP from a separately embedded SMILES conformer",
+      "silently padding an invalid mapping into a geometry target"
+    ]
+  },
+  "bounded_evidence": {
+    "scope": "first 1000 official train SDF ordinals against their train-split companion CSV rows",
+    "minimal_projection_result": {
+      "strict_isomeric_match": 998,
+      "stereo_or_isomeric_representation_mismatch": 2,
+      "connectivity_graph_mismatch": 0
+    },
+    "interpretation": "This permits a full remote identity/reject-ledger design only. It neither proves the full corpus nor admits P1."
+  },
+  "full_pass_prerequisites": [
+    "archive and companion source locks verify remotely",
+    "CSV idx-to-row-index association is fully audited",
+    "SDF ordinal/title/train-position association is fully audited",
+    "one immutable membership manifest and reject ledger are written before any LMDB release",
+    "downstream validation/test identity-overlap policy is executed and records zero overlap before admission"
+  ]
+}

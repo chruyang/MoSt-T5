@@ -1,0 +1,95 @@
+{
+  "schema_version": "most-t5-r1/downstream-task-registry-contract/v1",
+  "purpose": "Fail-closed contract for registering downstream task sources before P1 or P2 admission. The registry separates source presence, leakage-protection eligibility, extractor compatibility, and benchmark-evaluation eligibility; none of these states implies another.",
+  "registry_schema_version": "most-t5-r1/downstream-task-registry/v1",
+  "required_splits": [
+    "train",
+    "validation",
+    "test"
+  ],
+  "protocol_types": [
+    "supervised_split_benchmark",
+    "zero_shot_evaluation_benchmark"
+  ],
+  "required_split_roles_by_protocol": {
+    "supervised_split_benchmark": {
+      "train": "downstream_train",
+      "validation": "downstream_validation",
+      "test": "downstream_test"
+    },
+    "zero_shot_evaluation_benchmark": {
+      "train": "not_applicable_no_supervised_train",
+      "validation": "protocol_development_sources",
+      "test": "sealed_evaluation_sources"
+    }
+  },
+  "source_statuses": [
+    "present_direct",
+    "present_requires_adapter",
+    "not_applicable",
+    "missing"
+  ],
+  "task_scope_statuses": [
+    "first_round_admission_core",
+    "secondary_not_in_first_round_admission"
+  ],
+  "task_statuses": [
+    "candidate_pending_canonical_identity_proof",
+    "blocked_source_split_integrity",
+    "blocked_adapter_and_split_provenance",
+    "blocked_source_missing",
+    "blocked_protocol_manifest_missing"
+  ],
+  "protection_policy": {
+    "protected_splits": [
+      "validation",
+      "test"
+    ],
+    "primary_identity": "connectivity_identity_sha256",
+    "secondary_report_only_identities": [
+      "stereo_identity_sha256",
+      "conformer_identity_sha256",
+      "text_exact_sha256",
+      "text_normalized_sha256"
+    ],
+    "training_roles_subject_to_exclusion": [
+      "p1_structure_train",
+      "p2_permitted_train_membership",
+      "p2_alignment_train",
+      "p2_geometry_replay_train"
+    ],
+    "action": "Every training member whose canonical connectivity identity occurs in any registered, present downstream validation or test split is denied or removed from the corresponding training membership. All matching training occurrences are excluded; the downstream split is not rewritten.",
+    "downstream_train_rule": "A downstream train split is not silently deduplicated against its own validation or test split. Any canonical connectivity overlap is reported and blocks benchmark use until the official split is corrected or the benchmark protocol explicitly accepts that overlap.",
+    "missing_source_rule": "A selected downstream task with a missing validation or test source cannot produce a complete all-downstream protection claim and blocks admission if that task remains in scope. A zero-shot protocol may declare train not_applicable, but may not use that declaration for either evaluation split.",
+    "duplicate_eval_source_rule": "Byte-identical validation and test sources remain protection inputs but cannot be represented as independent evaluation splits."
+  },
+  "scope_policy": {
+    "first_round_core_rule": "Every task selected for first-round admission is enumerated with one declared protocol type and explicit train, validation, and test states. Supervised and zero-shot protocols use different role matrices; a missing core validation or test source remains visible and blocks a complete first-round protection or admission claim.",
+    "secondary_rule": "A secondary task is enumerated separately with secondary_not_in_first_round_admission status. It is not counted in the first-round protected union, does not silently broaden first-round admission, and cannot be described as protected until promoted by a versioned registry revision with locked splits.",
+    "no_silent_scope_reduction": "An unresolved core task cannot be omitted merely because its dataset, protocol, or metrics are not frozen. It remains a blocked_source_missing registry entry."
+  },
+  "identity_mapping_requirements": [
+    "Each present split declares an explicit source format, byte count, SHA-256, record count, fields, member-ID strategy, and SMILES source; no field or task label is guessed.",
+    "Source member IDs are namespace-local membership addresses and are never compared across datasets as chemical identities.",
+    "Molecular leakage protection uses the shared hash-locked RDKit connectivity normalizer; exact source SMILES equality is preliminary evidence only.",
+    "A source-level text unit explicitly lists its semantic role and component fields, or declares text identity unavailable.",
+    "A join adapter must fail on absent, duplicate, or mismatched keys and must emit a hash-locked derived artifact before the generic identity extractor is invoked.",
+    "When one molecule has multiple task rows and the generic extractor requires unique member IDs, extraction is partitioned by split and explicit task value or uses a separately reviewed adapter."
+  ],
+  "benchmark_readiness_rules": [
+    "Source presence is not benchmark readiness.",
+    "Validation and test sources must be distinct and their official provenance must be locked.",
+    "Within-task train, validation, and test canonical connectivity overlap must be proven, not inferred from row IDs or exact-SMILES checks.",
+    "For a zero-shot evaluation benchmark, absence of a supervised train split is represented as not_applicable rather than missing; source-molecule development and sealed-test manifests are still mandatory.",
+    "Task-zero-shot and molecule-zero-shot are distinct claims. A molecule-zero-shot claim additionally requires development and test source identities to be excluded from every pretraining membership in scope.",
+    "Task routing must use an explicit field or a versioned route table; natural-language prompt guessing is forbidden.",
+    "Every first-round core task and every explicitly deferred secondary task must be named, so an admission claim cannot silently narrow downstream scope.",
+    "A preliminary source observation can authorize construction of a protected identity union but cannot authorize headline evaluation."
+  ],
+  "known_generic_extractor_boundaries": [
+    "identity_collection_extraction_config/v1 cannot join a JSON record to a separate LMDB or index file.",
+    "identity_collection_extraction_config/v1 cannot construct a composite member ID from multiple fields.",
+    "identity_collection_extraction_config/v1 supports one exact scalar record filter and one text unit per collection."
+  ],
+  "not_an_admission": "A valid registry is an inventory and policy input only. P1/P2 admission additionally requires hash-locked identity extraction and the standalone overlap proof gate."
+}

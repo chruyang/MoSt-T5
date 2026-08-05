@@ -1,0 +1,11 @@
+{
+  "schema_version": "most-t5-r1/p1-pcqm-geometry-replay-gate-lock/v2",
+  "purpose": "Immutable implementation lock for the v2 builder-linked deterministic replay gate. The replay is intentionally not an independent semantic audit and must retain that conclusion boundary in every report.",
+  "components": [
+    {
+      "name": "validate_p1_pcqm_geometry_sidecar.py",
+      "relative_harness_path": "gates/validate_p1_pcqm_geometry_sidecar.py",
+      "sha256": "2cd908c695d7448a7ee1742ab0a6468cc01ee16b161886dc07fcb0fad06828af"
+    }
+  ]
+}

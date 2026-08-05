@@ -1,0 +1,170 @@
+{
+  "schema_version": "most-t5-r1/motif-tokenizer-binding-release-contract/v1",
+  "purpose": "Deterministic, fail-closed construction and independent validation of a motif tokenizer and digest binding table from completed production-v2 motif census artifacts without reading SDF, invoking RDKit, rerunning the motif linearizer, or recomputing E3FP.",
+  "non_admission_boundary": {
+    "tokenizer_release_implies_p1_training_admission": false,
+    "p1_training_admission": false,
+    "p2_vocabulary_extension_permitted": false
+  },
+  "schemas": {
+    "production_manifest": "most-t5-r1/p1-pcqm-geometry-production-full-release/v2",
+    "base_snapshot_lock": "most-t5-r1/base-model-snapshot-lock/v1",
+    "discovery_scope_lock": "most-t5-r1/tokenizer-discovery-scope-lock/v1",
+    "selection_policy": "most-t5-r1/motif-token-selection-policy/v1",
+    "release_manifest": "most-t5-r1/motif-tokenizer-binding-release/v1",
+    "validation_report": "most-t5-r1/motif-tokenizer-binding-validation/v1",
+    "sample_digest_sequence": "most-t5-r1/tokenizer-binding-sample/v1",
+    "sample_extraction_receipt": "most-t5-r1/tokenizer-binding-sample-extraction-receipt/v1"
+  },
+  "lexeme_projection": {
+    "spec_id": "most-t5-r1/motif-lexeme-projection/v1",
+    "input": "exact motif_fragment UTF-8 bytes from a content-addressed census row",
+    "anchor_regex": "<([0-9]+)\\*>",
+    "anchor_decimal_policy": "canonical non-negative decimal with no leading zero except 0",
+    "algorithm": [
+      "extract anchor substrings in left-to-right occurrence order",
+      "delete exactly those anchor substrings and perform no other normalization",
+      "wrap the remaining exact core in one additional ASCII [ and ] pair"
+    ],
+    "pure_motif_formula": "'[' + anchor_regex.sub('', exact_lexeme) + ']'",
+    "rdkit_permitted": false,
+    "smiles_reparse_permitted": false,
+    "unicode_normalization_permitted": false,
+    "many_lexemes_to_one_pure_motif": true
+  },
+  "required_explicit_decisions": [
+    "base model identifier and immutable revision through a byte-complete local snapshot lock",
+    "P1-only versus P1+P2 permitted-train discovery scope",
+    "minimum selection score",
+    "maximum motif-token count or explicit null",
+    "integer P1/P2 selection weights",
+    "base-unk versus dedicated motif-unk policy",
+    "maximum reserved anchor ID",
+    "base-vocabulary overlap allow-list"
+  ],
+  "selection_order": [
+    "weighted integer selection_score descending",
+    "pure motif token raw UTF-8 bytes ascending",
+    "SHA-256 of pure motif token UTF-8 bytes ascending"
+  ],
+  "census_requirements": {
+    "closed_row_fields": [
+      "motif_lexeme_sha256",
+      "motif_fragment",
+      "count"
+    ],
+    "row_order": "strictly ascending motif_lexeme_sha256",
+    "count": "positive JSON integer; boolean forbidden; aggregation uses unbounded integer with int64 range assertion",
+    "content_address": "sha256(motif_fragment UTF-8) equals motif_lexeme_sha256",
+    "forbidden_fragment_characters": [
+      "NUL",
+      "TAB",
+      "CR",
+      "LF"
+    ],
+    "digest_collision_policy": "fail_closed"
+  },
+  "scope_rules": {
+    "p1_lock_always_required": true,
+    "p2_lock_and_census_required_only_for_union": true,
+    "p2_inputs_forbidden_for_p1_only": true,
+    "frozen_release_requires_complete_scope_locks": true,
+    "complete_scope_requires_downstream_exclusion_proof_and_census_derivation_audit": true,
+    "every_scope_binds_motif_linearization_and_sequence_extraction_specs": true,
+    "frozen_p1_p2_union_requires_projection_domain_compatibility_audit": true,
+    "candidate_scope_may_not_be_relabeled_frozen": true
+  },
+  "base_snapshot_rules": {
+    "local_directory_only": true,
+    "network_fallback_permitted": false,
+    "symlink_permitted": false,
+    "special_file_permitted": false,
+    "per_file_bytes_and_sha256_required": true,
+    "canonical_tree_hash_required": true,
+    "tokenizer_and_model_revision_must_match": true,
+    "use_fast": false,
+    "trust_remote_code": false,
+    "required_t5_sentinel_count": 100
+  },
+  "special_token_registration_order": [
+    "base snapshot additional_special_tokens in their frozen order",
+    "digits 0 through 9",
+    "<bom>, <eom>, [MMM]:, [Caption]:, [Text2Mol]:, [Denoise]:",
+    "[.]",
+    "optional dedicated motif OOV token when explicitly selected",
+    "[RESERVED_0] through the explicitly selected reserved count minus one",
+    "<0*> through the explicitly selected maximum anchor ID"
+  ],
+  "release_artifacts": [
+    "pure_motif_census.jsonl",
+    "ordered_motif_vocab.tsv",
+    "motif_digest_binding.jsonl",
+    "id_to_token.json",
+    "token_to_id.json",
+    "tokenizer_snapshot/",
+    "tokenizer_release_manifest.json"
+  ],
+  "binding_row_fields": [
+    "motif_lexeme_sha256",
+    "motif_fragment",
+    "anchors",
+    "anchor_ids",
+    "pure_motif_token",
+    "pure_motif_token_sha256",
+    "p1_count",
+    "p2_count",
+    "selection_score",
+    "selected",
+    "token_id",
+    "binding_disposition"
+  ],
+  "binding_dispositions": [
+    "selected_motif_token",
+    "frozen_oov"
+  ],
+  "determinism_gate": {
+    "minimum_distinct_pythonhashseed_processes": 3,
+    "required_equal_fields": [
+      "id_to_token_sha256",
+      "token_to_id_sha256",
+      "added_token_metadata_sha256",
+      "special_token_order_sha256",
+      "special_token_id_map_sha256",
+      "sentinel_token_id_map_sha256",
+      "anchor_token_id_map_sha256",
+      "vocab_size"
+    ]
+  },
+  "sample_record_invariants": [
+    "motif digest count equals motif_count, motif_atom_indices_count, and motif_geometry_valid_count",
+    "every digest resolves in the frozen binding table",
+    "every anchor ID is within the frozen reserve",
+    "each anchor occurs exactly twice in distinct motif ordinals",
+    "anchor-derived motif graph components are contiguous in motif ordinal order",
+    "motif token IDs are direct table lookups; string tokenization is forbidden"
+  ],
+  "sample_extraction_receipt_required_fields": [
+    "schema_version",
+    "status",
+    "production_logical_release_root_sha256",
+    "production_manifest_sha256",
+    "sample_schedule_sha256",
+    "sample_jsonl_sha256",
+    "sample_record_count",
+    "safe_payload_decoder_sha256",
+    "payload_index_verification_report_sha256",
+    "component_reference_audit_sha256"
+  ],
+  "forbidden_operations": [
+    "reading or rescanning an SDF",
+    "importing or invoking RDKit",
+    "invoking the motif linearizer",
+    "computing or modifying E3FP",
+    "set-to-list output ordering",
+    "locale-dependent ordering",
+    "silent missing-digest, collision, anchor-overflow, or OOV repair",
+    "loading a Hub identifier or enabling network fallback",
+    "overwriting an existing output directory or report",
+    "claiming P1 training admission"
+  ]
+}

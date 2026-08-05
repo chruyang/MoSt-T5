@@ -1,0 +1,85 @@
+{
+  "schema_version": "most-t5-r1/pcqm4mv2-staging-receipt-contract/v1",
+  "purpose": "Permit a byte-identical cross-region CPU working copy without weakening or replacing the canonical PCQM4Mv2 source contract. This receipt is an input-integrity gate only and does not admit P1 training.",
+  "receipt_schema_version": "most-t5-r1/pcqm4mv2-staging-receipt/v1",
+  "pinned_source_contract": {
+    "repository_relative_path": "contracts/pcqm4mv2_source_contract.json",
+    "filename": "pcqm4mv2_source_contract.json",
+    "schema_version": "most-t5-r1/pcqm4mv2-source-contract/v3",
+    "bytes": 6116,
+    "sha256": "32cc85b2c4ed07cd90e51eb08cd9aff866b0e762dba2c757a4a7a9b1e7a57405"
+  },
+  "required_roles": [
+    "train_3d_sdf_archive",
+    "companion_archive",
+    "companion_data_csv_gz",
+    "companion_split_dict_pt",
+    "train_sdf_source_manifest",
+    "train_sdf_member_hash_report",
+    "companion_source_manifest",
+    "companion_content_validation"
+  ],
+  "required_artifact_fields": [
+    "source_path",
+    "work_path",
+    "bytes",
+    "sha256"
+  ],
+  "required_transfer_fields": [
+    "transfer_id",
+    "method",
+    "source_endpoint",
+    "destination_endpoint",
+    "started_at_utc",
+    "completed_at_utc",
+    "status",
+    "verification"
+  ],
+  "allowed_transfer_methods": [
+    "rsync_over_ssh",
+    "scp_over_ssh",
+    "official_redownload",
+    "object_storage_transfer"
+  ],
+  "required_cpu_runtime_fields": [
+    "captured_at_utc",
+    "hostname",
+    "platform_system",
+    "platform_release",
+    "machine",
+    "python_implementation",
+    "python_version",
+    "python_executable",
+    "cpu_model",
+    "logical_cpu_count",
+    "affinity_cpu_count",
+    "memory_bytes",
+    "working_root",
+    "environment",
+    "packages",
+    "snapshot_sha256"
+  ],
+  "required_cpu_environment_fields": [
+    "CUDA_VISIBLE_DEVICES",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS"
+  ],
+  "required_cpu_packages": [
+    "python",
+    "numpy",
+    "scipy",
+    "rdkit",
+    "e3fp",
+    "lmdb",
+    "torch"
+  ],
+  "file_policy": {
+    "source_contract_and_receipt": "absolute_regular_nonsymlink_files",
+    "work_files": "canonical_absolute_regular_nonsymlink_files_below_working_root",
+    "work_paths_must_be_distinct": true,
+    "source_paths_must_equal_v3_contract": true,
+    "bytes_and_sha256_must_equal_v3_contract": true,
+    "receipt_serialization": "utf8_canonical_json_plus_lf"
+  }
+}

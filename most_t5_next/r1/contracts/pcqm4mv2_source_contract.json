@@ -1,0 +1,114 @@
+{
+  "schema_version": "most-t5-r1/pcqm4mv2-source-contract/v3",
+  "release_status": "candidate_source_locked_not_admitted_to_p1",
+  "source": {
+    "dataset": "OGB-LSC PCQM4Mv2",
+    "split": "train-3D only",
+    "official_download_url": "http://ogb-data.stanford.edu/data/lsc/pcqm4m-v2-train.sdf.tar.gz",
+    "artifact": "pcqm4m-v2-train.sdf.tar.gz",
+    "official_md5": "fd72bce606e7ddf36c2a832badeec6ab",
+    "official_train_sdf_records": 3378606,
+    "remote_archive_sha256": "8690db7b573405e3dbd617482fe10092e18be2b86e4d8500c3892d301dd5817c",
+    "remote_archive_bytes": 1559712928,
+    "remote_archive_path": "/root/autodl-fs/most-t5-p0/sources/pcqm4mv2/ogb-pcqm4mv2-train-3d-v1/archive/pcqm4m-v2-train.sdf.tar.gz",
+    "remote_source_manifest": {
+      "path": "/root/autodl-fs/most-t5-p0/sources/pcqm4mv2/ogb-pcqm4mv2-train-3d-v1/manifests/source_manifest.json",
+      "bytes": 2288,
+      "sha256": "7a8e0e7e864bca1bc5f32eb4a6d7966f92cf1a594f99268eaa8f40c3553a6204"
+    },
+    "train_sdf_member": {
+      "tar_member_name": "pcqm4m-v2-train.sdf",
+      "member_type": "regular_file",
+      "uncompressed_bytes": 9746078962,
+      "sha256": "fe7818174a92bd226511f1b20ba930d48c06950049f5dce47ab39b753af842a8"
+    },
+    "remote_sdf_member_hash_report": {
+      "path": "/root/autodl-fs/most-t5-r1/reports/pcqm4mv2_train_sdf_member_sha256_v1_20260805T0140Z.txt",
+      "bytes": 68,
+      "sha256": "7bacd25f619f7445f34b39143f1b40de9d461f44b8063a1e8108c7073c4498a4"
+    }
+  },
+    "official_companion": {
+      "dataset_folder": "pcqm4m-v2",
+      "purpose": "The official v1 PCQM4Mv2 SMILES/split companion used only for remote identity association. Every member is hash-locked before a CSV row is read or a legacy unsafe torch load is allowed.",
+      "remote_root": "/root/autodl-fs/most-t5-r1/sources/ogb_pcqm4mv2_companion/ogb-pcqm4mv2-v1",
+    "official_archive": {
+      "path": "/root/autodl-fs/most-t5-r1/sources/ogb_pcqm4mv2_companion/ogb-pcqm4mv2-v1/archive/pcqm4m-v2.zip",
+      "bytes": 61602606,
+      "md5": "65b742bafca5670be4497499db7d361b",
+      "sha256": "628ae612a3de752160929d93d1584a75257ae156e7b13d91b133d8db62e6d701",
+      "official_download_url": "https://dgl-data.s3-accelerate.amazonaws.com/dataset/OGB-LSC/pcqm4m-v2.zip"
+    },
+    "data_csv": {
+      "path": "/root/autodl-fs/most-t5-r1/sources/ogb_pcqm4mv2_companion/ogb-pcqm4mv2-v1/raw/data.csv.gz",
+      "bytes": 54822297,
+      "sha256": "ab89a4707d5e37f19c3b5e69d1c5cbb7fc1a9665d38783c0c89df6675f34286b"
+    },
+    "split_dict": {
+      "path": "/root/autodl-fs/most-t5-r1/sources/ogb_pcqm4mv2_companion/ogb-pcqm4mv2-v1/split/split_dict.pt",
+      "bytes": 33714863,
+      "sha256": "d913e5541af6a6279abfe23ecf0fdbe4bc86785e1d8fc24a8f3ef422a01d3722"
+    },
+    "remote_source_manifest": {
+      "path": "/root/autodl-fs/most-t5-r1/sources/ogb_pcqm4mv2_companion/ogb-pcqm4mv2-v1/manifests/source_manifest.json",
+      "bytes": 2456,
+      "sha256": "8d3473e089d3ff9cdb0a6f74cf1e85969c8f64b806a79601b643f6130fc7392f"
+    },
+      "remote_content_validation": {
+        "path": "/root/autodl-fs/most-t5-r1/sources/ogb_pcqm4mv2_companion/ogb-pcqm4mv2-v1/manifests/content_validation.json",
+        "bytes": 1109,
+        "sha256": "ecee8f263d02993d7d27c25de37e79d8dfcc3666778400c35e27b18dde4f7dcc"
+      },
+      "archive_members": {
+        "data_csv": {
+          "zip_member": "pcqm4m-v2/raw/data.csv.gz",
+          "crc32": "e3629b4e",
+          "compressed_bytes": 54830652,
+          "uncompressed_bytes": 54822297
+        },
+        "split_dict": {
+          "zip_member": "pcqm4m-v2/split_dict.pt",
+          "crc32": "16b79476",
+          "compressed_bytes": 6770606,
+          "uncompressed_bytes": 33714863
+        }
+      },
+      "validated_invariants": {
+      "csv_rows": 3746620,
+      "csv_idx_is_zero_based_contiguous": true,
+      "train_split_records": 3378606,
+      "train_split_is_contiguous_prefix": true,
+      "train_split_min": 0,
+      "train_split_max": 3378605
+      }
+    },
+    "integrity_order": [
+      "verify bytes, canonical samefile identity, and SHA-256 of every source artifact before opening the SDF, CSV, or split_dict.pt",
+      "verify the companion ZIP and its two selected member CRC/size/content hashes against the separately locked extracted files",
+      "verify hashes and fixed semantic facts of the three supporting manifests",
+      "only then allow a safe torch.load attempt; a legacy fallback remains explicitly acknowledged and bound to the verified split hash"
+    ],
+  "three_d_molt5_comparability": {
+    "same_upstream_source_claim": "supported: the paper identifies OGB-LSC PCQM4Mv2 for its 1D+3D denoising and 3D-to-1D tasks",
+    "processed_corpus_identity_claim": "forbidden until independently proven",
+    "three_d_molt5_reported_processed_records": 3377055,
+    "raw_minus_reported_processed_records": 1551,
+    "evidence_gap": "No public 3D-MolT5 PCQM membership manifest, reject ledger, source checksum, or PCQM-specific preprocessing release is available."
+  },
+  "non_negotiable_admission_gates": [
+    "archive MD5/bytes/source-manifest pass",
+    "stream reader preserves OGB row index and parses a finite 3D conformer",
+    "official PCQM v2 SMILES and split companion is locked before full pass",
+    "SDF versus official-SMILES discrepancies are classified under pcqm4mv2_identity_normalization_contract.json and quarantined, not silently repaired",
+    "canonical 2D representation, coordinates, E3FP and atom-to-motif mapping derive from the same normalized RDKit SDF Mol; CSV atom order is never used",
+    "all reject reasons and membership hashes are written before an LMDB is declared a release",
+    "downstream validation/test identity overlap is zero",
+    "P1/P2 overlap policy is explicit rather than implicit"
+  ],
+  "prohibited_actions": [
+    "Do not extract the full SDF to local or remote temporary disk.",
+    "Do not treat 3377055 as a target to force-match.",
+    "Do not use OGB HOMO-LUMO labels in P1 without a separately declared supervised ablation.",
+    "Do not call the legacy single-file data_process on the full SDF."
+  ]
+}

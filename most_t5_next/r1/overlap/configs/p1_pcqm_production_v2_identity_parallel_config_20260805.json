@@ -1,0 +1,25 @@
+{
+  "schema_version": "most-t5-r1/pcqm-production-v2-identity-extraction-config/v1",
+  "extraction_id": "p1-pcqm-production-v2-identity-20260805-parallel-v1",
+  "contract_sha256": "f716c48562b2251ff64d3e1653ef4b2a144776707efa1f082d079f917acfff7a",
+  "collection": {
+    "collection_id": "p1-pcqm-production-v2-admitted-identity-20260805-v1",
+    "dataset_id": "pcqm4mv2",
+    "release_id": "pcqm-geometry-production-v2-20260805T0430Z",
+    "phase": "p1",
+    "split": "train",
+    "role": "p1_structure_train",
+    "task_family": "none",
+    "source_identity_namespace": "ogb_pcqm4mv2_train_row_index"
+  },
+  "release_lock": {
+    "release_manifest_relative_path": "full_release_manifest.json",
+    "expected_release_manifest_bytes": 33904,
+    "expected_release_manifest_sha256": "4db380c63b00f2a595e3a86f70f434a059a6ca724fe35dee94ae2bdafb7d5a2d",
+    "expected_release_id": "pcqm-geometry-production-v2-20260805T0430Z",
+    "expected_production_contract_sha256": "4193794a6300e78ef6ed4bf66de0ea9f24aea4e9a1ca034d5ec85425404adc2b",
+    "expected_payload_contract_sha256": "fe7df29b1a7d358676c0eec6c44c1a9a42cff0f38cf14d2dd03c24c0c8f3003b",
+    "expected_identity_normalization_contract_sha256": "5f9be346294e08bf73d47c089a00be4c2f19d89612b5e4c09d0d7f5f6b23b044",
+    "required_rdkit_version": "2024.03.5"
+  }
+}

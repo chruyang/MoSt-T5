@@ -1,0 +1,46 @@
+{
+  "schema_version": "most-t5-r1/p2-phase2-ready-legacy-motif-sequence-spec/v1",
+  "status": "retrospective_observed_interpretation_not_original_producer_spec",
+  "purpose": "Freeze the reversible interpretation used to census the already-stored phase2_pubchem_ready.lmdb motif_seq field without claiming that the original producer implementation is known.",
+  "producer_provenance": {
+    "status": "unknown_legacy_producer",
+    "source_file_sha256": null,
+    "warning": "This specification describes stored bytes and audit behavior. It is not evidence that the local current representation.py or build_phase2_ready_lmdb.py produced the ready LMDB."
+  },
+  "observed_boundary_evidence": {
+    "schedule": "first and last 256 LMDB keys in byte-lexicographic order",
+    "sample_key_set_sha256": "12a0040afd1be3a62c61fffc2457ab8992f7cd864b9d1db9784d033edc8b9917",
+    "sample_record_count": 512,
+    "full_payload_entry_count_observed": 301655,
+    "full_schema_claim": false,
+    "full_census_required": true
+  },
+  "stored_sequence": {
+    "field": "motif_seq",
+    "envelope": "<bom> ... <eom>",
+    "unit_grammar": "outer square-bracket units parsed by square-bracket depth because fragment SMILES may contain nested bracket atoms",
+    "component_separator": "[.]",
+    "fragment_value": "the exact, unnormalized interior of each non-separator outer unit",
+    "top_level_whitespace": "accepted and measured but not included in exact fragments",
+    "separator_in_motif_census": false
+  },
+  "anchor_interpretation": {
+    "grammar": "<canonical_nonnegative_decimal*>",
+    "semantics": "legacy local attachment labels measured per stored [.] component",
+    "p1_global_cross_motif_bond_id_semantics_claimed": false,
+    "p1_pair_rule": "measurement only; every label occurs exactly twice per stored component",
+    "pair_rule_failure_policy": "retain candidate record and report the semantic difference"
+  },
+  "pure_projection": {
+    "spec_id": "most-t5-r1/motif-lexeme-projection/v1",
+    "algorithm": "Delete valid anchors only, perform no normalization, and wrap the remaining exact core in one square-bracket pair.",
+    "stereochemistry": "retained if present in the stored exact fragment",
+    "rdkit_used": false
+  },
+  "scientific_limits": [
+    "The bounded observation does not replace a full 301655-record extraction.",
+    "This retrospective grammar does not establish producer identity or equivalence to the P1 molecule-native linearizer.",
+    "A high exact/pure overlap cannot establish matching stereo, anchor or component semantics.",
+    "No P1/P2 vocabulary union, tokenizer freeze or training admission follows from this specification."
+  ]
+}

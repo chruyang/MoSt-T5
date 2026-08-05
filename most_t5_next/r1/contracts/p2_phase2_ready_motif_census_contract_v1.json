@@ -1,0 +1,110 @@
+{
+  "schema_version": "most-t5-r1/p2-phase2-ready-motif-census-contract/v1",
+  "purpose": "Candidate-only, fail-closed extraction of the exact legacy motif lexeme census stored in phase2_pubchem_ready.lmdb. This contract does not approve a P1/P2 vocabulary union or any training admission.",
+  "source_lock_schema_version": "most-t5-r1/p2-phase2-ready-source-lock/v1",
+  "source_format": {
+    "kind": "lmdb_single_file_pickle_values",
+    "lmdb_subdir": false,
+    "key_order": "LMDB cursor byte-lexicographic order",
+    "payload_identity": "canonical positive-decimal PubChem CID key equals str(payload['cid'])",
+    "required_payload_fields": [
+      "atom_to_motif_map",
+      "atoms",
+      "cid",
+      "coordinates",
+      "description",
+      "e3fp",
+      "enriched_description",
+      "motif_seq",
+      "raw_smiles",
+      "smiles"
+    ],
+    "metadata_policy": "Only source-lock-enumerated metadata keys may exist; any other non-payload key aborts the whole extraction."
+  },
+  "legacy_pickle_boundary": {
+    "acknowledgement_literal": "I_ACKNOWLEDGE_TRUSTED_PICKLE_CAN_EXECUTE_CODE",
+    "rule": "The complete LMDB file SHA-256 and byte count must match the source lock before the first pickle.loads call and must match again after the read transaction closes.",
+    "trust_basis_sha256_required": true
+  },
+  "motif_sequence": {
+    "envelope": "After preserving counts of optional top-level whitespace, the sequence is exactly <bom> followed by bracket-depth-delimited units followed by <eom>.",
+    "parser": "square_bracket_depth_state_machine",
+    "forbidden_parsers": [
+      "whitespace_split",
+      "non_greedy_bracket_regex"
+    ],
+    "component_separator": "[.]",
+    "component_ranges": "zero-based half-open ranges over non-separator fragments",
+    "separator_census_policy": "excluded",
+    "fragment_controls_forbidden": [
+      "NUL",
+      "TAB",
+      "CR",
+      "LF"
+    ]
+  },
+  "projection": {
+    "spec_id": "most-t5-r1/motif-lexeme-projection/v1",
+    "anchor_grammar": "<canonical_nonnegative_decimal*>",
+    "algorithm": "Delete every valid anchor lexeme from the exact fragment without any other normalization, then wrap the remaining exact UTF-8 core in one outer square-bracket pair.",
+    "rdkit_permitted": false,
+    "normalization_permitted": false
+  },
+  "legacy_anchor_observation": {
+    "interpretation": "P2 labels are measured as legacy component-local attachment labels; they are not interpreted as P1 global cross-motif bond IDs.",
+    "p1_pair_rule": "For measurement only, each anchor label has multiplicity exactly two inside one stored component.",
+    "p1_pair_rule_failure_disposition": "admit_and_report; never reject solely for this legacy semantic difference"
+  },
+  "record_validation": {
+    "atom_to_motif_map_schema": "non-empty outer list/tuple of non-empty list/tuple groups containing nonnegative integral scalars excluding booleans; values are normalized to Python integers only for hashing",
+    "cardinality": "number of non-separator motif fragments equals len(atom_to_motif_map)",
+    "closed_reject_codes": [
+      "PICKLE_DESERIALIZATION_FAILED",
+      "PAYLOAD_NOT_DICT",
+      "FIELD_SET_MISMATCH",
+      "KEY_CID_MISMATCH",
+      "MOTIF_SEQ_TYPE_INVALID",
+      "MOTIF_SEQUENCE_PARSE_FAILED",
+      "MOTIF_MAPPING_SCHEMA_MISMATCH",
+      "MOTIF_MAPPING_CARDINALITY_MISMATCH",
+      "MOTIF_FRAGMENT_INVALID",
+      "ANCHOR_GRAMMAR_INVALID"
+    ],
+    "unknown_error_policy": "abort_whole_extraction"
+  },
+  "artifacts": {
+    "required": [
+      "membership.jsonl",
+      "reject_ledger.jsonl",
+      "record_projection.jsonl",
+      "motif_census.jsonl",
+      "pure_motif_census.jsonl",
+      "anchor_summary.json",
+      "derivation_receipt.json"
+    ],
+    "row_order": {
+      "membership.jsonl": "source key bytes ascending",
+      "reject_ledger.jsonl": "source key bytes ascending rejected subset",
+      "record_projection.jsonl": "source key bytes ascending admitted subset",
+      "motif_census.jsonl": "motif_lexeme_sha256 ascending",
+      "pure_motif_census.jsonl": "pure_motif_token UTF-8 bytes ascending"
+    },
+    "record_projection_privacy": "contains hashes, ordered exact-lexeme digests, component ranges and aggregate measurements; does not repeat raw fragments, SMILES, coordinates, descriptions or E3FP arrays",
+    "determinism": "A second fresh process with a different PYTHONHASHSEED must reproduce the six non-receipt artifacts byte-for-byte and the same logical_derivation_sha256."
+  },
+  "release_policy": {
+    "release_status": "candidate_p2_motif_census_non_release",
+    "p1_p2_union_decision_permitted": false,
+    "tokenizer_freeze_permitted": false,
+    "training_admission": false,
+    "training_launcher_permitted": false
+  },
+  "fail_closed": [
+    "The output directory must be new and is never overwritten.",
+    "Source file, contract, source lock, extractor and producer/spec provenance are content addressed.",
+    "LMDB entry count must equal expected payload count plus the exact metadata-key count.",
+    "Membership must partition every payload key into exactly one admitted or rejected disposition.",
+    "Digest-to-distinct-fragment and pure-digest-to-distinct-token collisions abort the whole extraction.",
+    "The derivation receipt is written last and cannot claim training admission or a P1/P2 union decision."
+  ]
+}

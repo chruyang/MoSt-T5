@@ -1,0 +1,54 @@
+{
+  "schema_version": "most-t5-r1/pcqm-production-v2-identity-parallel-extraction-contract/v1",
+  "purpose": "Shard-parallel, read-only and fail-closed extraction of the same proof-gate-compatible hash-only P1 molecule identity collection defined by the serial production-v2 extractor.",
+  "config_schema_version": "most-t5-r1/pcqm-production-v2-identity-extraction-config/v1",
+  "receipt_schema_version": "most-t5-r1/pcqm-production-v2-identity-parallel-extraction-receipt/v1",
+  "compatible_collection_manifest_schema_version": "most-t5-r1/identity-collection-manifest/v1",
+  "source_release_schema_version": "most-t5-r1/p1-pcqm-geometry-production-full-release/v2",
+  "source_shard_schema_version": "most-t5-r1/p1-pcqm-geometry-production-shard/v2",
+  "source_payload_schema_version": "most-t5-r1/p1-pcqm-geometry-sidecar-payload/v2",
+  "serial_semantic_core": "extract_pcqm_production_v2_identity_collection_v1.py",
+  "parallelism_boundary": "One process validates and extracts one complete shard. No membership, reject, payload-index, LMDB, or record stream is split across workers. The parent alone performs global closure, SQLite uniqueness, BINARY sorting, and final publication.",
+  "core_determinism_contract": {
+    "artifact": "molecule_identity_rows.jsonl",
+    "required_equalities_across_process_counts": [
+      "bytes",
+      "sha256",
+      "row_count",
+      "key_lf_sha256",
+      "complete file bytes"
+    ],
+    "non_core_runtime_fields": [
+      "generated_at_utc",
+      "processes_requested",
+      "worker_processes_used",
+      "scratch_directory"
+    ]
+  },
+  "scratch_boundary": {
+    "caller_supplied_new_directory_required": true,
+    "must_be_disjoint_from_release_and_output": true,
+    "contains": [
+      "one canonical admitted identity JSONL per shard",
+      "global SQLite uniqueness and BINARY-sort database",
+      "scratch_manifest.json"
+    ],
+    "automatic_recursive_cleanup": false
+  },
+  "required_invariants": [
+    "The config binds this exact parallel extraction contract, the exact full-release manifest bytes and SHA-256, all three source contracts, the release ID, and the RDKit identity version.",
+    "The parallel extractor and imported serial validation core are byte-hashed before work and checked unchanged before publication.",
+    "The immutable source release is opened read-only; each LMDB is opened with readonly=true, lock=false, create=false. Workers write only their unique files in a new scratch directory and the parent writes only the new output directory.",
+    "The release and shard filesystem envelopes remain closed. All declared source artifacts are checked by complete bytes and SHA-256 in the worker and rechecked by the parent after all workers finish.",
+    "Top-level shard declarations, worker results, and result ranges must each be complete, unique, contiguous, non-overlapping, and cover the selected ordinal range exactly.",
+    "Membership, reject-ledger, payload-index, and LMDB streams remain in lockstep within each complete shard. Rejected members are validated and filtered; no reject may appear in scratch or final identity rows.",
+    "Every admitted LMDB value is independently decoded through the public non-executable v2 framing, including wire, block, logical-record, member, identity-spec, contract, release, harness, and RDKit bindings.",
+    "Unknown or excess LMDB keys and metadata fail closed. The admitted key set is closed by stream exhaustion and global duplicate member IDs fail at the parent SQLite primary key.",
+    "The parent re-parses canonical worker JSONL, verifies its bytes and SHA-256 before and after ingestion, and uses the unchanged serial SQLite BINARY writer for final ordering.",
+    "Any worker exception prevents creation of the final output directory. Partial scratch evidence may remain for diagnosis and is never interpreted as a passing extraction.",
+    "The emitted molecule_identity_rows.jsonl is bytewise invariant under process count. Receipt scheduling fields and timestamps are outside this core determinism boundary.",
+    "The extractor does not choose a P1/P2 overlap policy, downstream split policy, tokenizer policy, or training-admission decision."
+  ],
+  "invalid_record_policy": "fail_closed_no_skip",
+  "not_an_admission": "A passing receipt only establishes a source-bound identity collection for later overlap proof. P1 and P2 training admission remain false."
+}

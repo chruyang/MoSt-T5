@@ -1,0 +1,77 @@
+{
+  "schema_version": "most-t5-r1/p1-p2-motif-projection-compatibility-contract/v1",
+  "purpose": "Independent, candidate-only comparison of the exact and anchor-deleted pure motif domains emitted by P1 production-v2 and the P2 legacy ready-LMDB census. The report quantifies overlap and semantic drift; it cannot select a union, cutoff, OOV policy or tokenizer.",
+  "required_inputs": [
+    "complete P1 production-v2 full_release_manifest.json and its global motif_census.jsonl",
+    "P1 production release contract",
+    "candidate P2 census derivation_receipt.json and all hash-bound census artifacts",
+    "P2 source lock and census extraction contract",
+    "this compatibility contract"
+  ],
+  "projection": {
+    "spec_id": "most-t5-r1/motif-lexeme-projection/v1",
+    "independent_recomputation_required": true,
+    "algorithm": "Validate canonical <nonnegative_decimal*> anchors, delete them from each exact fragment without any other normalization, reject residual angle brackets or an empty core, and wrap the exact remaining core in one square-bracket pair.",
+    "rdkit_permitted": false,
+    "normalization_permitted": false
+  },
+  "required_metrics": {
+    "overlap": [
+      "P1/P2 exact unique counts, shared unique count and phase-specific occurrence coverage",
+      "P1/P2 pure unique counts, shared unique count and phase-specific occurrence coverage"
+    ],
+    "collapse": [
+      "exact-to-pure unique cardinality",
+      "number of pure tokens backed by multiple exact lexemes",
+      "maximum exact lexemes per pure token"
+    ],
+    "stereochemistry": [
+      "unique exact lexemes and weighted occurrences containing @",
+      "unique exact lexemes and weighted occurrences containing /",
+      "unique exact lexemes and weighted occurrences containing backslash"
+    ],
+    "anchors": [
+      "unique exact lexemes and weighted occurrences containing anchors",
+      "maximum anchor ID",
+      "P2 record/component anchor-label multiplicity histogram",
+      "P2 record counts passing/failing the measured P1 pair rule"
+    ],
+    "provenance": [
+      "P1 molecule-native linearizer SHA-256",
+      "P2 producer status/SHA-256",
+      "P2 legacy linearization spec SHA-256"
+    ]
+  },
+  "compatibility_rules": {
+    "unknown_p2_producer": "incompatible_for_direct_union",
+    "producer_implementation_sha_difference": "provenance_fact_only_not_scientific_incompatibility_by_itself",
+    "linearization_semantic_mapping_is_unproven": "incompatible_for_direct_union",
+    "p2_record_fails_p1_anchor_pair_rule": "incompatible_for_direct_union",
+    "p2_retains_at_stereo_while_p1_omits_it": "incompatible_for_direct_union",
+    "stored_component_separator_semantics_not_proven_equal": "incompatible_for_direct_union",
+    "nonzero_overlap": "descriptive_only_not_compatibility_proof"
+  },
+  "output": {
+    "schema_version": "most-t5-r1/p1-p2-motif-projection-compatibility-report/v1",
+    "report_status": "candidate_evidence_non_release",
+    "direct_projection_domain_compatible": "true only when every fail-closed semantic rule is proven compatible",
+    "automatic_union_permitted": false,
+    "union_decision_permitted": false,
+    "training_admission": false
+  },
+  "forbidden_decisions": [
+    "P1-only versus P1+P2 union selection",
+    "minimum count or vocabulary cap",
+    "OOV token policy",
+    "base tokenizer/checkpoint selection",
+    "P2 relinearization approval",
+    "P1 or P2 training admission"
+  ],
+  "fail_closed": [
+    "Every input contract, manifest, receipt and census artifact is SHA-256 verified before comparison.",
+    "The P2 pure census must equal an independent recomputation from the P2 exact census.",
+    "Digest-to-distinct-fragment and pure-digest-to-distinct-token collisions abort the audit.",
+    "An absent/unknown producer or missing semantic evidence cannot be converted into compatibility by high lexical overlap.",
+    "The report is created once and contains a self-hash over all preceding fields."
+  ]
+}

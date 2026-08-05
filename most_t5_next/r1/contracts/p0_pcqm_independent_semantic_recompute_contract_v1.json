@@ -1,0 +1,270 @@
+{
+  "schema_version": "most-t5-r1/p0-pcqm-independent-semantic-recompute-contract/v1",
+  "purpose": "Fail-closed, source-backed semantic recomputation for every quarantined PCQM4Mv2 member and the already pre-registered admitted sample of a completed production-v2 geometry release. This gate is independent of producer and structural-auditor feature functions and does not admit P1 training.",
+  "trust_root": {
+    "external_root": "An externally reviewed exact semantic-gate script SHA-256 recorded in a separate deployment/execution receipt",
+    "script_pins_contracts_and_frozen_evidence": true,
+    "semantic_contract_pins_script": false,
+    "recursive_script_contract_hashing_permitted": false
+  },
+  "artifact_locks": {
+    "production_release_manifest": {
+      "file_name": "full_release_manifest.json",
+      "sha256": "4db380c63b00f2a595e3a86f70f434a059a6ca724fe35dee94ae2bdafb7d5a2d"
+    },
+    "destination_structural_audit_report": {
+      "file_name": "independent_audit_report.json",
+      "sha256": "8875f61c0c2691e1805081ee81228fce2c0a218f92ad3bbc095c5946bf430902"
+    },
+    "semantic_review_plan": {
+      "file_name": "semantic_review_plan.jsonl",
+      "sha256": "822e9a67f73f0f33caa38a8e015365929e87bf946238faa19810827c2dd58781"
+    },
+    "identity_contract": {
+      "bytes": 4193,
+      "sha256": "5f9be346294e08bf73d47c089a00be4c2f19d89612b5e4c09d0d7f5f6b23b044"
+    },
+    "payload_contract": {
+      "bytes": 2228,
+      "sha256": "fe7df29b1a7d358676c0eec6c44c1a9a42cff0f38cf14d2dd03c24c0c8f3003b"
+    }
+  },
+  "prerequisites": {
+    "production_release_schema": "most-t5-r1/p1-pcqm-geometry-production-full-release/v2",
+    "production_release_status": "complete",
+    "structural_audit_report_schema": "most-t5-r1/p1-pcqm-geometry-independent-audit-report/v3",
+    "structural_audit_status": "pass",
+    "semantic_plan_schema": "most-t5-r1/p1-pcqm-geometry-semantic-review-plan/v3",
+    "identity_contract_schema": "most-t5-r1/pcqm4mv2-identity-normalization-contract/v1",
+    "payload_contract_schema": "most-t5-r1/p1-pcqm-geometry-payload-format-contract/v2"
+  },
+  "independence_boundary": {
+    "standalone_gate_required": true,
+    "producer_module_imports_permitted": false,
+    "structural_auditor_module_imports_permitted": false,
+    "producer_or_auditor_feature_function_calls_permitted": false,
+    "permitted_runtime_dependencies": [
+      "Python standard library",
+      "NumPy",
+      "RDKit",
+      "read-only python-lmdb binding",
+      "the exact content-addressed vendored E3FP source used by production"
+    ],
+    "reason_for_same_e3fp_source": "The engineering question is whether the immutable payload is an exact replay of the declared historical E3FP implementation. Scientific adequacy versus alternative 3D representations is a separate paper experiment.",
+    "release_mutation_permitted": false,
+    "raw_smiles_or_molecule_output_permitted": false,
+    "output_directory_must_be_new_and_outside_release_root": true
+  },
+  "selection": {
+    "rejects": "all rows in the v3 semantic plan without exception",
+    "admitted": "all admitted_payload_sample rows in the same pre-registered v3 semantic plan",
+    "post_hoc_resampling_permitted": false,
+    "expected_full_release_reject_count": 13029,
+    "expected_full_release_admitted_sample_count": 544,
+    "rationale": "All rejects determine membership and therefore require census review. The admitted sample is an engineering replay sample stratified over every shard and ordinal band; it is not an effect-size or scientific-validity sample."
+  },
+  "source_replay": {
+    "association": "SDF ordinal i equals official CSV row i under the production-v2 source contract",
+    "archive_and_csv_byte_sha256_must_equal_release_staged_inputs": true,
+    "sdf_tar_member_name_bytes_and_sha256_must_equal_release_lock": true,
+    "complete_sdf_member_scan_required": true,
+    "selected_record_parser": "one-record in-memory Chem.ForwardSDMolSupplier with sanitize=true, removeHs=false, strictParsing=true before reproducing the production worker transport",
+    "production_worker_transport": "bytes(source_mol.ToBinary()) in the parent followed by Chem.Mol(mol_binary) in the feature worker",
+    "identity_projection_and_e3fp_source": "the worker-side Chem.Mol reconstructed from the RDKit binary transport",
+    "transport_precision_boundary": "the frozen RDKit binary transport deterministically stores conformer coordinates at float32 precision; atom, bond, and stereo components remain equal and the geometry payload is already float32",
+    "csv_requirements": [
+      "idx and smiles columns exist",
+      "every selected row resolves exactly once",
+      "integer idx equals zero-based row index"
+    ],
+    "nearest_row_repair_or_reordering_permitted": false
+  },
+  "rdkit_identity_recompute": {
+    "projection": "Chem.RemoveHs(Chem.Mol(mol), parameters, sanitize=true) with only RemoveHsParameters.removeDefiningBondStereo=true",
+    "post_projection": [
+      "Chem.SanitizeMol",
+      "Chem.AssignStereochemistry(cleanIt=true, force=true)"
+    ],
+    "primary_keys": {
+      "strict": "SHA-256 of canonical isomeric RDKit SMILES UTF-8 bytes",
+      "connectivity": "SHA-256 of canonical non-isomeric RDKit SMILES UTF-8 bytes"
+    },
+    "secondary_corroboration": {
+      "method": "RDKit Standard InChIKey when available",
+      "connectivity_view": "first InChIKey block equality",
+      "strict_view": "complete InChIKey equality",
+      "gate_effect": "reported_only_not_pass_determining",
+      "reason": "InChI normalization is a useful orthogonal view but is not semantically identical to the frozen RDKit-SMILES identity contract."
+    }
+  },
+  "hydrogen_and_atom_provenance_recompute": {
+    "source_atom_tag": "_r1_semantic_source_atom_index",
+    "tag_every_preprojection_atom": true,
+    "surviving_tags_must_be_integer_unique_in_range_and_strictly_ascending": true,
+    "residual_atomic_number_le_one_permitted": false,
+    "coordinates": "finite float32 C-order model_atom_count by 3 array from the same projected SDF Mol"
+  },
+  "e3fp_recompute": {
+    "required_for": "every pre-registered admitted sample",
+    "not_required_for": "a member whose first terminal production disposition is a hydrogen-projection or identity reject",
+    "invocation": {
+      "bits": 4096,
+      "level": 3,
+      "rdkit_invariants": true,
+      "all_iters": true,
+      "exclude_floating": false
+    },
+    "matrix_rule": "Populate [model atom, level] from each shell's explicit center_atom and radius; never infer a level from all_shells list order.",
+    "exact_checks": [
+      "resolved E3FP parameter object canonical SHA-256 equals payload e3fp_params_sha256",
+      "recomputed int32 C-order matrix shape equals payload shape",
+      "recomputed matrix bytes SHA-256 equals payload e3fp_sha256",
+      "recomputed matrix is byte-identical to the decoded payload array"
+    ],
+    "identity_reject_feature_characterization": "not part of this release gate; it may be run only as a separately labelled 2D-plus-3D-only ablation feasibility analysis"
+  },
+  "reject_recompute": {
+    "required_immediate_reason_codes": [
+      "PCQM_STEREO_2D3D_DIVERGENCE",
+      "PCQM_SDF_CSV_CONNECTIVITY_MISMATCH",
+      "HYDROGEN_PROJECTION_RESIDUAL_H"
+    ],
+    "expected_reason_counts": {
+      "PCQM_STEREO_2D3D_DIVERGENCE": 12978,
+      "PCQM_SDF_CSV_CONNECTIVITY_MISMATCH": 33,
+      "HYDROGEN_PROJECTION_RESIDUAL_H": 18
+    },
+    "required_reason_stage_diagnostic": {
+      "PCQM_STEREO_2D3D_DIVERGENCE": [
+        "identity",
+        "strict_mismatch_connectivity_match"
+      ],
+      "PCQM_SDF_CSV_CONNECTIVITY_MISMATCH": [
+        "identity",
+        "connectivity_mismatch"
+      ],
+      "HYDROGEN_PROJECTION_RESIDUAL_H": [
+        "hydrogen_projection",
+        "preflight_hydrogen_projection_residual_h"
+      ]
+    },
+    "checks": [
+      "membership, reject ledger, and semantic-plan ordinal/reason/stage agree",
+      "source_address_sha256 recomputes from the locked source address",
+      "source molecule identity SHA-256 equals the reject ledger for every reject",
+      "for identity-stage rejects, projected geometry identity SHA-256 equals the ledger and strict/connectivity relations reproduce the exact reason",
+      "for hydrogen-projection residual-H rejects, the minimal projection independently retains at least one atomic-number-1 atom and the ledger geometry identity remains null because production stopped before assigning it",
+      "geometry MSE remains disabled"
+    ],
+    "unexpected_reason_policy": "fail_closed_and_version_the_gate_before_interpreting_a_different_terminal_stage"
+  },
+  "admitted_recompute": {
+    "checks": [
+      "membership and decoded LMDB record bind the same ordinal, storage key, source address, and logical content hash",
+      "source and projected geometry molecule identities equal payload hashes",
+      "SDF and official strict identity hashes are equal and match the payload",
+      "connectivity identity hash matches the payload",
+      "model-to-source atom mapping is exactly equal",
+      "float32 coordinates are byte-identical",
+      "E3FP parameter hash and int32 matrix are byte-identical"
+    ]
+  },
+  "full_release_artifact_rehash": {
+    "required_phases": [
+      "before_source_replay",
+      "after_source_replay_before_completion"
+    ],
+    "required_shard_artifact_roles": [
+      "geometry_records_lmdb_data",
+      "membership",
+      "reject_ledger",
+      "payload_index",
+      "motif_census"
+    ],
+    "required_relative_paths": {
+      "geometry_records_lmdb_data": "geometry_records.lmdb/data.mdb",
+      "membership": "membership.jsonl",
+      "reject_ledger": "reject_ledger.jsonl",
+      "payload_index": "payload_index.jsonl",
+      "motif_census": "motif_census.jsonl"
+    },
+    "include_every_shard_manifest": true,
+    "include_global_motif_census": true,
+    "aggregate_rule": "SHA-256 of canonical JSON bytes for the ordered observation rows"
+  },
+  "e3fp_source_closure_rehash": {
+    "required_phases": [
+      "before_import_and_source",
+      "after_import_before_source",
+      "after_source_before_output",
+      "after_staged_output_before_completion",
+      "before_completion_receipt",
+      "before_completed_marker"
+    ],
+    "required_imported_modules": {
+      "e3fp": "__init__.py",
+      "e3fp.pipeline": "pipeline.py",
+      "e3fp.fingerprint.fprinter": "fingerprint/fprinter.py"
+    },
+    "all_observed_closures_must_equal_runtime_attestation": true,
+    "imported_module_paths_must_resolve_under_pinned_package_root": true
+  },
+  "critical_input_snapshot_policy": {
+    "single_byte_snapshot_parse_and_hash_required_for": [
+      "semantic gate contract",
+      "identity contract",
+      "payload contract",
+      "full release manifest",
+      "structural audit report",
+      "semantic review plan",
+      "runtime attestation"
+    ],
+    "large_archive_and_csv_stream_hash_required_before_and_after_source_replay": true
+  },
+  "completion_protocol": {
+    "initial_marker": "STAGING.json",
+    "staged_report": "semantic_recompute_report.staged.json",
+    "result_ledger": "semantic_recompute_results.jsonl",
+    "authoritative_receipt": "completion_receipt.json",
+    "final_marker": "COMPLETED",
+    "staged_report_may_claim_overall_pass": false,
+    "consumer_must_require_receipt_and_completed_marker": true,
+    "publisher_derives_status_from_fixed_staged_report": true,
+    "fixed_staged_report_and_ledger_paths_required": true,
+    "staged_report_and_ledger_semantics_must_be_parsed": true,
+    "receipt_binds_staged_report_ledger_and_final_checks": true,
+    "completed_marker_binds_receipt_report_ledger_and_script": true,
+    "failure_may_leave_only_non_authoritative_staging_artifacts": true
+  },
+  "pass_conditions": [
+    "the exact v3 pre-registered selection is consumed without omission or addition",
+    "all 13029 reject rows pass every required reject recomputation check",
+    "all 544 admitted sample rows pass every required admitted recomputation check",
+    "selected source molecules reproduce the production parent-to-worker RDKit binary transport before identity, projection, and E3FP recomputation",
+    "source archive, compressed CSV, uncompressed SDF member, E3FP closure, release manifest, audit report, semantic plan, identity contract, payload contract, gate contract, and gate script are content-addressed",
+    "the gate script hash is unchanged before source access, before staging, and through final completion publication",
+    "every declared shard artifact and the global motif census match declared bytes and SHA-256 before and after source replay",
+    "the attested E3FP closure and actual imported module paths remain exact through every required rehash phase",
+    "the per-record result ledger and staged report are exclusively created and self-hashed",
+    "an authoritative completion receipt and COMPLETED marker are published only after all final checks pass"
+  ],
+  "pass_boundary": {
+    "current_release_identity_classification_reproduced": true,
+    "current_release_e3fp_payload_reproduced_on_preregistered_sample": true,
+    "all_rejects_relabelled_or_admitted": false,
+    "external_e3fp_implementation_equivalence": false,
+    "cross_rdkit_version_robustness": false,
+    "motif_scientific_optimality": false,
+    "e3fp_scientific_optimality": false,
+    "mse_scientific_benefit": false,
+    "downstream_overlap_proof": false,
+    "tokenizer_binding": false,
+    "p1_training_admission": false
+  },
+  "paper_experiments_not_engineering_gates": [
+    "repeat the identity replay under at least one separately pinned RDKit version and report classification drift",
+    "compare E3FP with distance, angle, torsion, and equivariant geometric encoders under controlled downstream ablations",
+    "evaluate whether quarantined stereo-divergent records help a separately labelled SDF-self-consistent 2D-plus-3D ablation",
+    "report uncertainty intervals and task-family-specific downstream effects rather than treating exact engineering replay as scientific validation"
+  ]
+}

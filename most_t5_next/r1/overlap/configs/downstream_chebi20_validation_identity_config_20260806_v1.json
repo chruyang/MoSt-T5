@@ -1,0 +1,63 @@
+{
+  "schema_version": "most-t5-r1/identity-collection-extraction-config/v1",
+  "extraction_id": "downstream-chebi20-validation-identity-20260806-v1",
+  "contract_sha256": "c348834aa1a13c4d53db1977c16a9c2d445ef61a46295055d11ed1def94c9603",
+  "collection": {
+    "collection_id": "downstream-chebi20-validation-identity-20260806-v1",
+    "dataset_id": "3dmolt5-chebi20-hf",
+    "release_id": "3dmolt5-chebi20-hf-9949fae8860ffd7c7dbca8e9848ad37842f1c279",
+    "phase": "downstream",
+    "split": "validation",
+    "role": "downstream_validation",
+    "task_family": "text_to_molecule_generation",
+    "source_identity_namespace": "chebi_cid"
+  },
+  "source": {
+    "path": "/root/autodl-fs/most-t5-r1/sources/legacy-and-downstream-evidence-r0-v1/chebi-hf/data/validation-00000-of-00001-aa1e794fde3e680c.parquet",
+    "format": "parquet",
+    "expected_bytes": 1614814,
+    "expected_sha256": "a4d1f8495af1c23131005e9e44c8db1e32545db4c645fc56d1279266a76af49e",
+    "format_options": {
+      "json_top_level": null,
+      "csv_dialect": null,
+      "parquet_batch_size": 4096,
+      "lmdb": null
+    }
+  },
+  "identity": {
+    "normalization_contract_path": "../../contracts/pcqm4mv2_identity_normalization_contract.json",
+    "normalization_contract_sha256": "5f9be346294e08bf73d47c089a00be4c2f19d89612b5e4c09d0d7f5f6b23b044",
+    "normalizer_path": "../../gates/pcqm_identity_smoke.py",
+    "normalizer_sha256": "fd55ac5a519c2235cf3202814782b56ce674c032ace7948e0a36af4f91274abc",
+    "required_rdkit_version": "2024.03.5"
+  },
+  "mapping": {
+    "member_id": {
+      "source": "field",
+      "field": "cid",
+      "prefix": "chebi_cid:",
+      "crosscheck_field": null
+    },
+    "smiles_field": "smiles",
+    "record_filter": null,
+    "text_identity": {
+      "status": "available",
+      "normalization": "unicode_nfkc_whitespace_v1",
+      "unit": {
+        "unit_name": "text_to_molecule_encoder_input",
+        "semantic_role": "text_to_molecule_encoder_input",
+        "serialization": "canonical_component_object_utf8_v1",
+        "components": [
+          {
+            "name": "instruction",
+            "field": "instruction"
+          },
+          {
+            "name": "description",
+            "field": "input"
+          }
+        ]
+      }
+    }
+  }
+}

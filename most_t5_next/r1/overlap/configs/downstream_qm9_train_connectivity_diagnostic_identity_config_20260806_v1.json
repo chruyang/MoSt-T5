@@ -1,0 +1,49 @@
+{
+  "schema_version": "most-t5-r1/identity-collection-extraction-config/v1",
+  "extraction_id": "downstream-qm9-train-connectivity-diagnostic-identity-20260806-v1",
+  "contract_sha256": "c348834aa1a13c4d53db1977c16a9c2d445ef61a46295055d11ed1def94c9603",
+  "collection": {
+    "collection_id": "downstream-qm9-train-connectivity-diagnostic-identity-20260806-v1",
+    "dataset_id": "3dmolt5-qm9-hf",
+    "release_id": "bfe55090be9ebf1c9cbbe6687a5796711ac0edd8",
+    "phase": "downstream",
+    "split": "train",
+    "role": "downstream_train",
+    "task_family": "molecular_property_prediction",
+    "source_identity_namespace": "qm9_hf_split_row"
+  },
+  "source": {
+    "path": "/root/autodl-fs/most-t5-r1/sources/legacy-and-downstream-evidence-r0-v1/qm9-hf/data/train-00000-of-00001.parquet",
+    "format": "parquet",
+    "expected_bytes": 40016993,
+    "expected_sha256": "95731ca5b9ea05fb5b22b41ee9654e01d12ce47aa54b3f162c1470782ff7a574",
+    "format_options": {
+      "json_top_level": null,
+      "csv_dialect": null,
+      "parquet_batch_size": 4096,
+      "lmdb": null
+    }
+  },
+  "identity": {
+    "normalization_contract_path": "../../contracts/pcqm4mv2_identity_normalization_contract.json",
+    "normalization_contract_sha256": "5f9be346294e08bf73d47c089a00be4c2f19d89612b5e4c09d0d7f5f6b23b044",
+    "normalizer_path": "../../gates/pcqm_identity_smoke.py",
+    "normalizer_sha256": "fd55ac5a519c2235cf3202814782b56ce674c032ace7948e0a36af4f91274abc",
+    "required_rdkit_version": "2024.03.5"
+  },
+  "mapping": {
+    "member_id": {
+      "source": "row_index",
+      "field": null,
+      "prefix": "qm9-hf:train:row:",
+      "crosscheck_field": null
+    },
+    "smiles_field": "smiles",
+    "record_filter": null,
+    "text_identity": {
+      "status": "unavailable",
+      "normalization": null,
+      "unit": null
+    }
+  }
+}

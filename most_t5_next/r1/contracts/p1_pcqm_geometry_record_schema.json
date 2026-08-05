@@ -1,0 +1,756 @@
+{
+  "schema_version": "most-t5-r1/p1-pcqm-geometry-record-schema-contract/v2",
+  "logical_geometry_record_schema_version": "most-t5-r1/p1-pcqm-geometry-pretokenizer-record/v2",
+  "purpose": "Machine-readable contract for a bounded PCQM4Mv2 P1 geometry-only pretokenizer sidecar smoke v2. It defines a recursively closed, non-executable admitted record, its ordinal membership row, and the one-to-one reject ledger. It is not a tokenizer-bound training record, a training-data admission, or a full-corpus release schema.",
+  "scope": {
+    "source_profile": "pcqm4mv2_candidate",
+    "identity_namespace": "ogb_pcqm4mv2_train_row_index",
+    "source_record_count": 3378606,
+    "sidecar_mode": "bounded_smoke_only",
+    "maximum_selected_source_records": 1000,
+    "p1_training_admission": false,
+    "p1_training_launcher_permitted": false,
+    "tokenizer_binding_permitted_in_this_schema": false,
+    "member_id_format": "ogb_pcqm4mv2_train_row_index:<zero-based decimal SDF ordinal>",
+    "storage_key_format": "zero-padded nine-digit decimal SDF ordinal",
+    "ordinal_selection_rule": "The smoke descriptor must name a deterministic, duplicate-free, ascending SDF-ordinal selection and its SHA-256. Every selected ordinal must have exactly one membership row."
+  },
+  "source_and_adapter_bindings": {
+    "required_source_locks": [
+      "p1_membership_source",
+      "p1_geometry_source",
+      "p1_adapter_harness",
+      "p1_record_schema",
+      "p1_geometry_payload_format",
+      "pcqm_identity_normalization_contract"
+    ],
+    "required_contract_hashes": {
+      "identity_normalization_contract_sha256": "SHA-256 of pcqm4mv2_identity_normalization_contract.json",
+      "source_contract_sha256": "SHA-256 of the immutable PCQM source contract including the locked inner SDF member",
+      "hydrogen_projection_spec_sha256": "SHA-256 of the frozen minimal RemoveHs projection specification",
+      "linearizer_spec_sha256": "SHA-256 of the isolated linearize_mol harness/specification",
+      "e3fp_params_sha256": "SHA-256 of the resolved E3FP parameter specification",
+      "tokenizer_contract_sha256": "SHA-256 of the frozen tokenizer contract; it may be unavailable for a pre-tokenizer smoke, in which case the record cannot be passed to training"
+    },
+    "same_mol_derivation": "single_post_projection_geometry_mol",
+    "source_atom_index_tag": "_r1_source_atom_index",
+    "source_atom_index_tagged_pre_removehs": true,
+    "compacted_index_inference_forbidden": true,
+    "smiles_rebuild_for_alignment_forbidden": true,
+    "frozen_mol_linearizer_required": true,
+    "geometry_only_pretokenizer_record_non_admissible": true,
+    "future_tokenizer_bound_mask_contract": "joint_mask_positions, geo_only_mask_positions, geometry_input_mask, and geometry_target_mask are specified below; no legacy mask_positions field is valid."
+  },
+  "serialization": {
+    "primary_record_store": "LMDB value encoded only by the non-executable p1_pcqm_geometry_payload_format_contract/v2; pickle and any legacy v1 payload fallback are forbidden",
+    "canonical_hash_serialization": "UTF-8 canonical JSON with sorted keys, compact separators, and no diagnostic source strings",
+    "hash_algorithm": "sha256",
+    "all_sha256_values": "lowercase 64-hex",
+    "unknown_fields": "forbidden in every logical record, membership row, reject-ledger row, and smoke descriptor"
+  },
+  "scalar_types": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullable_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "string_pattern_when_present": "^[0-9a-f]{64}$"
+    },
+    "nonnegative_int": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "positive_int": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "storage_key": {
+      "type": "string",
+      "pattern": "^[0-9]{9}$"
+    },
+    "member_id": {
+      "type": "string",
+      "pattern": "^ogb_pcqm4mv2_train_row_index:[0-9]+$"
+    }
+  },
+  "field_type_refs": {
+    "admitted_record.record_schema_version": {
+      "type": "string",
+      "const": "most-t5-r1/p1-pcqm-geometry-pretokenizer-record/v2"
+    },
+    "admitted_record.sidecar.sidecar_id": {
+      "type": "string",
+      "min_length": 1
+    },
+    "admitted_record.sidecar.selected_ordinal_set_sha256": "sha256",
+    "admitted_record.sidecar.source_contract_sha256": "sha256",
+    "admitted_record.sidecar.identity_normalization_contract_sha256": "sha256",
+    "admitted_record.sidecar.adapter_harness_sha256": "sha256",
+    "admitted_record.sidecar.record_schema_sha256": "sha256",
+    "admitted_record.member.member_id": "member_id",
+    "admitted_record.member.sdf_record_index": "nonnegative_int",
+    "admitted_record.member.official_csv_row_index": "nonnegative_int",
+    "admitted_record.member.storage_key": "storage_key",
+    "admitted_record.member.source_archive_sha256": "sha256",
+    "admitted_record.member.source_address_sha256": "sha256",
+    "admitted_record.member.source_mol_identity_sha256": "sha256",
+    "admitted_record.identity.sdf_strict_smiles_sha256": "sha256",
+    "admitted_record.identity.official_strict_smiles_sha256": "sha256",
+    "admitted_record.identity.canonical_connectivity_sha256": "sha256",
+    "admitted_record.identity.identity_spec_sha256": "sha256",
+    "admitted_record.identity.rdkit_version": {
+      "type": "string",
+      "min_length": 1
+    },
+    "admitted_record.atom_universe.hydrogen_projection_spec_sha256": "sha256",
+    "admitted_record.atom_universe.source_atom_count": "positive_int",
+    "admitted_record.atom_universe.source_explicit_hydrogen_count": "nonnegative_int",
+    "admitted_record.atom_universe.model_atom_count": "positive_int",
+    "admitted_record.atom_universe.model_to_source_atom_index": "array_contracts.model_to_source_atom_index",
+    "admitted_record.atom_universe.geometry_mol_identity_sha256": "sha256",
+    "admitted_record.topology.linearizer_spec_sha256": "sha256",
+    "admitted_record.topology.motif_count": "positive_int",
+    "admitted_record.topology.motif_atom_indices": "array_contracts.motif_atom_indices",
+    "admitted_record.topology.motif_atom_indices_sha256": "sha256",
+    "admitted_record.geometry.motif_geometry_valid": "array_contracts.motif_geometry_valid",
+    "admitted_record.geometry.coordinates": "array_contracts.coordinates",
+    "admitted_record.geometry.coordinates_sha256": "sha256",
+    "admitted_record.geometry.e3fp": "array_contracts.e3fp",
+    "admitted_record.geometry.e3fp_shape": {
+      "type": "integer_array",
+      "const_shape": [
+        "model_atom_count",
+        4
+      ]
+    },
+    "admitted_record.geometry.e3fp_params_sha256": "sha256",
+    "admitted_record.geometry.e3fp_sha256": "sha256",
+    "membership_row.member_id": "member_id",
+    "membership_row.sdf_record_index": "nonnegative_int",
+    "membership_row.official_csv_row_index": "nonnegative_int",
+    "membership_row.selected_ordinal_set_sha256": "sha256",
+    "membership_row.source_address_sha256": "sha256",
+    "membership_row.record_content_sha256": "sha256_or_null_by_disposition",
+    "reject_ledger_row.member_id": "member_id",
+    "reject_ledger_row.sdf_record_index": "nonnegative_int",
+    "reject_ledger_row.official_csv_row_index": "nonnegative_int",
+    "reject_ledger_row.selected_ordinal_set_sha256": "sha256",
+    "reject_ledger_row.source_address_sha256": "sha256",
+    "reject_ledger_row.source_mol_identity_sha256": "nullable_sha256",
+    "reject_ledger_row.geometry_mol_identity_sha256": "nullable_sha256",
+    "reject_ledger_row.diagnostic_code": {
+      "type": "string",
+      "enum_source": "closed_reject_diagnostic_codes"
+    },
+    "reject_ledger_row.detail_sha256": "sha256"
+  },
+  "array_contracts": {
+    "model_to_source_atom_index": {
+      "dtype": "int32",
+      "shape": [
+        "model_atom_count"
+      ],
+      "layout": "C",
+      "value_constraints": [
+        "each value is in [0, source_atom_count)",
+        "values are unique and strictly ascending",
+        "every value is read from a surviving pre-RemoveHs _r1_source_atom_index tag; inferred compacted indices or offsets are forbidden"
+      ]
+    },
+    "coordinates": {
+      "dtype": "float32",
+      "shape": [
+        "model_atom_count",
+        3
+      ],
+      "layout": "C",
+      "value_constraints": [
+        "every value is finite",
+        "coordinates are copied from conformer 0 of the same post-projection geometry_mol",
+        "no generated conformer, optimization, alignment, or undeclared coordinate transform"
+      ]
+    },
+    "e3fp": {
+      "dtype": "int32",
+      "shape": [
+        "model_atom_count",
+        4
+      ],
+      "layout": "C",
+      "value_constraints": [
+        "every value is an integer in [-1, 4095]",
+        "no row is [-1, -1, -1, -1]",
+        "shell positions are populated from E3FP shell.center_atom and shell.radius"
+      ]
+    },
+    "motif_atom_indices": {
+      "dtype": "int32",
+      "shape": [
+        "motif_count",
+        "variable_nonempty_length"
+      ],
+      "layout": "C_per_inner_array",
+      "value_constraints": [
+        "each inner array is strictly ascending and nonempty",
+        "all values are in [0, model_atom_count)",
+        "groups are pairwise disjoint and their union is exactly range(model_atom_count)"
+      ]
+    },
+    "motif_geometry_valid": {
+      "dtype": "bool",
+      "shape": [
+        "motif_count"
+      ],
+      "layout": "C",
+      "value_constraints": [
+        "every value is true for an admitted bounded-geometry-sidecar record"
+      ]
+    },
+    "array_metadata": {
+      "coordinates_dtype": "float32",
+      "coordinates_shape": [
+        "model_atom_count",
+        3
+      ],
+      "coordinates_order": "C",
+      "e3fp_dtype": "int32",
+      "e3fp_shape": [
+        "model_atom_count",
+        4
+      ],
+      "e3fp_order": "C",
+      "model_to_source_atom_index_dtype": "int32",
+      "motif_atom_indices_dtype": "int32",
+      "validation_rule": "The sidecar validator compares this metadata with the actual native arrays; it must not trust the declaration alone."
+    }
+  },
+  "future_tokenizer_bound_record_requirements": {
+    "status": "design_constraint_only_not_present_in_this_geometry_only_schema",
+    "future_record_schema_version": "most-t5-r1/p1-pcqm-tokenizer-bound-record/v1",
+    "admission_preconditions": [
+      "A separately frozen tokenizer contract and id_to_token mapping exist.",
+      "Every record binds their exact SHA-256 values and is validated against the immutable p1_record_schema lock.",
+      "The R1 release manifest independently records a positive P1 admission decision."
+    ],
+    "required_fields": [
+      "tokenizer_contract_sha256",
+      "id_to_token_sha256",
+      "full_input_ids",
+      "unmasked_input_ids",
+      "motif_ordinal_to_unmasked_token_index",
+      "token_geometry_valid_mask",
+      "joint_mask_positions",
+      "geo_only_mask_positions",
+      "geometry_input_mask",
+      "geometry_target_mask"
+    ],
+    "array_contracts": {
+      "full_input_ids": {
+        "dtype": "int32",
+        "shape": [
+          "full_sequence_length"
+        ],
+        "layout": "C",
+        "meaning": "Frozen complete P1 token sequence; its position domain is declared and linked to the unmasked domain by an explicit immutable index map."
+      },
+      "unmasked_input_ids": {
+        "dtype": "int32",
+        "shape": [
+          "unmasked_sequence_length"
+        ],
+        "layout": "C",
+        "meaning": "Frozen uncorrupted token sequence whose positions are the canonical domain for motif-to-token and all V1 mask arrays."
+      },
+      "full_to_unmasked_token_index": {
+        "dtype": "int32",
+        "shape": [
+          "full_sequence_length"
+        ],
+        "layout": "C",
+        "required": true,
+        "value_constraints": [
+          "each value is either -1 for a full-only special position or an in-range unmasked token position",
+          "the mapping is explicit; no position correspondence may be inferred from re-tokenization or token-string equality"
+        ]
+      },
+      "motif_ordinal_to_unmasked_token_index": {
+        "dtype": "int32",
+        "shape": [
+          "motif_count"
+        ],
+        "layout": "C",
+        "value_constraints": [
+          "each value is unique and names an in-range non-special unmasked_input_ids position"
+        ]
+      },
+      "token_geometry_valid_mask": {
+        "dtype": "bool",
+        "shape": [
+          "unmasked_sequence_length"
+        ],
+        "layout": "C",
+        "value_constraints": [
+          "at motif_ordinal_to_unmasked_token_index[j], value equals motif_geometry_valid[j]",
+          "full-only and special positions are never a geometry target"
+        ]
+      },
+      "joint_mask_positions": {
+        "dtype": "bool",
+        "shape": [
+          "unmasked_sequence_length"
+        ],
+        "layout": "C",
+        "meaning": "Positions jointly corrupted for 2D/token reconstruction and geometry input corruption; V1 does not use them as an MSE target."
+      },
+      "geo_only_mask_positions": {
+        "dtype": "bool",
+        "shape": [
+          "unmasked_sequence_length"
+        ],
+        "layout": "C",
+        "meaning": "Positions whose geometry channel alone is corrupted and which may contribute to V1 geometric self-distillation."
+      },
+      "geometry_input_mask": {
+        "dtype": "bool",
+        "shape": [
+          "unmasked_sequence_length"
+        ],
+        "layout": "C",
+        "required_value": "joint_mask_positions OR geo_only_mask_positions"
+      },
+      "geometry_target_mask": {
+        "dtype": "bool",
+        "shape": [
+          "unmasked_sequence_length"
+        ],
+        "layout": "C",
+        "required_value": "geo_only_mask_positions AND token_geometry_valid_mask"
+      }
+    },
+    "v1_mask_invariants": [
+      "joint_mask_positions and geo_only_mask_positions are disjoint.",
+      "geometry_input_mask equals elementwise OR(joint_mask_positions, geo_only_mask_positions).",
+      "geometry_target_mask equals elementwise AND(geo_only_mask_positions, token_geometry_valid_mask).",
+      "joint_mask_positions must not be silently included in geometry_target_mask under V1.",
+      "If geometry_target_mask has zero true positions in a batch, MSE is skipped and no zero-vector substitute is created.",
+      "The legacy field name mask_positions and its legacy semantics are forbidden."
+    ],
+    "not_yet_permitted": [
+      "fabricating tokenizer_contract_sha256 or id_to_token_sha256 for this smoke",
+      "adding full_input_ids, unmasked_input_ids, or any V1 mask array to a geometry-only pretokenizer record",
+      "using a geometry-only pretokenizer record in a P1 dataloader or loss computation"
+    ]
+  },
+  "admitted_record": {
+    "document_kind": "admitted_record",
+    "required_top_level_fields": [
+      "record_schema_version",
+      "sidecar",
+      "member",
+      "identity",
+      "atom_universe",
+      "topology",
+      "geometry",
+      "array_metadata"
+    ],
+    "forbidden_top_level_fields": [
+      "tokenizer_binding",
+      "tokenizer_contract_sha256",
+      "id_to_token_sha256",
+      "full_input_ids",
+      "unmasked_input_ids",
+      "motif_ordinal_to_unmasked_token_index",
+      "token_geometry_valid_mask",
+      "joint_mask_positions",
+      "geo_only_mask_positions",
+      "geometry_input_mask",
+      "geometry_target_mask",
+      "mask_positions"
+    ],
+    "record_schema_version": "most-t5-r1/p1-pcqm-geometry-pretokenizer-record/v2",
+    "fields": {
+      "sidecar": {
+        "required_fields": [
+          "sidecar_id",
+          "sidecar_mode",
+          "selected_ordinal_set_sha256",
+          "source_contract_sha256",
+          "identity_normalization_contract_sha256",
+          "adapter_harness_sha256",
+          "record_schema_sha256",
+          "geometry_only_pretokenizer",
+          "p1_training_admission",
+          "p1_training_launcher_permitted"
+        ],
+        "required_values": {
+          "sidecar_mode": "bounded_smoke_only",
+          "geometry_only_pretokenizer": true,
+          "p1_training_admission": false,
+          "p1_training_launcher_permitted": false
+        },
+        "value_constraints": [
+          "selected_ordinal_set_sha256 is shared by every record and sidecar row",
+          "record_schema_sha256 matches the immutable p1_record_schema source lock",
+          "adapter_harness_sha256 matches the immutable p1_adapter_harness source lock"
+        ]
+      },
+      "member": {
+        "required_fields": [
+          "identity_namespace",
+          "member_id",
+          "sdf_record_index",
+          "official_csv_row_index",
+          "storage_key",
+          "source_archive_sha256",
+          "source_address_sha256",
+          "source_mol_identity_sha256"
+        ],
+        "required_values": {
+          "identity_namespace": "ogb_pcqm4mv2_train_row_index"
+        },
+        "value_constraints": [
+          "sdf_record_index is in [0, 3378606)",
+          "member_id decimal suffix equals sdf_record_index",
+          "storage_key is the nine-digit zero-padded sdf_record_index",
+          "official_csv_row_index is split_dict['train'][sdf_record_index], not an inferred nearest neighbour",
+          "source_address_sha256 binds source archive SHA-256, locked tar member name/hash, SDF ordinal, and official CSV row under the fixed pcqm-source-address/v1 preimage"
+        ]
+      },
+      "identity": {
+        "required_fields": [
+          "official_identity_status",
+          "sdf_strict_smiles_sha256",
+          "official_strict_smiles_sha256",
+          "canonical_connectivity_sha256",
+          "identity_spec_sha256",
+          "rdkit_version"
+        ],
+        "required_values": {
+          "official_identity_status": "strict_isomeric_match"
+        },
+        "value_constraints": [
+          "sdf_strict_smiles_sha256 equals official_strict_smiles_sha256",
+          "only hashes of comparison identities are serialized; the source or official SMILES strings are not serialized"
+        ]
+      },
+      "atom_universe": {
+        "required_fields": [
+          "policy_id",
+          "hydrogen_projection_spec_sha256",
+          "source_atom_count",
+          "source_explicit_hydrogen_count",
+          "model_atom_count",
+          "model_to_source_atom_index",
+          "geometry_mol_identity_sha256"
+        ],
+        "required_values": {
+          "policy_id": "project_explicit_hydrogens_before_e3fp_v1"
+        },
+        "value_constraints": [
+          "model_atom_count is positive",
+          "model_to_source_atom_index obeys array_contracts.model_to_source_atom_index",
+          "geometry_mol contains no residual hydrogen atom"
+        ]
+      },
+      "topology": {
+        "required_fields": [
+          "linearizer_spec_sha256",
+          "motif_count",
+          "motif_atom_indices",
+          "motif_atom_indices_sha256"
+        ],
+        "value_constraints": [
+          "motif_count is positive",
+          "motif_atom_indices obeys array_contracts.motif_atom_indices",
+          "the isolated linearizer receives geometry_mol directly and preserves its atom order"
+        ]
+      },
+      "geometry": {
+        "required_fields": [
+          "geometry_valid",
+          "geometry_mse_enabled",
+          "geometry_mse_candidate_after_tokenizer_binding",
+          "motif_geometry_valid",
+          "coordinates",
+          "coordinates_sha256",
+          "e3fp",
+          "e3fp_shape",
+          "e3fp_params_sha256",
+          "e3fp_sha256"
+        ],
+        "required_values": {
+          "geometry_valid": true,
+          "geometry_mse_enabled": false,
+          "geometry_mse_candidate_after_tokenizer_binding": true
+        },
+        "value_constraints": [
+          "geometry_mse_enabled remains false because this is a geometry-only pretokenizer record; it must not be sent to a P1 loss.",
+          "coordinates obey array_contracts.coordinates",
+          "e3fp obeys array_contracts.e3fp",
+          "e3fp_shape equals [model_atom_count, 4]",
+          "motif_geometry_valid obeys array_contracts.motif_geometry_valid"
+        ]
+      },
+      "array_metadata": {
+        "required_fields": [
+          "coordinates_dtype",
+          "coordinates_shape",
+          "coordinates_order",
+          "e3fp_dtype",
+          "e3fp_shape",
+          "e3fp_order",
+          "model_to_source_atom_index_dtype",
+          "motif_atom_indices_dtype"
+        ],
+        "required_values": {
+          "coordinates_dtype": "float32",
+          "coordinates_order": "C",
+          "e3fp_dtype": "int32",
+          "e3fp_order": "C",
+          "model_to_source_atom_index_dtype": "int32",
+          "motif_atom_indices_dtype": "int32"
+        },
+        "value_constraints": [
+          "coordinates_shape equals [model_atom_count, 3]",
+          "e3fp_shape equals [model_atom_count, 4]",
+          "metadata is checked against the actual native arrays, not trusted as a declaration"
+        ]
+      }
+    }
+  },
+  "membership_row": {
+    "document_kind": "membership_row",
+    "required_fields": [
+      "record_schema_version",
+      "sidecar_id",
+      "sidecar_mode",
+      "selected_ordinal_set_sha256",
+      "member_id",
+      "sdf_record_index",
+      "official_csv_row_index",
+      "source_address_sha256",
+      "disposition",
+      "record_storage_key",
+      "record_content_sha256",
+      "reject_reason_code"
+    ],
+    "required_values": {
+      "record_schema_version": "most-t5-r1/p1-pcqm-geometry-pretokenizer-record/v2",
+      "sidecar_mode": "bounded_smoke_only"
+    },
+    "allowed_dispositions": [
+      "admit",
+      "reject"
+    ],
+    "conditional_fields": {
+      "admit": {
+        "record_storage_key": "required non-null storage_key matching the ordinal",
+        "record_content_sha256": "required non-null sha256 of canonical admitted record",
+        "reject_reason_code": "must be null"
+      },
+      "reject": {
+        "record_storage_key": "must be null",
+        "record_content_sha256": "must be null",
+        "reject_reason_code": "required closed_reject_reason_codes value"
+      }
+    },
+    "value_constraints": [
+      "rows are written in strictly ascending sdf_record_index order",
+      "a membership row is present once and only once for every selected source ordinal",
+      "the reject-ledger set is exactly the set of membership rows with disposition reject"
+    ]
+  },
+  "reject_ledger_row": {
+    "document_kind": "reject_ledger_row",
+    "required_fields": [
+      "record_schema_version",
+      "sidecar_id",
+      "sidecar_mode",
+      "selected_ordinal_set_sha256",
+      "member_id",
+      "sdf_record_index",
+      "official_csv_row_index",
+      "source_address_sha256",
+      "stage",
+      "reason_code",
+      "action",
+      "geometry_mse_enabled",
+      "source_mol_identity_sha256",
+      "geometry_mol_identity_sha256",
+      "diagnostic_code",
+      "detail_sha256"
+    ],
+    "required_values": {
+      "record_schema_version": "most-t5-r1/p1-pcqm-geometry-pretokenizer-record/v2",
+      "sidecar_mode": "bounded_smoke_only",
+      "action": "exclude_from_geometry_release",
+      "geometry_mse_enabled": false
+    },
+    "allowed_stages": [
+      "sdf_parse",
+      "identity",
+      "hydrogen_projection",
+      "source_atom_index",
+      "topology",
+      "e3fp",
+      "downstream_exclusion",
+      "serialization"
+    ],
+    "value_constraints": [
+      "reason_code is a closed_reject_reason_codes key",
+      "stage equals closed_reject_reason_codes[reason_code].stage",
+      "source_address_sha256 is mandatory even when RDKit cannot parse a source Mol; source_mol_identity_sha256 is null only for that parse failure; geometry_mol_identity_sha256 is null only before a geometry Mol exists",
+      "diagnostic_code is a closed non-sensitive diagnostic token; no exception message or raw/canonical SMILES may be emitted",
+      "detail_sha256 equals SHA-256 of canonical JSON {diagnostic_code, reason_code, source_address_sha256, stage}"
+    ]
+  },
+  "closed_reject_diagnostic_codes": [
+    "sdf_rdkit_none",
+    "csv_idx_not_integer",
+    "csv_idx_row_index_mismatch",
+    "csv_smiles_missing",
+    "csv_row_unresolved",
+    "official_smiles_parse_failed",
+    "official_canonicalization_failed",
+    "strict_mismatch_connectivity_match",
+    "connectivity_mismatch",
+    "feature_coordinates_invalid",
+    "linearizer_failed",
+    "preflight_sdf_conformer_count_not_one",
+    "preflight_sdf_conformer_access_failed",
+    "preflight_atom_coordinate_count_mismatch",
+    "preflight_nonfinite_coordinates",
+    "preflight_zero_source_atoms",
+    "preflight_source_atom_tag_missing",
+    "preflight_source_atom_tag_not_integer",
+    "preflight_source_atom_tag_out_of_range",
+    "preflight_source_atom_tag_not_unique",
+    "preflight_source_atom_tag_domain_invalid",
+    "preflight_source_atom_tag_order_not_preserved",
+    "preflight_hydrogen_projection_failed",
+    "preflight_zero_model_atoms",
+    "preflight_hydrogen_projection_residual_h",
+    "preflight_geometry_non_e3fp_atom",
+    "preflight_e3fp_shell_radius_invalid",
+    "preflight_e3fp_radius_multiplier_invalid",
+    "preflight_e3fp_shell_radius_unmappable",
+    "preflight_e3fp_shell_center_invalid",
+    "preflight_e3fp_shell_center_out_of_range",
+    "preflight_e3fp_shell_level_above_requested",
+    "preflight_e3fp_duplicate_center_radius_slot",
+    "preflight_e3fp_shell_identifier_missing",
+    "preflight_e3fp_identifier_fold_failed",
+    "preflight_e3fp_identifier_out_of_range",
+    "preflight_e3fp_no_shells",
+    "preflight_e3fp_shape_invalid",
+    "preflight_e3fp_value_range_invalid",
+    "preflight_e3fp_level0_missing",
+    "preflight_e3fp_all_padding_model_row",
+    "preflight_e3fp_generation_failed",
+    "preflight_e3fp_empty_fingerprint_result",
+    "preflight_e3fp_resolved_config_mismatch"
+  ],
+  "closed_reject_reason_codes": {
+    "SDF_PARSE_FAILED": {
+      "stage": "sdf_parse",
+      "action": "exclude_from_geometry_release"
+    },
+    "SDF_CONFORMER_INVALID": {
+      "stage": "sdf_parse",
+      "action": "exclude_from_geometry_release"
+    },
+    "NONFINITE_COORDINATES": {
+      "stage": "sdf_parse",
+      "action": "exclude_from_geometry_release"
+    },
+    "PCQM_PARSE_OR_NORMALIZATION_ERROR": {
+      "stage": "identity",
+      "action": "exclude_from_geometry_release"
+    },
+    "PCQM_SDF_CSV_CONNECTIVITY_MISMATCH": {
+      "stage": "identity",
+      "action": "exclude_from_geometry_release"
+    },
+    "PCQM_STEREO_2D3D_DIVERGENCE": {
+      "stage": "identity",
+      "action": "exclude_from_geometry_release"
+    },
+    "HYDROGEN_PROJECTION_FAILED": {
+      "stage": "hydrogen_projection",
+      "action": "exclude_from_geometry_release"
+    },
+    "HYDROGEN_PROJECTION_RESIDUAL_H": {
+      "stage": "hydrogen_projection",
+      "action": "exclude_from_geometry_release"
+    },
+    "SOURCE_ATOM_INDEX_TAG_INVALID": {
+      "stage": "source_atom_index",
+      "action": "exclude_from_geometry_release"
+    },
+    "ZERO_MODEL_ATOMS": {
+      "stage": "source_atom_index",
+      "action": "exclude_from_geometry_release"
+    },
+    "MOTIF_LINEARIZATION_FAILED": {
+      "stage": "topology",
+      "action": "exclude_from_geometry_release"
+    },
+    "MOTIF_MAPPING_INVALID": {
+      "stage": "topology",
+      "action": "exclude_from_geometry_release"
+    },
+    "E3FP_GENERATION_FAILED": {
+      "stage": "e3fp",
+      "action": "exclude_from_geometry_release"
+    },
+    "E3FP_SHAPE_OR_RANGE_INVALID": {
+      "stage": "e3fp",
+      "action": "exclude_from_geometry_release"
+    },
+    "DOWNSTREAM_EVAL_IDENTITY_OVERLAP": {
+      "stage": "downstream_exclusion",
+      "action": "exclude_from_geometry_release"
+    },
+    "SERIALIZATION_VALIDATION_FAILED": {
+      "stage": "serialization",
+      "action": "exclude_from_geometry_release"
+    }
+  },
+  "prohibitions": {
+    "forbidden_record_field_names": [
+      "raw_smiles",
+      "smiles",
+      "canonical_smiles",
+      "official_smiles",
+      "sdf_smiles",
+      "source_smiles",
+      "generated_smiles",
+      "topology_smiles",
+      "motif_fragment_sequence",
+      "reconstructed_mol"
+    ],
+    "forbidden_operations": [
+      "Chem.MolFromSmiles or any SMILES reparse as an atom-alignment authority",
+      "mixing CSV-derived atom order with SDF-derived coordinates or E3FP",
+      "creating, embedding, optimizing, or aligning a replacement conformer",
+      "adding hydrogen atoms after the frozen projection",
+      "inferring source atom indices from post-projection positions, offsets, or worker order",
+      "silently padding invalid E3FP rows, atom mappings, motif groups, or geometry targets with zero vectors",
+      "writing a trainable P1 dataset, checkpoint, or launcher decision from this bounded smoke"
+    ]
+  },
+  "sidecar_partition_invariants": [
+    "selected_ordinal_count == admitted_record_count + reject_ledger_record_count",
+    "selected_ordinal_count is in [1, 1000] for this bounded smoke contract",
+    "membership rows, admitted storage keys, and reject-ledger member IDs are duplicate-free",
+    "membership rows cover the deterministic selected ordinal set exactly once",
+    "admitted records correspond one-to-one with membership disposition admit",
+    "reject-ledger rows correspond one-to-one with membership disposition reject",
+    "the smoke report must state p1_training_admission=false and p1_training_launcher_permitted=false"
+  ],
+  "future_full_release_boundary": "A full 3,378,606-ordinal partition needs a new or explicitly version-bumped schema/release contract, a complete source/reject ledger, tokenizer binding, downstream-overlap proof, and an independent R1 admission decision. This bounded smoke contract cannot be re-labelled as that release."
+}

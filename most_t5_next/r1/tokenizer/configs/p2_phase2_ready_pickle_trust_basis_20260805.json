@@ -1,0 +1,28 @@
+{
+  "schema_version": "most-t5-r1/p2-phase2-ready-pickle-trust-basis/v1",
+  "decision_id": "p2-phase2-ready-trusted-pickle-exact-source-20260805-v1",
+  "decision": "permit_offline_pickle_decode_for_exact_source_sha_only",
+  "source_role": "phase2_pubchem_ready_lmdb",
+  "source_bytes": 1909297152,
+  "source_sha256": "465d89f4aafb36043a5964441feffceb3e3e6493fe2ffee9d53190ec7587d5e5",
+  "basis": [
+    "The file is the retained project-local 3DMolT5-processed 3DMolM PubChem pretraining source, not an unreviewed network payload.",
+    "Cross-instance copying was closed by a zero-difference checksum comparison.",
+    "Two fresh-process P2 identity extractions independently matched the complete file bytes and SHA-256 before and after decoding all 301655 payload records.",
+    "Both identity extractions decoded all 301655 payload records, checked CID/key and identity-required fields, observed no LMDB metadata keys, and matched the complete source hash before and after decoding.",
+    "The identity extractions did not pre-validate the census ten-field closed payload schema; the census extractor must validate that schema record by record and report closed rejects."
+  ],
+  "execution_boundary": {
+    "required_acknowledgement": "I_ACKNOWLEDGE_TRUSTED_PICKLE_CAN_EXECUTE_CODE",
+    "hash_before_first_pickle_load": true,
+    "hash_after_read_transaction": true,
+    "network_access_required": false,
+    "source_write_permitted": false,
+    "sha_mismatch_action": "abort_before_pickle_load"
+  },
+  "limitations": [
+    "This decision authorizes only deterministic offline decoding of the exact locked file.",
+    "It does not recover or validate the unknown legacy motif-sequence producer.",
+    "It does not approve a P1/P2 vocabulary union, tokenizer freeze, or training admission."
+  ]
+}

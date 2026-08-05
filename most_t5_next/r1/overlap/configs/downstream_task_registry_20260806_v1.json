@@ -1,0 +1,687 @@
+{
+  "schema_version": "most-t5-r1/downstream-task-registry/v1",
+  "registry_id": "downstream-task-registry-20260806-v1",
+  "contract_path": "../../contracts/downstream_task_registry_contract_v1.json",
+  "contract_sha256": "8052ea2a337c9eb825ada751a5d68b5ce6dc4db412a10547159f966eee2745c8",
+  "observation": {
+    "observed_date_utc": "2026-08-06",
+    "remote_source_roots": {
+      "legacy_and_downstream_evidence_r0_v1": "/root/autodl-fs/most-t5-r1/sources/legacy-and-downstream-evidence-r0-v1",
+      "p2_pubchem_evidence_r0_v1": "/root/autodl-fs/most-t5-r1/sources/p2-pubchem-evidence-r0-v1/pubchem"
+    },
+    "mode": "read_only_source_inventory_schema_count_and_sha256",
+    "legacy_root_caption_named_file_count": 0,
+    "identity_extractor_schema_version": "most-t5-r1/identity-collection-extraction-config/v1",
+    "identity_normalization_contract_path": "../../contracts/pcqm4mv2_identity_normalization_contract.json",
+    "identity_normalizer_path": "../../gates/pcqm_identity_smoke.py",
+    "required_rdkit_version": "2024.03.5"
+  },
+  "scope_declaration": {
+    "first_round_admission_core_task_ids": [
+      "qm9_orbital_property_generation_3dmolt5_hf_v1",
+      "chebi20_text_to_molecule_3dmolt5_hf_v1",
+      "pubchemqc_four_property_generation_legacy_v1",
+      "pubchem_captioning_p2_lmdb_v1",
+      "controlled_motif_editing_finemoltex_informed_v1"
+    ],
+    "secondary_not_in_first_round_admission_task_ids": [
+      "zero_shot_retrieval_secondary_v1"
+    ],
+    "first_round_claim_boundary": "A complete first-round downstream-protection or admission claim covers every core task above. Controlled motif editing remains in scope and blocks admission while unresolved; it is not omitted from the denominator.",
+    "secondary_claim_boundary": "Zero-shot retrieval is explicitly deferred. It is neither part of first-round admission nor represented as protected by the current validation/test union."
+  },
+  "protection_scope": {
+    "protected_splits": [
+      "validation",
+      "test"
+    ],
+    "primary_identity": "connectivity_identity_sha256",
+    "include_present_eval_sources_even_when_benchmark_blocked": true,
+    "present_task_ids_in_protected_union": [
+      "qm9_orbital_property_generation_3dmolt5_hf_v1",
+      "chebi20_text_to_molecule_3dmolt5_hf_v1",
+      "pubchemqc_four_property_generation_legacy_v1",
+      "pubchem_captioning_p2_lmdb_v1"
+    ],
+    "missing_task_ids_not_yet_protectable": [
+      "controlled_motif_editing_finemoltex_informed_v1"
+    ],
+    "training_roles_subject_to_exclusion": [
+      "p1_structure_train",
+      "p2_permitted_train_membership",
+      "p2_alignment_train",
+      "p2_geometry_replay_train"
+    ],
+    "downstream_train_handling": "preserve_official_rows_and_block_on_canonical_eval_overlap_instead_of_silent_row_deletion"
+  },
+  "tasks": [
+    {
+      "task_id": "qm9_orbital_property_generation_3dmolt5_hf_v1",
+      "dataset_id": "3dmolt5-qm9-hf",
+      "source_root_id": "legacy_and_downstream_evidence_r0_v1",
+      "task_family": "molecular_property_prediction",
+      "protocol_type": "supervised_split_benchmark",
+      "scope_status": "first_round_admission_core",
+      "task_definition": "Text-conditioned generation of QM9 HOMO, LUMO, or HOMO-LUMO-gap values from a molecular input.",
+      "task_status": "blocked_source_split_integrity",
+      "protection_inclusion": "include_validation_and_test_connectivity_after_hash_locked_extraction",
+      "identity_mapping": {
+        "collection_granularity": "one_collection_per_split",
+        "member_id": {
+          "source": "row_index",
+          "field": null,
+          "prefix_template": "qm9-hf:{split}:row:"
+        },
+        "smiles_source": {
+          "kind": "field",
+          "field": "smiles"
+        },
+        "text_identity": {
+          "status": "available",
+          "normalization": "unicode_nfkc_whitespace_v1",
+          "semantic_role": "canonical_routed_instruction_output_object",
+          "component_fields": [
+            "instruction",
+            "output"
+          ]
+        },
+        "generic_extractor_compatibility": "direct_for_whole_split_identity_only",
+        "task_routing": "blocked_until_a_versioned_route_table_replaces_prompt_text_inference"
+      },
+      "source_revision": "bfe55090be9ebf1c9cbbe6687a5796711ac0edd8",
+      "splits": {
+        "train": {
+          "role": "downstream_train",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "qm9-hf/data/train-00000-of-00001.parquet",
+            "format": "parquet",
+            "bytes": 40016993,
+            "sha256": "95731ca5b9ea05fb5b22b41ee9654e01d12ce47aa54b3f162c1470782ff7a574",
+            "record_count": 347774,
+            "unique_exact_smiles_count": 128821,
+            "fields": [
+              "instruction",
+              "output",
+              "molecule_fp",
+              "selfies",
+              "smiles"
+            ]
+          }
+        },
+        "validation": {
+          "role": "downstream_validation",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "qm9-hf/data/validation-00000-of-00001.parquet",
+            "format": "parquet",
+            "bytes": 224673,
+            "sha256": "cc211b2c38b21f669047cbed17aeb0e0610fbddabf630266ee7638ceaca5fdc0",
+            "record_count": 1928,
+            "unique_exact_smiles_count": 1919,
+            "fields": [
+              "instruction",
+              "output",
+              "molecule_fp",
+              "selfies",
+              "smiles"
+            ]
+          }
+        },
+        "test": {
+          "role": "downstream_test",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "qm9-hf/data/test-00000-of-00001.parquet",
+            "format": "parquet",
+            "bytes": 224673,
+            "sha256": "cc211b2c38b21f669047cbed17aeb0e0610fbddabf630266ee7638ceaca5fdc0",
+            "record_count": 1928,
+            "unique_exact_smiles_count": 1919,
+            "fields": [
+              "instruction",
+              "output",
+              "molecule_fp",
+              "selfies",
+              "smiles"
+            ]
+          }
+        }
+      },
+      "preliminary_split_observations": {
+        "byte_identical_validation_and_test": true,
+        "exact_smiles_overlap_counts": {
+          "train_validation": 1895,
+          "train_test": 1895,
+          "validation_test": 1919
+        },
+        "explicit_task_field_present": false,
+        "distinct_instruction_templates": 33,
+        "interpretation": "The observed artifact appears row-split across property prompts and has byte-identical validation/test files. Exact-SMILES evidence is not a replacement for canonical connectivity proof."
+      },
+      "blockers": [
+        "Validation and test Parquet files are byte-identical and share one SHA-256.",
+        "The train split shares 1895 exact SMILES with each observed evaluation file.",
+        "There is no explicit property-name field; 33 prompt templates encode three target types.",
+        "Reacquire or reconstruct the authoritative molecule-disjoint split and lock its provenance before headline evaluation."
+      ]
+    },
+    {
+      "task_id": "chebi20_text_to_molecule_3dmolt5_hf_v1",
+      "dataset_id": "3dmolt5-chebi20-hf",
+      "source_root_id": "legacy_and_downstream_evidence_r0_v1",
+      "task_family": "text_to_molecule_generation",
+      "protocol_type": "supervised_split_benchmark",
+      "scope_status": "first_round_admission_core",
+      "task_definition": "Generate a molecular structure from a ChEBI natural-language description.",
+      "task_status": "candidate_pending_canonical_identity_proof",
+      "protection_inclusion": "include_validation_and_test_connectivity_after_hash_locked_extraction",
+      "identity_mapping": {
+        "collection_granularity": "one_collection_per_split",
+        "member_id": {
+          "source": "field",
+          "field": "cid",
+          "prefix": "chebi_cid:"
+        },
+        "smiles_source": {
+          "kind": "field",
+          "field": "smiles"
+        },
+        "text_identity": {
+          "status": "available",
+          "normalization": "unicode_nfkc_whitespace_v1",
+          "semantic_role": "text_to_molecule_encoder_input",
+          "component_fields": [
+            "instruction",
+            "input"
+          ]
+        },
+        "generic_extractor_compatibility": "direct",
+        "task_routing": "instruction_is_constant_and_source_task_is_single_family"
+      },
+      "source_revision": "9949fae8860ffd7c7dbca8e9848ad37842f1c279",
+      "splits": {
+        "train": {
+          "role": "downstream_train",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "chebi-hf/data/train-00000-of-00001-98179f3c7ae9a14d.parquet",
+            "format": "parquet",
+            "bytes": 12739422,
+            "sha256": "7a90ebf5e1c13ebba76fa25b77897a27ae06357c80e66d27a1e35fe832674a80",
+            "record_count": 26407,
+            "unique_exact_smiles_count": 26407,
+            "unique_source_member_id_count": 26407,
+            "fields": [
+              "cid",
+              "smiles",
+              "molecule_fp",
+              "selfies",
+              "instruction",
+              "input"
+            ]
+          }
+        },
+        "validation": {
+          "role": "downstream_validation",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "chebi-hf/data/validation-00000-of-00001-aa1e794fde3e680c.parquet",
+            "format": "parquet",
+            "bytes": 1614814,
+            "sha256": "a4d1f8495af1c23131005e9e44c8db1e32545db4c645fc56d1279266a76af49e",
+            "record_count": 3301,
+            "unique_exact_smiles_count": 3301,
+            "unique_source_member_id_count": 3301,
+            "fields": [
+              "cid",
+              "smiles",
+              "molecule_fp",
+              "selfies",
+              "instruction",
+              "input"
+            ]
+          }
+        },
+        "test": {
+          "role": "downstream_test",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "chebi-hf/data/test-00000-of-00001-da133697d980844a.parquet",
+            "format": "parquet",
+            "bytes": 1587343,
+            "sha256": "66caae13abc7cadce65f5c272cdf001392a3e1995cad0ff77bf87a026521cdbf",
+            "record_count": 3300,
+            "unique_exact_smiles_count": 3300,
+            "unique_source_member_id_count": 3300,
+            "fields": [
+              "cid",
+              "smiles",
+              "molecule_fp",
+              "selfies",
+              "instruction",
+              "input"
+            ]
+          }
+        }
+      },
+      "preliminary_split_observations": {
+        "exact_smiles_overlap_counts": {
+          "train_validation": 0,
+          "train_test": 0,
+          "validation_test": 0
+        },
+        "source_member_id_overlap_counts": {
+          "train_validation": 0,
+          "train_test": 0,
+          "validation_test": 0
+        },
+        "interpretation": "Observed exact SMILES and CID splits are disjoint, but benchmark readiness still requires shared-normalizer canonical connectivity proof."
+      },
+      "blockers": [
+        "Hash-locked canonical connectivity extraction and within-task overlap proof have not yet run."
+      ]
+    },
+    {
+      "task_id": "pubchemqc_four_property_generation_legacy_v1",
+      "dataset_id": "legacy-3dmolm-pubchemqc-property",
+      "source_root_id": "legacy_and_downstream_evidence_r0_v1",
+      "task_family": "molecular_property_prediction",
+      "protocol_type": "supervised_split_benchmark",
+      "scope_status": "first_round_admission_core",
+      "task_definition": "Generate HOMO, LUMO, HOMO-LUMO-gap, and SCF-energy values for PubChemQC molecules.",
+      "task_status": "blocked_adapter_and_split_provenance",
+      "protection_inclusion": "include_validation_and_test_connectivity_after_join_adapter_and_hash_locked_extraction",
+      "identity_mapping": {
+        "collection_granularity": "one_collection_per_split_and_explicit_task_value",
+        "member_id": {
+          "source": "field_after_adapter",
+          "field": "input",
+          "prefix_template": "pubchemqc:{task}:lmdb_key:"
+        },
+        "smiles_source": {
+          "kind": "lmdb_join",
+          "record_key_field": "input",
+          "lmdb_key_encoding": "ASCII decimal UTF-8",
+          "lmdb_value_field": "smi"
+        },
+        "text_identity": {
+          "status": "available_after_adapter",
+          "normalization": "unicode_nfkc_whitespace_v1",
+          "semantic_role": "canonical_routed_instruction_output_object",
+          "component_fields": [
+            "instruction",
+            "output"
+          ]
+        },
+        "explicit_task_field": "task",
+        "allowed_task_values": [
+          "HOMO",
+          "LUMO",
+          "HOMO-LUMO Gap",
+          "SCF Energy"
+        ],
+        "generic_extractor_compatibility": "requires_hash_locked_join_adapter"
+      },
+      "join_source": {
+        "status": "present_requires_adapter",
+        "relative_path": "pubchemqc/pubchemqc_database.lmdb",
+        "format": "legacy_lmdb_pickle",
+        "bytes": 3866460160,
+        "sha256": "68c68bc6f2629d6ffe69750f4cfe17ecb7a1a3b41f4d548d7c379a17af556c0e",
+        "lmdb_entry_count": 3899647,
+        "sample_value_fields": [
+          "atoms",
+          "cid",
+          "coordinates_list",
+          "smi"
+        ],
+        "full_split_join_coverage_verified": false
+      },
+      "splits": {
+        "train": {
+          "role": "downstream_train",
+          "source": {
+            "status": "present_requires_adapter",
+            "relative_path": "pubchemqc/train/3d_computed_properties_unit.json",
+            "format": "json_array",
+            "bytes": 785802936,
+            "sha256": "5d00e5cf738ae3e1e0f6adacd1d93d6dd4f4e3b5a04b2006116b91159804dfa8",
+            "record_count": 2495776,
+            "unique_source_member_id_count": 623944,
+            "records_per_member_id": 4,
+            "fields": [
+              "instruction",
+              "input",
+              "output",
+              "task"
+            ]
+          }
+        },
+        "validation": {
+          "role": "downstream_validation",
+          "source": {
+            "status": "present_requires_adapter",
+            "relative_path": "pubchemqc/valid/3d_computed_properties_unit.json",
+            "format": "json_array",
+            "bytes": 98253319,
+            "sha256": "748e9e8698fca418822d5a47a4cbbce16e5012f70b293343ed0ed248d5461090",
+            "record_count": 311972,
+            "unique_source_member_id_count": 77993,
+            "records_per_member_id": 4,
+            "fields": [
+              "instruction",
+              "input",
+              "output",
+              "task"
+            ]
+          }
+        },
+        "test": {
+          "role": "downstream_test",
+          "source": {
+            "status": "present_requires_adapter",
+            "relative_path": "pubchemqc/test/3d_computed_properties_unit.json",
+            "format": "json_array",
+            "bytes": 98229288,
+            "sha256": "ac36adcbcea298c7221e717430b0c0d77374a4c489dd8913ab38d40cb0629727",
+            "record_count": 311972,
+            "unique_source_member_id_count": 77993,
+            "records_per_member_id": 4,
+            "fields": [
+              "instruction",
+              "input",
+              "output",
+              "task"
+            ]
+          }
+        }
+      },
+      "split_evidence": {
+        "downstream_blacklist": {
+          "relative_path": "pubchemqc/downstream_blacklist.json",
+          "bytes": 8344063,
+          "sha256": "2d56379e189408dec0d2b6ae3b4c9819c720c848c9fa10b7ac05df4a4dabd6b0",
+          "unique_member_id_count": 779930
+        },
+        "scaffold_test_split_indices": {
+          "relative_path": "pubchemqc/scaffold_test_split_inds.json",
+          "bytes": 6128362,
+          "sha256": "7d9d1613f1627456dcf89785c9c1efe197017980b69779360bc1b61f99084f3a",
+          "counts": {
+            "train": 623944,
+            "validation": 77993,
+            "test": 77993
+          }
+        },
+        "observed_json_member_id_pairwise_overlap": {
+          "train_validation": 0,
+          "train_test": 0,
+          "validation_test": 0
+        },
+        "observed_json_union_equals_downstream_blacklist": true,
+        "positional_interpretation_mismatch_counts_each_side": {
+          "train": 124616,
+          "validation": 70083,
+          "test": 70289
+        },
+        "interpretation": "The emitted JSON split IDs are mutually disjoint and exactly partition downstream_blacklist. Directly treating scaffold_test_split_inds values as positions into downstream_blacklist does not reproduce those emitted assignments, so split provenance remains unresolved rather than guessed."
+      },
+      "blockers": [
+        "JSON rows contain no SMILES and require an input-to-LMDB-key join to the value field smi.",
+        "Each molecule occurs in four task rows, so extraction must be split by the explicit task field or use a reviewed composite-ID adapter.",
+        "Full JSON-to-LMDB key coverage has not been verified.",
+        "The relationship between scaffold_test_split_inds and the emitted JSON split assignment requires provenance reconciliation."
+      ]
+    },
+    {
+      "task_id": "pubchem_captioning_p2_lmdb_v1",
+      "dataset_id": "p2-pubchem-3d-captioning",
+      "source_root_id": "p2_pubchem_evidence_r0_v1",
+      "task_family": "molecule_captioning",
+      "protocol_type": "supervised_split_benchmark",
+      "scope_status": "first_round_admission_core",
+      "task_definition": "Generate a natural-language molecular description from a PubChem molecule.",
+      "task_status": "blocked_source_split_integrity",
+      "protection_inclusion": "include_validation_and_test_connectivity_after_hash_locked_extraction",
+      "identity_mapping": {
+        "collection_granularity": "one_collection_per_split",
+        "member_id": {
+          "source": "lmdb_key",
+          "field": null,
+          "prefix": "pubchem_cid:",
+          "crosscheck_field": "cid"
+        },
+        "smiles_source": {
+          "kind": "field",
+          "field": "smiles"
+        },
+        "text_identity": {
+          "status": "available_compatibility_target_frozen",
+          "normalization": "unicode_nfkc_whitespace_v1",
+          "semantic_role": "molecule_caption_decoder_target",
+          "component_fields": [
+            "description"
+          ]
+        },
+        "generic_extractor_compatibility": "direct",
+        "task_routing": "legacy_description_is_the_frozen_compatibility_target; enriched_description_requires_a_separate_registered_variant"
+      },
+      "source_revision": "QizhiPei/e3fp-pubchem-cap official processed dataset; legacy description compatibility target frozen on 2026-08-06",
+      "splits": {
+        "train": {
+          "role": "downstream_train",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "train/3d-pubchem.lmdb",
+            "format": "legacy_lmdb_pickle",
+            "bytes": 53760000,
+            "sha256": "971aa5bac9fa800e46b917dc8d176281b8f38b7642403a6433b6547fb21025f6",
+            "record_count": 12000,
+            "unique_source_member_id_count": 12000,
+            "fields": [
+              "atoms",
+              "cid",
+              "coordinates",
+              "description",
+              "enriched_description",
+              "smiles"
+            ]
+          }
+        },
+        "validation": {
+          "role": "downstream_validation",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "valid/3d-pubchem.lmdb",
+            "format": "legacy_lmdb_pickle",
+            "bytes": 4497408,
+            "sha256": "2b8c285264c15403294d5d37e2356e2aad3115770191454779be1f9647c92030",
+            "record_count": 1000,
+            "unique_source_member_id_count": 1000,
+            "fields": [
+              "atoms",
+              "cid",
+              "coordinates",
+              "description",
+              "enriched_description",
+              "smiles"
+            ]
+          }
+        },
+        "test": {
+          "role": "downstream_test",
+          "source": {
+            "status": "present_direct",
+            "relative_path": "test/3d-pubchem.lmdb",
+            "format": "legacy_lmdb_pickle",
+            "bytes": 8953856,
+            "sha256": "b500f0cb7514c3e74def9d99959c53cb6d0399893aef7777e568e78cd462f3e5",
+            "record_count": 2000,
+            "unique_source_member_id_count": 2000,
+            "fields": [
+              "atoms",
+              "cid",
+              "coordinates",
+              "description",
+              "enriched_description",
+              "smiles"
+            ]
+          }
+        }
+      },
+      "preliminary_split_observations": {
+        "lmdb_key_equals_cid_mismatch_counts": {
+          "train": 0,
+          "validation": 0,
+          "test": 0
+        },
+        "empty_smiles_or_description_counts": {
+          "train": 0,
+          "validation": 0,
+          "test": 0
+        },
+        "source_member_id_overlap_counts": {
+          "train_validation": 0,
+          "train_test": 0,
+          "validation_test": 0
+        },
+        "exact_smiles_overlap_counts": {
+          "train_validation": 1,
+          "train_test": 0,
+          "validation_test": 0
+        },
+        "interpretation": "All 15000 decoded LMDB records were dictionaries with the six declared fields, every LMDB key equalled cid, and required text/SMILES fields were non-empty. One exact SMILES occurs in both train and validation, so the source is protectable but not yet benchmark-ready."
+      },
+      "blockers": [
+        "One exact SMILES occurs in both train and validation; canonical connectivity proof must determine the complete overlap and the benchmark protocol must resolve it.",
+        "Hash-locked canonical connectivity extraction and within-task overlap proof have not yet run."
+      ]
+    },
+    {
+      "task_id": "controlled_motif_editing_finemoltex_informed_v1",
+      "dataset_id": "project-zinc-motif-editing-zero-shot-pending",
+      "source_root_id": null,
+      "task_family": "controlled_motif_editing",
+      "protocol_type": "zero_shot_evaluation_benchmark",
+      "scope_status": "first_round_admission_core",
+      "task_definition": "Zero-shot text-guided editing of a source molecule, with motif or property instructions, scored for chemical validity, target success, non-target structural preservation, novelty, and multi-seed uncertainty.",
+      "task_status": "blocked_protocol_manifest_missing",
+      "protection_inclusion": "molecule_zero_shot_main_claim_requires_validation_and_test_source_connectivity_exclusion_from_all_pretraining_memberships",
+      "identity_mapping": {
+        "collection_granularity": "one_source_molecule_crossed_with_a_frozen_instruction_set",
+        "member_id": "hash_locked_zinc_source_id",
+        "source_molecule_identity": "connectivity_identity_sha256_required",
+        "target_molecule_identity": "not_applicable_generated_output_not_a_paired_dataset_target",
+        "instruction_text_identity": "exact_and_unicode_nfkc_whitespace_sha256_required",
+        "motif_change_identity": "versioned_operation_id_plus_frozen_rdkit_smarts_or_property_calculator",
+        "generic_extractor_compatibility": "direct_after_source_manifests_exist",
+        "task_routing": "explicit_operation_id_for_each_of_12_or_later_preregistered_instructions"
+      },
+      "source_revision": "FineMolTex official code commit c976faa964edfdba64a80f6a7281369741e39e2c; KDD 2025 DOI 10.1145/3711896.3736834",
+      "splits": {
+        "train": {
+          "role": "not_applicable_no_supervised_train",
+          "source": {
+            "status": "not_applicable",
+            "relative_path": null,
+            "format": null,
+            "bytes": null,
+            "sha256": null,
+            "record_count": null,
+            "fields": null
+          }
+        },
+        "validation": {
+          "role": "protocol_development_sources",
+          "source": {
+            "status": "missing",
+            "relative_path": null,
+            "format": null,
+            "bytes": null,
+            "sha256": null,
+            "record_count": null,
+            "fields": null
+          }
+        },
+        "test": {
+          "role": "sealed_evaluation_sources",
+          "source": {
+            "status": "missing",
+            "relative_path": null,
+            "format": null,
+            "bytes": null,
+            "sha256": null,
+            "record_count": null,
+            "fields": null
+          }
+        }
+      },
+      "protocol_state": {
+        "status": "reference_protocol_understood_project_protocol_not_frozen",
+        "finemoltex_compatibility_layer": {
+          "published_design": "200 randomly sampled ZINC source molecules crossed with 12 prompts; eight property-direction prompts scored with property change and four motif prompts scored with RDKit motif presence; motif prompts exclude sources already containing the requested motif.",
+          "training_split": "not_applicable_zero_shot_latent_editing",
+          "exact_reproduction_blockers": [
+            "The stable list of 200 molecule IDs is not published.",
+            "The exact ZINC release, sample seed, and full SMARTS/evaluator manifest are not frozen in the paper repository.",
+            "Therefore a newly sampled 200-molecule run must be labelled protocol-compatible resampling, not exact reproduction."
+          ]
+        },
+        "project_main_layer": {
+          "source_policy": "hash_lock_one_declared_ZINC_release_then_canonicalize_and_deduplicate_by_connectivity_before_split",
+          "development_target_count": 200,
+          "sealed_test_minimum_target_count": 1000,
+          "split_policy": "molecule_disjoint_source_manifests_frozen_before_model_selection",
+          "claim": "molecule_zero_shot_only_after_validation_and_test_source_identities_are_absent_from_P0_P1_and_P2_pretraining_memberships",
+          "metrics": [
+            "validity",
+            "target_success",
+            "non_target_structural_preservation",
+            "novelty",
+            "multi_seed_confidence_interval"
+          ]
+        },
+        "required_before_source_admission": [
+          "Freeze the ZINC source revision, licensing/provenance record, canonicalization, deduplication, and deterministic development/test selection manifests.",
+          "Freeze operation IDs, prompt text, property directions, RDKit version, motif SMARTS, decoding/optimization settings, and all random seeds.",
+          "Run canonical connectivity extraction for development and sealed-test source molecules and exclude every match from P0/P1/P2 if retaining the molecule-zero-shot claim.",
+          "Freeze validity, target success, preservation, novelty, multi-seed confidence intervals, and failure accounting before model selection.",
+          "Keep FineMolTex protocol compatibility results separate from the larger project main benchmark."
+        ],
+        "motif_specific_role": "This core task tests whether motif/port representation yields localized, instruction-aligned edits; the absence of a supervised train split is intentional, while missing development/test manifests remains an admission blocker."
+      },
+      "blockers": [
+        "The FineMolTex paper/repository does not publish enough information to reconstruct its exact 200-molecule sample.",
+        "The project ZINC revision and hash-locked development/test source manifests are not yet registered.",
+        "The prompt/operation/SMARTS/evaluator/seed manifest is not yet frozen.",
+        "A complete first-round downstream-protection or admission claim is forbidden while this core task remains unresolved."
+      ]
+    }
+  ],
+  "secondary_tasks": [
+    {
+      "task_id": "zero_shot_retrieval_secondary_v1",
+      "task_family": "zero_shot_molecule_text_retrieval",
+      "scope_status": "secondary_not_in_first_round_admission",
+      "source_registration_status": "not_registered_in_this_revision",
+      "protected_union_inclusion": false,
+      "first_round_admission_effect": "not_a_first_round_blocker_only_because_the_claim_boundary_explicitly_excludes_this_secondary_task",
+      "current_claim": "No zero-shot retrieval train, validation, or test split is represented as protected by this registry.",
+      "promotion_rule": "Before zero-shot retrieval is evaluated or included in an all-task claim, a later versioned registry must promote it to core or an explicit secondary evaluation scope and lock molecule-side and text-side identities, negative pools, candidate pools, splits, and retrieval metrics."
+    }
+  ],
+  "registry_decision": {
+    "protection_union_ready_now": false,
+    "benchmark_suite_ready_now": false,
+    "first_round_admission_ready_now": false,
+    "next_required_actions": [
+      "Generate direct hash-locked identity extraction configs for ChEBI train, validation, and test and run canonical within-task overlap proof.",
+      "Reacquire or reconstruct authoritative QM9 validation/test sources and add an explicit property route field or versioned route table.",
+      "Implement and test a hash-locked PubChemQC JSON-to-LMDB join adapter, then reconcile split provenance before evaluation.",
+      "Generate PubChem caption molecule-identity configs now; resolve the one train-validation exact-SMILES overlap and bind the intended description target before benchmark evaluation.",
+      "Freeze the FineMolTex-informed zero-shot editing protocol: train is explicitly not applicable, but hash-locked ZINC development and sealed-test source manifests plus operation/evaluator/seed manifests are mandatory; until then first-round admission remains blocked.",
+      "Keep zero-shot retrieval explicitly outside first-round admission; promote it only through a later versioned registry with its own protected evaluation collections."
+    ]
+  }
+}

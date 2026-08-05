@@ -1,0 +1,39 @@
+{
+  "schema_version": "most-t5-r1/identity-collection-extraction-contract/v1",
+  "purpose": "Fail-closed source-to-hash-only identity collection extraction for P2 legacy LMDB and explicitly mapped JSON, JSONL, CSV, or Parquet downstream sources. No source field, split, task, metadata key, or text unit is guessed.",
+  "config_schema_version": "most-t5-r1/identity-collection-extraction-config/v1",
+  "report_schema_version": "most-t5-r1/identity-collection-extraction-report/v1",
+  "compatible_collection_manifest_schema_version": "most-t5-r1/identity-collection-manifest/v1",
+  "supported_source_formats": [
+    "legacy_lmdb_pickle",
+    "json_array",
+    "jsonl",
+    "csv",
+    "parquet"
+  ],
+  "member_id_sources": [
+    "lmdb_key",
+    "field",
+    "row_index"
+  ],
+  "text_normalizations": [
+    "identity_utf8_v1",
+    "unicode_nfkc_whitespace_v1"
+  ],
+  "required_invariants": [
+    "The source is a regular non-symlink file whose bytes and SHA-256 match the config before and after parsing.",
+    "Legacy pickle deserialization is disabled unless trusted_pickle_source_sha256 exactly equals the verified source SHA-256.",
+    "LMDB metadata keys are excluded only from an explicit permitted allowlist; every required metadata key must be observed.",
+    "LMDB stat(entries) is never used as molecule count, and observed metadata keys such as __len__ are not emitted as members.",
+    "Collection phase, split, role, task family, source identity namespace, member-ID source, SMILES field, optional filter, and text unit are explicit config fields.",
+    "Every selected record yields one non-empty unique member ID and one RDKit-parsable SMILES under the supplied, hash-locked identity normalizer.",
+    "A member-ID crosscheck field, when declared, must equal the unprefixed member ID exactly after scalar string conversion.",
+    "Text extraction is either unavailable or defines exactly one semantic text unit with explicit component-name to source-field mappings.",
+    "No raw SMILES or text is written to the output; only source addresses and SHA-256 identities are emitted.",
+    "Molecule and text-pair JSONL rows are canonical, strictly UTF-8-key sorted, hash-bound, and compatible with the standalone overlap proof gate.",
+    "The extractor, config, source, identity contract, normalizer code, RDKit version, source lock, rows, collection manifest, and report are all hash-bound."
+  ],
+  "invalid_record_policy": "fail_closed_no_skip",
+  "legacy_pickle_boundary": "The format is a surviving project artifact, not a safe serialization. Only an explicitly SHA-256-acknowledged trusted file may be decoded in the isolated offline environment.",
+  "not_an_admission": "An extraction report and collection manifest are inputs to overlap proof only. They do not decide P1/P2 overlap policy, P2 301655-vs-301658 membership, tokenizer scope, or training admission."
+}

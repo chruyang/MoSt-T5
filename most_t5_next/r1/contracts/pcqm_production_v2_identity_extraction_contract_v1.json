@@ -1,0 +1,47 @@
+{
+  "schema_version": "most-t5-r1/pcqm-production-v2-identity-extraction-contract/v1",
+  "purpose": "Read-only, fail-closed extraction of a proof-gate-compatible, hash-only P1 molecule identity collection from a complete sharded PCQM production-v2 safe-payload release.",
+  "config_schema_version": "most-t5-r1/pcqm-production-v2-identity-extraction-config/v1",
+  "receipt_schema_version": "most-t5-r1/pcqm-production-v2-identity-extraction-receipt/v1",
+  "compatible_collection_manifest_schema_version": "most-t5-r1/identity-collection-manifest/v1",
+  "source_release_schema_version": "most-t5-r1/p1-pcqm-geometry-production-full-release/v2",
+  "source_shard_schema_version": "most-t5-r1/p1-pcqm-geometry-production-shard/v2",
+  "source_payload_schema_version": "most-t5-r1/p1-pcqm-geometry-sidecar-payload/v2",
+  "required_invariants": [
+    "The config binds the exact extraction contract, top-level release manifest bytes and SHA-256, production contract, payload-format contract, identity-normalization contract, release ID, and RDKit identity version.",
+    "The source release is opened read-only; LMDB is opened with readonly=true, lock=false, create=false and the extractor writes only inside a new output directory.",
+    "The full-release manifest, every referenced shard manifest, and every declared shard/global artifact are checked by complete byte count and SHA-256 before use and checked again after use.",
+    "The physical release and shard envelopes have closed allowlists. Unknown top-level files, shard files, directories, symlinks, or LMDB files fail closed; LMDB lock.mdb is the only optional non-evidence runtime file.",
+    "Shard ranges are contiguous and exactly cover the selected range. Membership, reject-ledger, payload-index, and LMDB key/value streams are checked in lockstep against manifest counts.",
+    "Rejected membership rows are verified against their reject-ledger rows and never emitted as molecule identities.",
+    "Every admitted LMDB value is independently decoded from the public v2 safe-payload framing. Wire length/SHA-256, array-block SHA-256, canonical header, logical record SHA-256, membership hash, and payload-index hash must all agree.",
+    "Every admitted record binds the release, source contract, production contract, identity-normalization contract, adapter harness, member ID, ordinal, storage key, source address, and required RDKit version.",
+    "The emitted connectivity identity is record.identity.canonical_connectivity_sha256 and the emitted stereo identity is the equal strict SDF/official identity hash. record.identity.identity_spec_sha256 must equal the frozen identity-normalization contract SHA-256.",
+    "LMDB contains exactly the admitted storage keys. Unknown metadata-like or excess keys fail closed; no LMDB metadata key is emitted or silently ignored.",
+    "The output contains only member IDs and identity hashes, is strictly UTF-8-key sorted canonical JSONL, and is compatible with the standalone overlap proof gate.",
+    "The extractor does not choose a P1/P2 overlap policy, downstream split policy, tokenizer policy, or training-admission decision."
+  ],
+  "closed_source_envelope": {
+    "top_level_required": [
+      "full_release_manifest.json",
+      "motif_census.jsonl"
+    ],
+    "top_level_optional_control_files": [
+      "production_scope.json",
+      "run_state.json"
+    ],
+    "shard_required": [
+      "shard_manifest.json",
+      "membership.jsonl",
+      "reject_ledger.jsonl",
+      "payload_index.jsonl",
+      "motif_census.jsonl",
+      "geometry_records.lmdb/data.mdb"
+    ],
+    "shard_optional_runtime_files": [
+      "geometry_records.lmdb/lock.mdb"
+    ]
+  },
+  "invalid_record_policy": "fail_closed_no_skip",
+  "not_an_admission": "A passing receipt only establishes a source-bound identity collection for later overlap proof. P1 and P2 training admission remain false."
+}

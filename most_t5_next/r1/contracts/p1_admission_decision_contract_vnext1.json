@@ -1,0 +1,101 @@
+{
+  "schema_version": "most-t5-r1/p1-admission-decision-contract/vnext1",
+  "artifact_schema_version": "most-t5-r1/p1-admission-decision/vnext1",
+  "purpose": "A standalone, machine-checkable decision that may authorize PF-1 only after every required external artifact and gate-evidence receipt has been resolved beneath an explicit artifact root, hash-verified, JSON-parsed, and bound to the same candidate release. It is intentionally not embedded in or inferred from a data-release manifest.",
+  "validator": "../gates/validate_p1_logical_motif_vnext.py",
+  "document_kind": "p1_admission_decision",
+  "required_top_level_fields": [
+    "schema_version",
+    "document_kind",
+    "decision_id",
+    "created_at_utc",
+    "training_profile",
+    "candidate_release",
+    "decision",
+    "p1_admitted",
+    "authorized_stage",
+    "evidence_receipts",
+    "reason_codes"
+  ],
+  "training_profiles": [
+    "ce_first",
+    "c3_ema_state_prediction"
+  ],
+  "candidate_release_required_fields": [
+    "release_id",
+    "release_status",
+    "release_manifest",
+    "training_record_contract_sha256",
+    "membership_manifest",
+    "tokenizer_contract"
+  ],
+  "candidate_release_required_values": {
+    "release_status": "candidate"
+  },
+  "artifact_reference_required_fields": [
+    "path",
+    "sha256",
+    "schema_version",
+    "artifact_kind",
+    "subject_release_id"
+  ],
+  "candidate_release_reference_artifact_kinds": {
+    "release_manifest": "candidate_release_manifest",
+    "membership_manifest": "p1_membership_manifest",
+    "tokenizer_contract": "p1_tokenizer_contract"
+  },
+  "evidence_receipt_required_fields": [
+    "path",
+    "sha256",
+    "schema_version",
+    "artifact_kind",
+    "subject_release_id",
+    "status"
+  ],
+  "evidence_schema_version": "most-t5-r1/p1-gate-evidence/vnext1",
+  "evidence_artifact_kind_template": "p1_gate_evidence/{gate_name}",
+  "evidence_status_values": [
+    "pass",
+    "fail"
+  ],
+  "base_gate_fields": [
+    "candidate_release_validation_passed",
+    "downstream_exclusion_proven",
+    "p1_p2_policy_compliance_proven",
+    "codec_roundtrip_passed",
+    "tokenizer_frozen",
+    "three_domain_mapping_passed",
+    "identity_recovery_mask_passed",
+    "pf_canary_passed",
+    "strict_save_load_passed"
+  ],
+  "c3_conditional_gate_fields": [
+    "ce_winner_selected",
+    "state_prediction_mask_passed",
+    "teacher_profile_validation_passed",
+    "teacher_optimizer_step_ema_passed"
+  ],
+  "decision_rules": {
+    "admit": {
+      "p1_admitted": true,
+      "authorized_stage": "pf_1",
+      "all_required_profile_evidence_status": "pass",
+      "artifact_root_required": true,
+      "reason_codes": []
+    },
+    "reject": {
+      "p1_admitted": false,
+      "authorized_stage": "none",
+      "reason_codes": "one_or_more_nonempty_codes"
+    }
+  },
+  "independence_invariants": [
+    "candidate_release.release_status remains candidate; the decision artifact does not rewrite the release manifest",
+    "all candidate-release references and evidence receipts use canonical relative paths under an explicit artifact root; absolute paths, parent traversal, symbolic links, junctions, and root escapes are forbidden",
+    "every referenced file is SHA-256 verified and JSON parsed; declared schema_version, artifact_kind, subject_release_id, and evidence status must equal the referenced content",
+    "training_record_contract_sha256 equals the actual SHA-256 of p1_logical_motif_ce_first_contract_vnext1.json loaded by the validator",
+    "gate_results booleans and bare evidence hashes are not authorization evidence",
+    "an admit decision authorizes PF-1 only; PF-10 and PF-FULL require later promotion evidence",
+    "C3-specific gates and evidence are required only for c3_ema_state_prediction and forbidden for ce_first"
+  ]
+}

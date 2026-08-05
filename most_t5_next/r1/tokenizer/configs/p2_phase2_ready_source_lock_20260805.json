@@ -1,0 +1,28 @@
+{
+  "schema_version": "most-t5-r1/p2-phase2-ready-source-lock/v1",
+  "source_role": "phase2_pubchem_ready_lmdb",
+  "source_format": "lmdb_single_file_pickle_values",
+  "source_sha256": "465d89f4aafb36043a5964441feffceb3e3e6493fe2ffee9d53190ec7587d5e5",
+  "source_bytes": 1909297152,
+  "expected_payload_entry_count": 301655,
+  "expected_metadata_keys": [],
+  "expected_payload_fields": [
+    "atom_to_motif_map",
+    "atoms",
+    "cid",
+    "coordinates",
+    "description",
+    "e3fp",
+    "enriched_description",
+    "motif_seq",
+    "raw_smiles",
+    "smiles"
+  ],
+  "identity_namespace": "pubchem_cid",
+  "membership_status": "candidate_geometry_ready",
+  "source_copy_manifest_sha256": "a8a9a082bee04a77c153548e460692c14e627748e0b7daa25deb9f2930803cd9",
+  "pickle_trust_basis_sha256": "2f6890ae865d7a871f1cc6771783c5d91bc164a63e54ba45b11767662c2f66a7",
+  "motif_sequence_producer_status": "unknown_legacy_producer",
+  "motif_sequence_producer_sha256": null,
+  "legacy_linearization_spec_sha256": "f8bc45d09c4989af44faeb6ad6dc239f5a966da11746f7aef107789e7ffc50c4"
+}

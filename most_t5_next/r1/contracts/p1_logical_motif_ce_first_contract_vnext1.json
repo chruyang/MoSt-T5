@@ -1,0 +1,209 @@
+{
+  "schema_version": "most-t5-r1/p1-logical-motif-ce-first-contract/vnext1",
+  "record_schema_version": "most-t5-r1/p1-logical-motif-training-record/vnext1",
+  "purpose": "A per-example audit view that combines one immutable, uncorrupted tokenizer-bound logical-motif record with a reproducible epoch-keyed mask decision. A collator emits a separate corrupted CE batch item. It replaces neither the historical geometry sidecar schema nor the v3 release manifest. The mainline profile is CE-first; C3 state prediction is a separately declared conditional profile.",
+  "validator": "../gates/validate_p1_logical_motif_vnext.py",
+  "document_kind": "logical_motif_training_record",
+  "training_profiles": {
+    "ce_first": {
+      "required_mask_fields": [
+        "identity_recovery_mask"
+      ],
+      "forbidden_mask_fields": [
+        "state_prediction_mask"
+      ],
+      "forbidden_top_level_fields": [
+        "c3_teacher"
+      ],
+      "objective": "standard_t5_span_ce"
+    },
+    "c3_ema_state_prediction": {
+      "required_mask_fields": [
+        "identity_recovery_mask",
+        "state_prediction_mask"
+      ],
+      "required_top_level_fields": [
+        "c3_teacher"
+      ],
+      "objective": "standard_t5_span_ce_plus_bounded_ema_motif_state_prediction"
+    }
+  },
+  "required_top_level_fields": [
+    "schema_version",
+    "document_kind",
+    "training_profile",
+    "bindings",
+    "member",
+    "dimensions",
+    "token_domain",
+    "logical_motif_domain",
+    "atom_domain",
+    "masks",
+    "mask_decision"
+  ],
+  "mask_decision_required_fields": [
+    "objective",
+    "seed",
+    "epoch",
+    "mask_probability",
+    "selected_logical_motif_indices",
+    "decision_sha256"
+  ],
+  "bindings_required_fields": [
+    "release_id",
+    "data_release_manifest_sha256",
+    "geometry_record_schema_sha256",
+    "geometry_record_content_sha256",
+    "membership_manifest_sha256",
+    "tokenizer_contract_sha256",
+    "tokenizer_snapshot_sha256",
+    "identity_codec_sha256",
+    "connection_codec_sha256"
+  ],
+  "domains": {
+    "token": {
+      "dimension": "L=token_count",
+      "required_fields": [
+        "input_ids",
+        "attention_mask",
+        "token_to_logical_motif",
+        "token_role"
+      ],
+      "allowed_token_roles": [
+        "boundary",
+        "text",
+        "identity",
+        "connection"
+      ],
+      "invariants": [
+        "all arrays have length L",
+        "identity and connection tokens map to exactly one logical motif",
+        "boundary and text tokens map to -1",
+        "the record is unpadded and every attention_mask value is true"
+      ]
+    },
+    "logical_motif": {
+      "dimension": "M=logical_motif_count",
+      "required_fields": [
+        "identity_spans",
+        "connection_token_indices",
+        "logical_to_carrier",
+        "exact_identity_sha256",
+        "motif_geometry_valid",
+        "motif_atom_indices",
+        "motif_slot_atom_indices",
+        "slot_count",
+        "cross_motif_bonds"
+      ],
+      "invariants": [
+        "every identity span is a nonempty half-open token interval and spans are pairwise disjoint",
+        "every identity token is covered exactly once by its motif identity span",
+        "each motif has one unique carrier equal to the first token of its identity span",
+        "connection_token_indices partition all connection-role tokens by motif",
+        "motif_atom_indices are nonempty, pairwise disjoint, and cover every atom exactly once",
+        "each motif slot ordinal maps to exactly one atom through motif_slot_atom_indices",
+        "each cross-motif edge has two canonically ordered endpoints in distinct motifs and each endpoint atom equals motif_slot_atom_indices[motif][slot]",
+        "edge IDs and edge records are canonical and densely ordered from zero",
+        "slot_count equals both motif_slot_atom_indices length and endpoint-incidence count for each motif"
+      ]
+    },
+    "atom": {
+      "dimension": "A=atom_count; S=source_atom_count; K=e3fp_level_count",
+      "required_fields": [
+        "atom_to_logical_motif",
+        "model_to_source_atom_index",
+        "atom_valid_mask",
+        "atom_is_attachment",
+        "full_e3fp_ids"
+      ],
+      "invariants": [
+        "atom_to_logical_motif is exactly the inverse membership declared by motif_atom_indices",
+        "model_to_source_atom_index is strictly increasing with every value in [0,source_atom_count)",
+        "full_e3fp_ids has shape [A,K] with values in [-1,4095]",
+        "P1 geometry is deliberately narrow: every atom_valid_mask value is true and every E3FP row has a non-padding level-0 identifier",
+        "every motif_geometry_valid value is true; partial geometry requires a later schema version",
+        "atom_is_attachment is true exactly for atoms referenced by cross_motif_bonds"
+      ]
+    }
+  },
+  "mask_contract": {
+    "identity_recovery_mask": {
+      "dtype": "bool",
+      "shape": [
+        "logical_motif_count"
+      ],
+      "required_in_profiles": [
+        "ce_first",
+        "c3_ema_state_prediction"
+      ],
+      "semantics": "Select complete logical-motif identity spans for standard T5 sentinel corruption and conditional identity recovery. Canonical connection tokens and E3FP state remain available for this view."
+    },
+    "state_prediction_mask": {
+      "dtype": "bool",
+      "shape": [
+        "logical_motif_count"
+      ],
+      "required_in_profiles": [
+        "c3_ema_state_prediction"
+      ],
+      "forbidden_in_profiles": [
+        "ce_first"
+      ],
+      "semantics": "Select geometry-valid motifs whose student E3FP input is cleared while identity and connection remain visible. It is disjoint from identity_recovery_mask."
+    }
+  },
+  "c3_teacher_contract": {
+    "required_fields": [
+      "contract_sha256",
+      "target_source",
+      "reads_token_or_text",
+      "reads_interface_role",
+      "stop_gradient",
+      "eval_mode",
+      "ema_update_clock",
+      "normalization",
+      "loss",
+      "target_dim",
+      "target_logical_motif_indices",
+      "target_vectors"
+    ],
+    "required_values": {
+      "target_source": "identity_query_free_full_e3fp_motif_mean",
+      "reads_token_or_text": false,
+      "reads_interface_role": false,
+      "stop_gradient": true,
+      "eval_mode": true,
+      "ema_update_clock": "optimizer_step",
+      "normalization": "unit_l2",
+      "loss": "squared_l2"
+    },
+    "invariants": [
+      "target_logical_motif_indices are the strictly increasing true indices of state_prediction_mask",
+      "target_vectors has shape [number_of_targets,target_dim] and contains finite unit-L2 vectors",
+      "teacher targets are runtime artifacts and must not be persisted as immutable dataset features"
+    ]
+  },
+  "forbidden_legacy_field_names": [
+    "mask_positions",
+    "joint_mask_positions",
+    "geo_only_mask_positions",
+    "geometry_input_mask",
+    "geometry_target_mask",
+    "geometry_mse_enabled",
+    "geometry_mse_candidate_after_tokenizer_binding",
+    "lambda_3d",
+    "online_teacher_target"
+  ],
+  "global_invariants": [
+    "identity_recovery_mask is present and selects at least one logical motif in every training record",
+    "identity_recovery_mask is reproduced from mask_decision using SHA-256 scores keyed by seed, epoch, member_id, objective, and logical motif index",
+    "state_prediction_mask and c3_teacher are forbidden in ce_first",
+    "state_prediction_mask and c3_teacher are required in c3_ema_state_prediction",
+    "identity_recovery_mask and state_prediction_mask are disjoint",
+    "state_prediction_mask may select only geometry-valid motifs",
+    "no token position, string equality, DFS order, or compacted atom offset may be used to infer a cross-domain mapping",
+    "identity digests and connection token surfaces still require a separately hash-locked production codec round-trip gate",
+    "this audit view contains no identity_sentinel role, corrupted input, decoder label, or padding; those belong to a separate collated-batch contract",
+    "this record cannot authorize P1; admission is a separately resolved p1_admission_decision artifact"
+  ]
+}

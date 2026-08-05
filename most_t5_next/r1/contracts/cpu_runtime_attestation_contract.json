@@ -1,0 +1,160 @@
+{
+  "schema_version": "most-t5-r1/cpu-runtime-attestation-contract/v1",
+  "attestation_schema_version": "most-t5-r1/cpu-runtime-attestation/v1",
+  "purpose": "Fail-closed runtime and transferred-code attestation for the CPU-only PCQM4Mv2 release worker. This contract records an observed environment; compatibility is admitted only by a separate golden-record gate.",
+  "canonical_json": {
+    "encoding": "UTF-8",
+    "object_key_order": "lexicographic Unicode code-point order as emitted by Python json.dumps(sort_keys=True)",
+    "separators": [
+      ",",
+      ":"
+    ],
+    "allow_floating_point": false,
+    "terminal_newline": true,
+    "output_creation": "exclusive-create; an existing target must never be replaced"
+  },
+  "platform": {
+    "require_glibc_on_linux": true,
+    "required_observations": [
+      "python",
+      "operating_system",
+      "libc",
+      "cpu",
+      "cgroup"
+    ]
+  },
+  "dependencies": [
+    {
+      "role": "numpy",
+      "import_name": "numpy",
+      "distribution_names": [
+        "numpy"
+      ],
+      "version_attributes": [
+        {
+          "module": "numpy",
+          "attribute": "__version__"
+        }
+      ]
+    },
+    {
+      "role": "scipy",
+      "import_name": "scipy",
+      "distribution_names": [
+        "scipy"
+      ],
+      "version_attributes": [
+        {
+          "module": "scipy",
+          "attribute": "__version__"
+        }
+      ]
+    },
+    {
+      "role": "rdkit",
+      "import_name": "rdkit",
+      "distribution_names": [
+        "rdkit",
+        "rdkit-pypi"
+      ],
+      "forbid_multiple_installed_distributions": true,
+      "version_attributes": [
+        {
+          "module": "rdkit",
+          "attribute": "__version__"
+        },
+        {
+          "module": "rdkit.rdBase",
+          "attribute": "rdkitVersion"
+        }
+      ]
+    },
+    {
+      "role": "lmdb",
+      "import_name": "lmdb",
+      "distribution_names": [
+        "lmdb"
+      ],
+      "version_attributes": [
+        {
+          "module": "lmdb",
+          "attribute": "__version__"
+        }
+      ]
+    },
+    {
+      "role": "mmh3",
+      "import_name": "mmh3",
+      "distribution_names": [
+        "mmh3"
+      ],
+      "version_attributes": [
+        {
+          "module": "mmh3",
+          "attribute": "__version__"
+        }
+      ]
+    },
+    {
+      "role": "torch",
+      "import_name": "torch",
+      "distribution_names": [
+        "torch"
+      ],
+      "version_attributes": [
+        {
+          "module": "torch",
+          "attribute": "__version__"
+        }
+      ]
+    }
+  ],
+  "thread_environment": {
+    "required_exact": {
+      "MKL_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1"
+    },
+    "also_observe": [
+      "BLIS_NUM_THREADS",
+      "RAYON_NUM_THREADS",
+      "VECLIB_MAXIMUM_THREADS"
+    ]
+  },
+  "e3fp_source_closure": {
+    "required_relative_files": [
+      "__init__.py",
+      "config/defaults.cfg",
+      "fingerprint/fprinter.py",
+      "pipeline.py"
+    ],
+    "generated_directory_exclusions": [
+      "__pycache__"
+    ],
+    "generated_file_suffix_exclusions": [
+      ".pyc",
+      ".pyo"
+    ],
+    "symlink_policy": "reject every symlink below the package root",
+    "closure_digest": "SHA-256 of canonical JSON encoding of the ordered file observation array"
+  },
+  "bundle_lock": {
+    "minimum_explicit_files": 1,
+    "path_policy": "forward-slash relative paths below one caller-declared bundle root; reject absolute paths, parent traversal, duplicates, directories, and symlinks",
+    "closure_digest": "SHA-256 of canonical JSON encoding of the ordered file observation array"
+  },
+  "pass_policy": [
+    "all six required dependency roles import successfully and expose at least one exact version observation",
+    "Linux exposes a concrete glibc version",
+    "all four worker thread variables equal one",
+    "CPU and cgroup observations are present",
+    "the complete non-generated E3FP source closure contains every required anchor",
+    "every explicitly named bundle file is a regular non-symlink file below the bundle root"
+  ],
+  "non_claims": [
+    "A passing attestation does not prove numerical equivalence across machines.",
+    "A passing attestation does not admit a dataset release or P1 training.",
+    "Compatibility with the frozen pipeline requires a separate 128-record golden comparison."
+  ]
+}

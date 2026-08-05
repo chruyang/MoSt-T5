@@ -1,0 +1,47 @@
+{
+  "schema_version": "most-t5-r1/p2-phase2-ready-source-copy-manifest/v1",
+  "manifest_id": "p2-phase2-ready-source-copy-20260805-v1",
+  "source_role": "phase2_pubchem_ready_lmdb",
+  "observed_source": {
+    "path": "/root/autodl-tmp/3D-MoIT/3d-mol-dataset/pubchem/pretrain/phase2_pubchem_ready.lmdb",
+    "bytes": 1909297152,
+    "sha256": "465d89f4aafb36043a5964441feffceb3e3e6493fe2ffee9d53190ec7587d5e5",
+    "observation": "fresh read-only full-file hash on 2026-08-05"
+  },
+  "destination_root": "/root/autodl-fs/most-t5-r1/sources/p2-pubchem-evidence-r0-v1",
+  "artifacts": [
+    {
+      "relative_path": "pubchem/pretrain/phase2_pubchem_ready.lmdb",
+      "bytes": 1909297152,
+      "sha256": "465d89f4aafb36043a5964441feffceb3e3e6493fe2ffee9d53190ec7587d5e5"
+    }
+  ],
+  "verification": {
+    "source_destination_checksum_diff_count": 0,
+    "destination_full_hash_confirmed_by": [
+      "p2-ready-identity-collection-v1-destination-20260805T101301Z",
+      "p2-ready-identity-collection-v1-rerun-destination-20260805T102803Z"
+    ],
+    "identity_extraction_evidence": [
+      {
+        "run_id": "p2-ready-identity-collection-v1-destination-20260805T101301Z",
+        "extraction_report_sha256": "853c64b291b3ef37f1d61cde816db104a20e22958630fd717a3e3efee958fdf5",
+        "collection_manifest_sha256": "8c4ed46098088e16add92262209f3cd95f26846e683d0abfed21071320248d7c",
+        "resolved_config_sha256": "ac36e19a292e59655a89dcb18770a9625b563f8040b468e0a1be2e22916105b9",
+        "source_lock_sha256": "c9433742bb40570296b1b983853239a559f3711ecd833ae3a75226dbf11f6346"
+      },
+      {
+        "run_id": "p2-ready-identity-collection-v1-rerun-destination-20260805T102803Z",
+        "extraction_report_sha256": "abc18c8d571af1d47d67ca2df338a723132a33117cbf1bc5f1028cd2ae5bb48e",
+        "collection_manifest_sha256": "8c4ed46098088e16add92262209f3cd95f26846e683d0abfed21071320248d7c",
+        "resolved_config_sha256": "ac36e19a292e59655a89dcb18770a9625b563f8040b468e0a1be2e22916105b9",
+        "source_lock_sha256": "c9433742bb40570296b1b983853239a559f3711ecd833ae3a75226dbf11f6346"
+      }
+    ],
+    "each_identity_extraction_hashes_source_before_and_after_decode": true,
+    "observed_payload_entries": 301655,
+    "observed_metadata_keys": [],
+    "identity_evidence_scope": "Identity extraction validates the source file, entry partition, CID/key consistency and identity-required fields; it does not pre-validate the census ten-field closed payload schema."
+  },
+  "scope": "This manifest binds only the canonical geometry-ready LMDB consumed by the P2 identity and motif-census candidates; it is not a manifest for every file in the larger P2 evidence closure."
+}

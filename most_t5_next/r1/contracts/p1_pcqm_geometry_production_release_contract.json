@@ -1,0 +1,106 @@
+{
+  "schema_version": "most-t5-r1/p1-pcqm-geometry-production-release-contract/v2",
+  "purpose": "Fail-closed contract for the full, sharded PCQM4Mv2 geometry-only pretokenizer release with content-addressed per-record motif binding. This contract version-bumps the bounded smoke boundary; it does not itself admit P1 training.",
+  "source": {
+    "identity_namespace": "ogb_pcqm4mv2_train_row_index",
+    "required_record_count": 3378606,
+    "selection": "complete contiguous SDF ordinal range [0,3378606)",
+    "staging_contract_schema": "most-t5-r1/pcqm4mv2-staging-receipt-contract/v1",
+    "verified_input_receipt_schema": "most-t5-r1/pcqm4mv2-staging-receipt/v1",
+    "required_staged_roles": [
+      "train_3d_sdf_archive",
+      "companion_archive",
+      "companion_data_csv_gz",
+      "companion_split_dict_pt",
+      "train_sdf_source_manifest",
+      "train_sdf_member_hash_report",
+      "companion_source_manifest",
+      "companion_content_validation"
+    ],
+    "companion_row_rule": "source-contract v3 locks csv_idx as zero-based contiguous and train split as the contiguous prefix [0,3378606), therefore official_csv_row_index equals SDF ordinal; no derived row-map is a staged source role",
+    "required_sdf_member_fields": [
+      "tar_member_name",
+      "member_type",
+      "uncompressed_bytes",
+      "sha256"
+    ]
+  },
+  "execution": {
+    "architecture": "one ordered tar.gz producer, bounded ProcessPool workers, and one LMDB writer in the parent process",
+    "default_shard_size": 25000,
+    "allowed_shard_size": {
+      "minimum": 20000,
+      "maximum": 30000
+    },
+    "resume_granularity": "completed shard boundary",
+    "partial_attempt_policy": "preserve every incomplete attempt; never reuse or relabel it; restart that shard in a fresh attempt directory",
+    "lmdb_merge_permitted": false,
+    "raw_sdf_extraction_permitted": false,
+    "unordered_result_commit_permitted": false,
+    "benchmark_prefixes": [
+      128,
+      10000
+    ],
+    "benchmark_release_status": "benchmark_non_release",
+    "benchmark_full_release_manifest_permitted": false
+  },
+  "logical_record": {
+    "schema_version": "most-t5-r1/p1-pcqm-geometry-production-pretokenizer-record/v2",
+    "mode": "full_sharded_production",
+    "derived_from": "most-t5-r1/p1-pcqm-geometry-pretokenizer-record/v2",
+    "tokenizer_binding": "absent_and_forbidden",
+    "p1_training_admission": false,
+    "p1_training_launcher_permitted": false,
+    "motif_fragment_sequence_in_payload_permitted": false,
+    "motif_lexeme_binding": {
+      "digest_algorithm": "sha256",
+      "digest_input": "exact_motif_fragment_utf8_without_normalization",
+      "ordered_digest_field": "topology.motif_lexeme_sha256",
+      "ordered_digest_field_required": true,
+      "per_record_fragment_storage_permitted": false
+    }
+  },
+  "shard_artifacts": {
+    "required": [
+      "geometry_records.lmdb/data.mdb",
+      "membership.jsonl",
+      "reject_ledger.jsonl",
+      "payload_index.jsonl",
+      "motif_census.jsonl",
+      "shard_manifest.json"
+    ],
+    "membership_order": "strictly ascending SDF ordinal",
+    "partition": "each source ordinal has exactly one membership disposition; admits have one LMDB payload and payload-index row; rejects have one reject-ledger row",
+    "motif_census": "content-addressed digest-to-exact-fragment dictionary and aggregate counts from admitted records only; each admitted payload stores only its ordered digest sequence",
+    "motif_census_row_fields": [
+      "motif_lexeme_sha256",
+      "motif_fragment",
+      "count"
+    ],
+    "motif_digest_collision_policy": "fail_closed"
+  },
+  "release_states": {
+    "partial": "production_scope.json and run_state.json exist, but full_release_manifest.json does not",
+    "complete": "all shard manifests cover [0,required_record_count) without gap or overlap and full_release_manifest.json binds every completed shard plus the global motif census"
+  },
+  "immutability": {
+    "completed_shards": "append-only and immutable",
+    "full_release_manifest": "created once after complete coverage",
+    "mutable_files": [
+      "run_state.json"
+    ],
+    "excluded_operational_files": [
+      "geometry_records.lmdb/lock.mdb"
+    ]
+  },
+  "fail_closed": [
+    "Every staged input file is byte-counted and SHA-256 verified before SDF, CSV, or row-map parsing.",
+    "The output root must be new unless --resume is explicit.",
+    "Resume validates every completed shard artifact and restarts only at a completed shard boundary.",
+    "Any worker, serialization, ordering, LMDB, range, contract, or invariant error stops the release and records only a closed failure class.",
+    "Every per-record motif digest is SHA-256 over the exact UTF-8 motif fragment, preserves motif order, and has the same cardinality as motif_atom_indices.",
+    "Any malformed motif digest or digest-to-distinct-fragment collision stops the release.",
+    "No completed shard is overwritten, appended, merged, or silently repaired.",
+    "A complete manifest is impossible unless the global ranges are exactly contiguous and the membership partition balances."
+  ]
+}

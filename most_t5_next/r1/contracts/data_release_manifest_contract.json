@@ -1,0 +1,218 @@
+{
+  "schema_version": "most-t5-r1/data-release-manifest-contract/v3",
+  "purpose": "A machine-checkable admission contract for a new MoSt-T5 P1/P2 data release. It is intentionally separate from the historical training tree.",
+  "validator": "../gates/validate_data_release_manifest.py",
+  "release_statuses": [
+    "candidate",
+    "admitted"
+  ],
+  "supported_source_profiles": {
+    "legacy_3dmolm_control": {
+      "p1": {
+        "identity_namespace": "pubchemqc_id",
+        "source_record_count": 3119717,
+        "geometry_admitted_record_count": 3119714,
+        "geometry_reject_reason_counts": {
+          "E3FP_UNSUPPORTED_H2": 3
+        }
+      },
+      "p2": {
+        "identity_namespace": "pubchem_cid",
+        "source_record_count": 301658,
+        "geometry_admitted_record_count": 301655,
+        "geometry_reject_reason_counts": {
+          "E3FP_SINGLE_ATOM_NO_DISTANCE_PAIRS": 3
+        }
+      }
+    },
+    "pcqm4mv2_candidate": {
+      "p1": {
+        "identity_namespace": "ogb_pcqm4mv2_train_row_index",
+        "source_record_count": 3378606,
+        "note": "The OGB raw train-3D count is fixed. Its post-adapter geometry admission count must be proven by a new reject ledger; it must not be force-matched to 3D-MolT5's unpublished processed corpus."
+      },
+      "p2": {
+        "identity_namespace": "pubchem_cid",
+        "source_record_count": 301658,
+        "geometry_admitted_record_count": 301655,
+        "geometry_reject_reason_counts": {
+          "E3FP_SINGLE_ATOM_NO_DISTANCE_PAIRS": 3
+        }
+      }
+    }
+  },
+  "required_top_level_fields": [
+    "schema_version",
+    "release",
+    "source_profile",
+    "source_locks",
+    "phases",
+    "geometry_mask_policy",
+    "downstream_identity_exclusion",
+    "cross_phase_overlap",
+    "tokenizer",
+    "checkpoint_prerequisites"
+  ],
+  "required_source_lock_roles": [
+    "p1_membership_source",
+    "p1_geometry_source",
+    "p2_membership_source",
+    "p2_geometry_source",
+    "p1_adapter_harness",
+    "p1_record_schema",
+    "tokenizer_base_snapshot",
+    "tokenizer_builder_harness",
+    "stable_tokenizer_contract",
+    "geometry_policy_spec",
+    "identity_exclusion_method"
+  ],
+  "profile_required_source_lock_roles": {
+    "pcqm4mv2_candidate": [
+      "pcqm_identity_normalization_contract"
+    ]
+  },
+  "source_lock_rules": {
+    "required_fields": [
+      "name",
+      "role",
+      "kind",
+      "path",
+      "bytes",
+      "sha256",
+      "location_scope",
+      "immutable"
+    ],
+    "allowed_kinds": [
+      "file",
+      "directory"
+    ],
+    "allowed_location_scopes": [
+      "remote_shared",
+      "remote_ephemeral",
+      "local_code_only"
+    ],
+    "directory_sha256_definition": "SHA-256 of canonical JSON records sorted by relative POSIX path. Each record contains relative_path, bytes, and the SHA-256 of one regular file. Symlinks are forbidden during verification.",
+    "data_roles_must_be_remote": true,
+    "code_and_contract_roles_may_be_remote_shared": true
+  },
+  "phase_membership_rules": {
+    "required_fields": [
+      "identity_namespace",
+      "source_record_count",
+      "geometry_admitted_record_count",
+      "member_ids_sha256",
+      "manifest_file_sha256",
+      "reject_ledger"
+    ],
+    "reject_ledger_required_fields": [
+      "file_sha256",
+      "record_count",
+      "ids_sha256",
+      "reason_counts"
+    ],
+    "invariant": "source_record_count == geometry_admitted_record_count + reject_ledger.record_count",
+    "optional_text_only_rule": "text_or_2d_only_record_count is a subset of geometry rejects and must be zero unless its reject reason action explicitly preserves a text/2D route."
+  },
+  "p1_same_mol_adapter_rules": {
+    "phase_field": "phases.p1.same_mol_adapter",
+    "required_source_lock_roles": [
+      "p1_adapter_harness",
+      "p1_record_schema"
+    ],
+    "required_fields": [
+      "schema_version",
+      "adapter_harness_sha256",
+      "record_schema_sha256",
+      "same_mol_derivation",
+      "source_atom_index_tag",
+      "source_atom_index_tagged_pre_removehs",
+      "retained_source_index_validation_required",
+      "compacted_index_inference_forbidden",
+      "smiles_rebuild_for_alignment_forbidden",
+      "frozen_mol_linearizer_required",
+      "required_batch_fields",
+      "legacy_mask_positions_forbidden",
+      "geometry_input_mask_definition",
+      "geometry_target_mask_required",
+      "geometry_target_mask_definition"
+    ],
+    "required_values": {
+      "schema_version": "most-t5-r1/p1-same-mol-adapter/v2",
+      "same_mol_derivation": "single_post_projection_geometry_mol",
+      "source_atom_index_tag": "_r1_source_atom_index",
+      "source_atom_index_tagged_pre_removehs": true,
+      "retained_source_index_validation_required": true,
+      "compacted_index_inference_forbidden": true,
+      "smiles_rebuild_for_alignment_forbidden": true,
+      "frozen_mol_linearizer_required": true,
+      "required_batch_fields": [
+        "joint_mask_positions",
+        "geo_only_mask_positions",
+        "geometry_input_mask",
+        "unmasked_input_ids",
+        "unmasked_atom_attention_mask"
+      ],
+      "legacy_mask_positions_forbidden": true,
+      "geometry_input_mask_definition": "joint_mask_positions OR geo_only_mask_positions",
+      "geometry_target_mask_required": true,
+      "geometry_target_mask_definition": "geo_only_mask_positions AND token_geometry_valid_mask"
+    },
+    "mainline_mask_invariants": [
+      "joint_mask_positions and geo_only_mask_positions are distinct declared batch fields.",
+      "geometry_input_mask equals elementwise OR(joint_mask_positions, geo_only_mask_positions).",
+      "geometry_target_mask equals elementwise AND(geo_only_mask_positions, token_geometry_valid_mask).",
+      "unmasked_input_ids and unmasked_atom_attention_mask define the canonical unmasked position domain for all P1 mask arrays.",
+      "The legacy field mask_positions and its legacy merged-mask semantics are forbidden."
+    ],
+    "hash_binding_rule": "adapter_harness_sha256 and record_schema_sha256 must each match a P1-referenced immutable source lock with the corresponding role.",
+    "pcqm4mv2_candidate_additional_requirements": {
+      "source_lock_role": "pcqm_identity_normalization_contract",
+      "source_lock_reference_required_by": "phases.p1.source_lock_names",
+      "same_mol_adapter_hash_field": "identity_normalization_contract_sha256"
+    }
+  },
+  "geometry_mask_policy_rules": {
+    "mse_task_scope": [
+      "mmm"
+    ],
+    "required_boolean_guards": [
+      "per_example_geometry_validity_mask",
+      "zero_vector_as_geometry_target_forbidden",
+      "mask_statistics_required"
+    ],
+    "required_invalid_case_actions": {
+      "padding_mapped_atom_action": "mask_or_exclude",
+      "geometryless_motif_action": "mask_or_exclude"
+    },
+    "reject_reason_action_rule": "Every reject-ledger reason needs an explicit action and geometry_mse_enabled=false. A dedicated sentinel is allowed only with a non-padding sentinel validation hash."
+  },
+  "tokenizer_rules": {
+    "required_fields": [
+      "contract_manifest_sha256",
+      "base_snapshot_tree_sha256",
+      "builder_harness_sha256",
+      "special_token_spec_sha256",
+      "ordered_motif_vocab_sha256",
+      "id_to_token_sha256",
+      "vocab_size",
+      "p1_p2_exact_same_mapping",
+      "p2_vocab_extension_forbidden",
+      "permitted_membership_manifest_sha256",
+      "determinism_gate"
+    ],
+    "determinism_gate_rule": "At least three distinct PYTHONHASHSEED values must pass and report the same id_to_token_sha256 as the frozen tokenizer."
+  },
+  "checkpoint_rules": {
+    "p1_to_p2_required_values": {
+      "legacy_p1_checkpoint_allowed": false,
+      "same_tokenizer_mapping_required": true,
+      "strict_load_required": true,
+      "ignore_mismatched_sizes_forbidden": true,
+      "equal_vocab_size_required": true,
+      "embedding_shape_match_required": true,
+      "checkpoint_tokenizer_snapshot_required": true,
+      "checkpoint_release_manifest_required": true
+    }
+  },
+  "not_an_admission": "A syntactically valid candidate manifest does not itself permit training. P1/P2 admission flags and all source-lock verification must be positively recorded before a launcher is used."
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": "most-t5-r1/p1-pcqm-geometry-adapter-lock/v2",
+  "purpose": "Immutable source-hash lock for the bounded, non-admissible PCQM4Mv2 geometry sidecar v2. The builder and builder-linked replay refuse to run if any listed harness component or static contract differs. This lock does not admit P1 training.",
+  "components": [
+    {
+      "name": "build_pcqm_p1_geometry_sidecar.py",
+      "relative_harness_path": "adapter/build_pcqm_p1_geometry_sidecar.py",
+      "sha256": "c949a4fd010aa8460fcb22a3b72b47ea38a6fe2c9a52bf6740dc1654f37d0f5a"
+    },
+    {
+      "name": "mol_linearizer.py",
+      "relative_harness_path": "adapter/mol_linearizer.py",
+      "sha256": "f0afa8eee63062f7578ab9a3501db4e38d558609b25150eba38f5526b764d0f3"
+    },
+    {
+      "name": "pcqm_e3fp_preflight.py",
+      "relative_harness_path": "gates/pcqm_e3fp_preflight.py",
+      "sha256": "c0972903f2c6b526a99aedb01be9b4e30970a95e3b8654e9f6e7a3acb5374c80"
+    },
+    {
+      "name": "pcqm_identity_smoke.py",
+      "relative_harness_path": "gates/pcqm_identity_smoke.py",
+      "sha256": "fd55ac5a519c2235cf3202814782b56ce674c032ace7948e0a36af4f91274abc"
+    },
+    {
+      "name": "pcqm_source_integrity.py",
+      "relative_harness_path": "adapter/pcqm_source_integrity.py",
+      "sha256": "5b9e147988d9e36f972d91c43e55c4aec74bc96b20d89f81a4b3fb068aa262fb"
+    },
+    {
+      "name": "sidecar_v2_codec.py",
+      "relative_harness_path": "adapter/sidecar_v2_codec.py",
+      "sha256": "1e5ab192f7dfc0805310e9232892cf2bc59706b32267dd52fe383d5df4b89afd"
+    }
+  ],
+  "fixed_contracts": [
+    {
+      "name": "pcqm4mv2_source_contract.json",
+      "relative_contract_path": "contracts/pcqm4mv2_source_contract.json",
+      "sha256": "32cc85b2c4ed07cd90e51eb08cd9aff866b0e762dba2c757a4a7a9b1e7a57405"
+    },
+    {
+      "name": "pcqm4mv2_identity_normalization_contract.json",
+      "relative_contract_path": "contracts/pcqm4mv2_identity_normalization_contract.json",
+      "sha256": "5f9be346294e08bf73d47c089a00be4c2f19d89612b5e4c09d0d7f5f6b23b044"
+    },
+    {
+      "name": "p1_pcqm_geometry_record_schema.json",
+      "relative_contract_path": "contracts/p1_pcqm_geometry_record_schema.json",
+      "sha256": "d127131ed7b4852ed36b21463cc15e87002642f577e430d07e1fd5c0ceb31c51"
+    },
+    {
+      "name": "p1_pcqm_geometry_payload_format_contract.json",
+      "relative_contract_path": "contracts/p1_pcqm_geometry_payload_format_contract.json",
+      "sha256": "fe7df29b1a7d358676c0eec6c44c1a9a42cff0f38cf14d2dd03c24c0c8f3003b"
+    }
+  ]
+}
