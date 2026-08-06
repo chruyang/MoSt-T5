@@ -1,0 +1,900 @@
+{
+  "schema_version": "most-t5-r1/downstream-scientific-registry/v2",
+  "registry_id": "downstream-scientific-registry-20260807-v2",
+  "contract_path": "../../contracts/downstream_scientific_registry_contract_v2.json",
+  "contract_id": "downstream-scientific-registry-contract-v2",
+  "contract_version": 2,
+  "source_acquisition_manifest_path": "downstream_source_acquisition_manifest_20260807_v1.json",
+  "source_acquisition_manifest_id": "downstream-source-acquisition-manifest-20260807-v1",
+  "supersedes_for_scientific_planning": "downstream-task-registry-20260806-v1",
+  "preserves_v1_as_evidence_inventory": true,
+  "v1_evidence_registry_path": "downstream_task_registry_20260806_v1.json",
+  "observed_date_utc": "2026-08-07",
+  "purpose": "Paper-facing scientific dataset protocol for deciding which downstream tasks are core, supporting, or deferred; which versions and splits must be frozen; and which validation and test molecules must be excluded from P1 and P2 training memberships. Broad source inventory remains in v1; the linked acquisition manifest records only the selected paper-source files needed to make these protocol decisions reproducible.",
+  "paper_scope": {
+    "core_task_ids": [
+      "qm9_orbital_property_scientific_v2",
+      "pubchem_captioning_scientific_v2",
+      "chebi20_text_to_molecule_scientific_v2",
+      "controlled_motif_editing_scientific_v2"
+    ],
+    "supporting_task_ids": [
+      "moleculenet_bace_scientific_v2",
+      "moleculenet_bbbp_scientific_v2",
+      "moleculenet_hiv_scientific_v2",
+      "moleculenet_clintox_scientific_v2"
+    ],
+    "deferred_task_ids": [
+      "pubchemqc_property_deferred_v2",
+      "zero_shot_retrieval_deferred_v2"
+    ],
+    "headline_priority_task_ids": [
+      "qm9_orbital_property_scientific_v2",
+      "controlled_motif_editing_scientific_v2",
+      "pubchem_captioning_scientific_v2"
+    ],
+    "core_supporting_result_task_ids": [
+      "chebi20_text_to_molecule_scientific_v2"
+    ],
+    "scope_boundary": "Core and supporting tasks are the current paper protocol. Deferred tasks are named to prevent silent scope ambiguity but are not current evaluation or decontamination obligations."
+  },
+  "decontamination_policy": {
+    "primary_identity": "canonical_connectivity",
+    "protected_splits": [
+      "validation",
+      "test"
+    ],
+    "protected_task_roles": [
+      "core",
+      "supporting"
+    ],
+    "grouping_unit": "molecule_by_canonical_connectivity",
+    "multi_view_grouping": "All property prompts, text prompts, and conformers for one canonical connectivity identity stay in the same split group.",
+    "training_memberships_subject_to_exclusion": [
+      "p1_structure_train",
+      "p2_permitted_train_membership",
+      "p2_alignment_train",
+      "p2_geometry_replay_train"
+    ],
+    "downstream_train_overlap": "retain_and_disclose",
+    "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+    "reported_view_rule": "Preserve official or legacy benchmark rows for reported-protocol comparison; build a separately named connectivity-clean view for leakage-controlled claims.",
+    "current_frozen_task_ids": [],
+    "current_union_status": "not_authorized_until_core_and_supporting_eval_manifests_are_frozen",
+    "deferred_rule": "PubChemQC and retrieval contribute no identities to the current protected union. Promotion requires a new registry version before the training run whose claims would use them."
+  },
+  "planning_decisions": {
+    "changes_required": [
+      "Replace the legacy row-level QM9 validation and test artifacts with a molecule-group-disjoint scientific split; retain the legacy artifacts only as diagnostics.",
+      "Freeze separate reported-protocol and connectivity-clean views for PubChem captioning and ChEBI-20 instead of rewriting an official split in place.",
+      "Treat the published MoleculeSTM 200-source-molecule list and FineMolTex twelve-prompt namespace as a sealed compatibility test. Build a separate canonical-connectivity-disjoint development membership from ZINC250K and justify its size rather than imposing an arbitrary threshold.",
+      "Retain MoleculeSTM revision ff2de71fa6bb0533d5e740db6d88a0442a0d38e8 as count-matched fallback evidence. For BACE, BBBP, and ClinTox, the legacy CSV plus three scaffold splits are internally valid KPGT-layout-compatible candidates but remain non-official until compared with Figshare file 35391163; the current region returns HTTP 403. KPGT excludes HIV, and the official 3D-MolT5 release inventory exposes no traceable HIV members or split. HIV therefore uses the SHA-256-bound DeepChem HIV.csv source with a frozen deterministic Murcko 8:1:1 derived-v1 split. Full P1 still waits for formal member manifests, canonical identities, and the protected union.",
+      "Move PubChemQC out of the current core path and keep retrieval deferred; neither blocks architecture canaries or enters the present protected union."
+    ],
+    "unchanged_principles": [
+      "Downstream validation and test protection is defined at canonical connectivity rather than instruction-row level.",
+      "Downstream training overlap with pretraining may be retained and disclosed.",
+      "No global scaffold exclusion is applied to pretraining.",
+      "Task-specific metrics and independent ablations remain necessary; one aggregate downstream score is insufficient."
+    ],
+    "gate_summary": {
+      "architecture_canary": "may_proceed_without_frozen_downstream_union",
+      "full_p1": "blocked_until_current_paper_scope_dataset_versions_validation_test_memberships_canonical_identities_and_protected_union_are_frozen_not_until_downstream_evaluators_or_conformer_adapters_are_complete",
+      "full_p2": "uses_the_same_or_a_later_versioned_protected_union",
+      "deferred_tasks": "do_not_block_current_canary_or_full_run"
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "qm9_orbital_property_scientific_v2",
+      "dataset_id": "QM9",
+      "paper_role": "core",
+      "result_role": "headline_result",
+      "task_family": "molecular_property_prediction",
+      "protocol_type": "supervised_numeric_generation",
+      "scientific_question": "Does motif-level 3D encoding improve molecular orbital property prediction while keeping numeric generation stable, and is the gain attributable to geometry rather than duplicated prompts or split leakage?",
+      "source_basis": {
+        "state": "3dmolt5_artifact_frozen_clean_split_materialization_pending",
+        "v1_evidence_task_id": "qm9_orbital_property_generation_3dmolt5_hf_v1",
+        "declared_revision": "QizhiPei/e3fp-mol-instructions-qm9@bfe55090be9ebf1c9cbbe6687a5796711ac0edd8",
+        "version_status": "3dmolt5_released_e3fp_instruction_artifact_frozen_original_row_split_rejected",
+        "observed_artifacts": "The frozen release has 347774 train rows, 1928 validation rows, and 1928 test rows; validation and test are byte-identical. Using train plus exactly one validation copy gives 349702 source rows. Removing 42 later model-visible exact duplicates leaves 349660 rows in 128836 strict canonical-isomeric molecule groups.",
+        "reported_protocol": "Retain the unmodified 3D-MolT5 row split only as a compatibility diagnostic; it is not a headline evaluation because validation and test are duplicated and identity leakage is severe.",
+        "clean_protocol": "Keep the frozen 3D-MolT5 E3FP, SELFIES, instruction, and target payloads; consume train plus validation and forbid the duplicate test file; remove only exact model-visible duplicates; regroup by strict canonical-isomeric molecular identity; route HOMO, LUMO, and gap in Hartree."
+      },
+      "split_protocol": {
+        "status": "derived_protocol_frozen_materialization_pending",
+        "protocol_id": "qm9-3dmolt5-idgroup-110k10k-rest-s42-v1",
+        "authority": "project_identity_group_split_over_frozen_3dmolt5_released_artifact_aligned_to_common_qm9_110k_10k_remainder_scale",
+        "grouping_unit": "canonical_isomeric_molecular_identity",
+        "rng": "numpy.default_rng_PCG64_seed_42_over_lexicographically_sorted_group_ids",
+        "train": {
+          "status": "derived_membership_to_materialize",
+          "row_count": 298529,
+          "molecule_count": 110000
+        },
+        "validation": {
+          "status": "derived_membership_to_materialize",
+          "row_count": 27211,
+          "molecule_count": 10000
+        },
+        "test": {
+          "status": "derived_membership_to_materialize",
+          "row_count": 23920,
+          "molecule_count": 8836
+        },
+        "multi_view_grouping": "All HOMO, LUMO, and gap prompts and all retained E3FP states sharing one strict canonical-isomeric molecular identity stay in one split.",
+        "split_identity_boundary": "Strict canonical-isomeric molecular identity approximates the absent released molecule ID. Canonical non-isomeric connectivity is emitted separately and is used only for the more conservative P1/P2 protected union.",
+        "external_protocol_boundary": "The 110000/10000/remainder scale follows common QM9 geometric-model practice; exact SchNet or DimeNet membership is not claimed because the 3D-MolT5 artifact lacks the original molecule-ID row map.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "primary_3d_input",
+        "source": "paper_claimed_deepchem_sdf_derived_3dmolt5_released_e3fp_artifact",
+        "status": "released_e3fp_frozen_original_sdf_revision_coordinates_and_row_map_not_publicly_bound",
+        "conformer_policy": "Use the released 3D-MolT5 E3FP unchanged for the primary same-source comparison. Do not claim independent row-level coordinate provenance and do not mix regenerated conformers into this view."
+      },
+      "metrics": {
+        "primary": [
+          "MAE_Hartree_per_property"
+        ],
+        "secondary": [
+          "numeric_valid_rate",
+          "direct_regression_probe_MAE",
+          "geometry_shuffle_delta"
+        ],
+        "selection_rule": "Select checkpoints on validation MAE after numeric validity is acceptable; report per-property test values rather than a prompt-weighted aggregate alone."
+      },
+      "comparison_protocol": {
+        "reported_view": {
+          "name": "qm9_3dmolt5_instruction_compatibility_diagnostic",
+          "status": "diagnostic_only_not_headline"
+        },
+        "clean_view": {
+          "name": "qm9_3dmolt5_idgroup_110k10k_rest_s42_v1",
+          "status": "must_be_materialized"
+        }
+      },
+      "decontamination": {
+        "protected_splits": [
+          "validation",
+          "test"
+        ],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "pending_clean_split"
+      },
+      "readiness_status": "source_frozen_clean_split_materialization_pending",
+      "next_actions": [
+        "Run the frozen split builder over the remote train and validation Parquet files on the high-CPU instance; the released test file is forbidden.",
+        "Verify the expected 349660 rows, 128836 strict groups, 42 removed exact duplicates, 110000/10000/8836 group sizes, and 298529/27211/23920 row sizes.",
+        "Freeze explicit property routes, units, and numeric parser tests.",
+        "Use the emitted validation and test canonical non-isomeric connectivity identities when rebuilding the protected pretraining union."
+      ]
+    },
+    {
+      "task_id": "pubchem_captioning_scientific_v2",
+      "dataset_id": "PubChem-3D-caption",
+      "paper_role": "core",
+      "result_role": "headline_result",
+      "task_family": "molecule_captioning",
+      "protocol_type": "supervised_text_generation",
+      "scientific_question": "Does a motif-level 2D-3D representation produce chemically faithful natural-language descriptions beyond surface n-gram overlap?",
+      "source_basis": {
+        "state": "present_local_evidence",
+        "v1_evidence_task_id": "pubchem_captioning_p2_lmdb_v1",
+        "declared_revision": "QizhiPei/e3fp-pubchem-cap legacy-description compatibility target frozen 2026-08-06",
+        "version_status": "legacy_target_known_dataset_release_identifier_to_freeze",
+        "observed_artifacts": "Local LMDB evidence contains 12000 train, 1000 validation, and 2000 test records; the published 3D-MolT5 protocol reports 11955, 996, and 1988.",
+        "reported_protocol": "Preserve the legacy description target and explicitly reconstruct the published-count view if used for a direct literature comparison.",
+        "clean_protocol": "Derive a separate canonical-connectivity-clean view and document any removed or reassigned records."
+      },
+      "split_protocol": {
+        "status": "reported_view_present_clean_view_pending",
+        "authority": "legacy_lmdb_reported_view_plus_project_connectivity_clean_view",
+        "grouping_unit": "canonical_connectivity",
+        "train": {
+          "status": "legacy_rows_present",
+          "row_count": 12000,
+          "molecule_count": null
+        },
+        "validation": {
+          "status": "legacy_rows_present_clean_view_pending",
+          "row_count": 1000,
+          "molecule_count": null
+        },
+        "test": {
+          "status": "legacy_rows_present_clean_view_pending",
+          "row_count": 2000,
+          "molecule_count": null
+        },
+        "multi_view_grouping": "All captions and conformers for one molecule remain in one split.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "primary_3d_input",
+        "source": "coordinates_in_registered_lmdb",
+        "status": "present_source_join_and_clean_view_to_freeze",
+        "conformer_policy": "Use the registered LMDB coordinates for the reported view and record any clean-view molecule remapping."
+      },
+      "metrics": {
+        "primary": [
+          "BLEU-2",
+          "BLEU-4",
+          "ROUGE-1",
+          "ROUGE-2",
+          "ROUGE-L",
+          "METEOR"
+        ],
+        "secondary": [
+          "chemical_entity_precision_recall",
+          "property_and_motif_factuality",
+          "human_or_model_assisted_error_categories"
+        ],
+        "selection_rule": "Use the declared validation metric composite, but report each text metric and chemistry-factuality result separately."
+      },
+      "comparison_protocol": {
+        "reported_view": {
+          "name": "pubchem_caption_legacy_reported_protocol_v1",
+          "status": "present_reconciliation_with_published_counts_required"
+        },
+        "clean_view": {
+          "name": "pubchem_caption_connectivity_clean_v2",
+          "status": "must_be_materialized"
+        }
+      },
+      "decontamination": {
+        "protected_splits": [
+          "validation",
+          "test"
+        ],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "pending_clean_view"
+      },
+      "readiness_status": "source_present_clean_view_pending",
+      "next_actions": [
+        "Name and freeze the dataset release and legacy-description target.",
+        "Reconcile local and published split counts without overwriting the local evidence view.",
+        "Materialize the connectivity-clean split and factuality evaluator."
+      ]
+    },
+    {
+      "task_id": "chebi20_text_to_molecule_scientific_v2",
+      "dataset_id": "ChEBI-20",
+      "paper_role": "core",
+      "result_role": "core_supporting_result",
+      "task_family": "text_to_molecule_generation",
+      "protocol_type": "supervised_text_generation",
+      "scientific_question": "Can the unified language interface decode chemically valid and semantically aligned molecular structures from text while retaining compatibility with motif-aware molecular language baselines?",
+      "source_basis": {
+        "state": "present_local_evidence",
+        "v1_evidence_task_id": "chebi20_text_to_molecule_3dmolt5_hf_v1",
+        "declared_revision": "QizhiPei/e3fp-mol-instructions-chebi20@9949fae8860ffd7c7dbca8e9848ad37842f1c279",
+        "version_status": "source_revision_known_clean_view_and_codec_adapter_pending",
+        "observed_artifacts": "26407 train, 3301 validation, and 3300 test rows are present; preliminary exact-SMILES and CID checks found no split overlap but do not replace canonical-connectivity proof.",
+        "reported_protocol": "Retain the registered ChEBI-20 instruction split for literature-compatible reporting.",
+        "clean_protocol": "Derive a separate canonical-connectivity-clean view and freeze output codec normalization and evaluator versions."
+      },
+      "split_protocol": {
+        "status": "reported_view_present_clean_view_pending",
+        "authority": "registered_hf_revision_reported_view_plus_project_connectivity_clean_view",
+        "grouping_unit": "canonical_connectivity",
+        "train": {
+          "status": "reported_rows_present",
+          "row_count": 26407,
+          "molecule_count": null
+        },
+        "validation": {
+          "status": "reported_rows_present_clean_view_pending",
+          "row_count": 3301,
+          "molecule_count": null
+        },
+        "test": {
+          "status": "reported_rows_present_clean_view_pending",
+          "row_count": 3300,
+          "molecule_count": null
+        },
+        "multi_view_grouping": "All textual descriptions and serialized molecular targets for one molecule remain in one split.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "not_used_for_text_only_input",
+        "source": null,
+        "status": "not_applicable",
+        "conformer_policy": "No source-molecule geometry is required for the text-to-molecule input; generated molecules may be evaluated structurally in 2D."
+      },
+      "metrics": {
+        "primary": [
+          "molecular_validity",
+          "canonical_exact_match"
+        ],
+        "secondary": [
+          "SMILES_BLEU",
+          "Levenshtein_distance",
+          "MACCS_similarity",
+          "RDK_similarity",
+          "Morgan_similarity",
+          "FCD",
+          "Text2Mol_alignment"
+        ],
+        "selection_rule": "Select on validation chemical validity plus structural and semantic quality; token overlap alone cannot select the final checkpoint."
+      },
+      "comparison_protocol": {
+        "reported_view": {
+          "name": "chebi20_registered_reported_protocol_v1",
+          "status": "present"
+        },
+        "clean_view": {
+          "name": "chebi20_connectivity_clean_v2",
+          "status": "must_be_materialized"
+        }
+      },
+      "decontamination": {
+        "protected_splits": [
+          "validation",
+          "test"
+        ],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "pending_connectivity_clean_view"
+      },
+      "readiness_status": "source_present_clean_view_pending",
+      "next_actions": [
+        "Run canonical-connectivity split proof on the frozen source revision.",
+        "Freeze the molecular codec adapter and evaluator versions.",
+        "Materialize reported and clean evaluation manifests separately."
+      ]
+    },
+    {
+      "task_id": "controlled_motif_editing_scientific_v2",
+      "dataset_id": "Controlled-Motif-Editing",
+      "paper_role": "core",
+      "result_role": "headline_result",
+      "task_family": "text_based_molecular_editing",
+      "protocol_type": "zero_shot_controlled_editing",
+      "scientific_question": "Does explicit motif-level 2D-3D encoding provide a distinctive advantage for natural-language molecular editing by changing the requested motif while preserving unrelated structure and valid attachment geometry?",
+      "source_basis": {
+        "state": "sealed_test_member_source_frozen_development_members_pending",
+        "v1_evidence_task_id": "controlled_motif_editing_finemoltex_informed_v1",
+        "source_acquisition_artifact_ids": [
+          "moleculestm_editing_single_multi_property_smiles_v1",
+          "finemoltex_v0_0_0_zip_v1"
+        ],
+        "declared_revision": "chao1224/MoleculeSTM@ff2de71fa6bb0533d5e740db6d88a0442a0d38e8 plus FineMolTex Zenodo record 15501037 V0.0.0",
+        "version_status": "published_200_member_sealed_test_source_and_prompt_namespace_frozen_development_membership_pending",
+        "observed_artifacts": "The registered MoleculeSTM file has 200 nonempty lines and 200 unique records. FineMolTex generation_Optimization.py:146 reads that file by default, and downstream_molecule_edit_utils.py:34-72 defines prompt IDs 101-106, 205-206, and 501-504.",
+        "reported_protocol": "Use the published 200-member MoleculeSTM list as the all-run-sealed FineMolTex compatibility test; it is never used for development or checkpoint selection.",
+        "clean_protocol": "Select and freeze a separate ZINC250K development membership that is canonical-connectivity-disjoint from the sealed 200-member test; justify its size without a preset minimum."
+      },
+      "split_protocol": {
+        "status": "sealed_test_frozen_development_membership_pending",
+        "authority": "project_preregistered_zero_shot_protocol",
+        "grouping_unit": "canonical_connectivity",
+        "train": {
+          "status": "not_applicable_no_supervised_training",
+          "row_count": null,
+          "molecule_count": null
+        },
+        "validation": {
+          "status": "zinc250k_connectivity_disjoint_development_membership_pending",
+          "source_dataset": "ZINC250K",
+          "source_molecule_count": null,
+          "size_rule": "justify_and_freeze_without_arbitrary_minimum",
+          "must_be_disjoint_from_sealed_test": true,
+          "prompt_count": 12,
+          "evaluation_pair_count": null,
+          "pairing_rule": "freeze_explicit_manifest_do_not_assume_full_cartesian_product"
+        },
+        "test": {
+          "status": "published_moleculestm_200_member_sealed_test_source_frozen",
+          "source_dataset": "chao1224/MoleculeSTM",
+          "source_molecule_count": 200,
+          "prompt_count": 12,
+          "evaluation_pair_count": null,
+          "must_be_independent": true,
+          "pairing_rule": "freeze_explicit_evaluation_manifest_do_not_assume_full_cartesian_product",
+          "sealed_for_checkpoint_selection": true
+        },
+        "multi_view_grouping": "All editing prompts for one source molecule stay in one development or test group. Development members are disjoint from the published sealed test; generated outputs are scored against the registered operation rather than treated as paired training targets.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "source_molecule_3d_context_and_output_geometry_diagnostics",
+        "source": "project_source_molecule_conformer_manifest",
+        "status": "recipe_and_manifest_to_freeze",
+        "conformer_policy": "Freeze source conformers and record whether output geometry is generated, optimized, or evaluated only through structural validity."
+      },
+      "metrics": {
+        "primary": [
+          "validity",
+          "target_edit_success_rate",
+          "non_target_structure_preservation"
+        ],
+        "secondary": [
+          "reference_compatibility_hit_rate",
+          "attachment_atom_correctness",
+          "bond_type_correctness",
+          "stereochemistry_preservation",
+          "edit_distance_and_property_delta_by_operation"
+        ],
+        "selection_rule": "This is zero-shot evaluation; no checkpoint is selected on the sealed test. Development may validate prompts and evaluators only."
+      },
+      "comparison_protocol": {
+        "reported_view": {
+          "name": "controlled_editing_finemoltex_published_200_sealed_test_v2",
+          "status": "member_source_frozen_evaluation_pairing_pending"
+        },
+        "clean_view": {
+          "name": "controlled_editing_zinc250k_disjoint_development_v2",
+          "status": "must_be_materialized"
+        }
+      },
+      "decontamination": {
+        "protected_splits": [
+          "validation",
+          "test"
+        ],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "sealed_test_members_frozen_development_membership_and_union_pending"
+      },
+      "readiness_status": "sealed_test_source_frozen_development_membership_pending",
+      "next_actions": [
+        "Select, justify, and freeze a ZINC250K development membership disjoint from the published sealed test, then derive its canonical identities for the full-P1 protected union.",
+        "Keep the published 200-member compatibility test sealed throughout model and evaluator development.",
+        "Before editing evaluation, freeze prompt-to-source pairings, conformer handling, output contract, and target-change, preservation, attachment, bond, and stereo evaluators."
+      ]
+    },
+    {
+      "task_id": "moleculenet_bace_scientific_v2",
+      "dataset_id": "MoleculeNet-BACE",
+      "paper_role": "supporting",
+      "result_role": "supporting_transfer_result",
+      "task_family": "molecular_property_classification",
+      "protocol_type": "supervised_classification",
+      "scientific_question": "Does the learned motif-level representation transfer to BACE activity classification under a provenance-frozen benchmark split?",
+      "source_basis": {
+        "state": "kpgt_layout_candidate_present_official_comparison_pending",
+        "v1_evidence_task_id": null,
+        "official_source_metadata_ids": [
+          "kpgt_official_github_revisions_v1",
+          "kpgt_figshare_19914811_metadata_v1"
+        ],
+        "candidate_source_acquisition_artifact_ids": [
+          "kpgt_layout_candidate_bace_csv_v1",
+          "kpgt_layout_candidate_bace_scaffold_0_v1",
+          "kpgt_layout_candidate_bace_scaffold_1_v1",
+          "kpgt_layout_candidate_bace_scaffold_2_v1"
+        ],
+        "fallback_source_acquisition_artifact_ids": [
+          "moleculestm_bace_raw_csv_v1",
+          "moleculestm_bace_processed_smiles_v1"
+        ],
+        "declared_revision": null,
+        "verified_fallback_revision": "chao1224/MoleculeSTM@ff2de71fa6bb0533d5e740db6d88a0442a0d38e8",
+        "version_status": "kpgt_official_metadata_known_candidate_layout_verified_official_payload_comparison_blocked_current_region_http_403",
+        "observed_artifacts": "The legacy candidate has 1513 CSV rows; each of its three split files gives complete, within-file pairwise-disjoint, duplicate-free Murcko scaffold 8:1:1 partitions of 1210/151/152. Chiral and achiral Murcko cross-partition overlap are zero, all SMILES are valid, and every partition has positive and negative labels, so AUROC is computable. These facts do not prove official KPGT equivalence.",
+        "reported_protocol": "Prefer provenance-complete 3D-MolT5 BACE data if recoverable; otherwise compare the candidate with KPGT Figshare file 35391163 from an accessible region before calling it a KPGT released split.",
+        "clean_protocol": "After formal source comparison or authoritative replacement, freeze the exact source revision and validation/test membership before full P1 protection; freeze label join and 3D conformer recipe before downstream training."
+      },
+      "split_protocol": {
+        "status": "kpgt_layout_candidate_validated_official_comparison_pending",
+        "authority": "kpgt_figshare_official_equivalence_pending_current_region_http_403",
+        "grouping_unit": "canonical_connectivity",
+        "fallback_evidence_member_count": 1513,
+        "candidate_member_count": 1513,
+        "train": {"status": "pending", "row_count": null, "molecule_count": null},
+        "validation": {"status": "pending", "row_count": null, "molecule_count": null},
+        "test": {"status": "pending", "row_count": null, "molecule_count": null},
+        "split_method": "candidate_murcko_scaffold_8_1_1_not_verified_official",
+        "candidate_partition_sizes": {
+          "scaffold-0": [1210, 151, 152],
+          "scaffold-1": [1210, 151, 152],
+          "scaffold-2": [1210, 151, 152]
+        },
+        "candidate_validation": {
+          "each_split_complete_and_within_split_pairwise_disjoint_duplicate_free": true,
+          "murcko_overlap_include_chirality_false": 0,
+          "murcko_overlap_include_chirality_true": 0,
+          "all_smiles_valid": true,
+          "auroc_computable_each_partition": true
+        },
+        "seed_or_manifest": null,
+        "multi_view_grouping": "All labels and conformers for one molecule remain in one split.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "project_generated_3d_input",
+        "source": "dataset_smiles_plus_frozen_conformer_recipe",
+        "status": "conformer_recipe_pending",
+        "conformer_policy": "Freeze generator, protonation, stereochemistry, seed, conformer selection, and failure handling."
+      },
+      "metrics": {
+        "primary": ["ROC-AUC"],
+        "secondary": ["valid_conformer_coverage", "split_replica_mean_and_std", "within_replica_training_seed_mean_and_std_if_repeated"],
+        "selection_rule": "Select on validation ROC-AUC and report test ROC-AUC under the frozen split only."
+      },
+      "comparison_protocol": {
+        "reported_view": {"name": "bace_3dmolt5_compatibility_if_recoverable", "status": "optional_unresolved"},
+        "clean_view": {"name": "bace_kpgt_layout_candidate_v2", "status": "candidate_only_official_comparison_pending"}
+      },
+      "decontamination": {
+        "protected_splits": ["validation", "test"],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "official_source_comparison_formal_member_manifest_and_union_pending"
+      },
+      "readiness_status": "kpgt_candidate_present_official_source_comparison_pending",
+      "next_actions": ["Verify whether provenance-complete 3D-MolT5 BACE data can be recovered; otherwise compare the candidate against KPGT Figshare file 35391163 from an accessible region.", "Only after equivalence or an authoritative replacement, publish the formal member manifest, derive canonical validation/test identities, and rebuild the protected union.", "In parallel and before downstream training, freeze the label join, 3D conformer recipe, evaluator, and encoder adapter."]
+    },
+    {
+      "task_id": "moleculenet_bbbp_scientific_v2",
+      "dataset_id": "MoleculeNet-BBBP",
+      "paper_role": "supporting",
+      "result_role": "supporting_transfer_result",
+      "task_family": "molecular_property_classification",
+      "protocol_type": "supervised_classification",
+      "scientific_question": "Does the learned motif-level representation transfer to blood-brain-barrier penetration classification under a provenance-frozen benchmark split?",
+      "source_basis": {
+        "state": "kpgt_layout_candidate_present_official_comparison_pending",
+        "v1_evidence_task_id": null,
+        "official_source_metadata_ids": [
+          "kpgt_official_github_revisions_v1",
+          "kpgt_figshare_19914811_metadata_v1"
+        ],
+        "candidate_source_acquisition_artifact_ids": [
+          "kpgt_layout_candidate_bbbp_csv_v1",
+          "kpgt_layout_candidate_bbbp_scaffold_0_v1",
+          "kpgt_layout_candidate_bbbp_scaffold_1_v1",
+          "kpgt_layout_candidate_bbbp_scaffold_2_v1"
+        ],
+        "fallback_source_acquisition_artifact_ids": [
+          "moleculestm_bbbp_raw_csv_v1",
+          "moleculestm_bbbp_processed_smiles_v1"
+        ],
+        "declared_revision": null,
+        "verified_fallback_revision": "chao1224/MoleculeSTM@ff2de71fa6bb0533d5e740db6d88a0442a0d38e8",
+        "version_status": "kpgt_official_metadata_known_candidate_layout_verified_official_payload_comparison_blocked_current_region_http_403",
+        "observed_artifacts": "The legacy candidate has 2039 CSV rows; each of its three split files gives complete, within-file pairwise-disjoint, duplicate-free Murcko scaffold 8:1:1 partitions of 1631/203/205. Chiral and achiral Murcko cross-partition overlap are zero, all SMILES are valid, and every partition has positive and negative labels, so AUROC is computable. These facts do not prove official KPGT equivalence.",
+        "reported_protocol": "Prefer provenance-complete 3D-MolT5 BBBP data if recoverable; otherwise compare the candidate with KPGT Figshare file 35391163 from an accessible region before calling it a KPGT released split.",
+        "clean_protocol": "After formal source comparison or authoritative replacement, freeze the exact source revision and validation/test membership before full P1 protection; freeze label join and 3D conformer recipe before downstream training."
+      },
+      "split_protocol": {
+        "status": "kpgt_layout_candidate_validated_official_comparison_pending",
+        "authority": "kpgt_figshare_official_equivalence_pending_current_region_http_403",
+        "grouping_unit": "canonical_connectivity",
+        "fallback_evidence_member_count": 2039,
+        "candidate_member_count": 2039,
+        "train": {"status": "pending", "row_count": null, "molecule_count": null},
+        "validation": {"status": "pending", "row_count": null, "molecule_count": null},
+        "test": {"status": "pending", "row_count": null, "molecule_count": null},
+        "split_method": "candidate_murcko_scaffold_8_1_1_not_verified_official",
+        "candidate_partition_sizes": {
+          "scaffold-0": [1631, 203, 205],
+          "scaffold-1": [1631, 203, 205],
+          "scaffold-2": [1631, 203, 205]
+        },
+        "candidate_validation": {
+          "each_split_complete_and_within_split_pairwise_disjoint_duplicate_free": true,
+          "murcko_overlap_include_chirality_false": 0,
+          "murcko_overlap_include_chirality_true": 0,
+          "all_smiles_valid": true,
+          "auroc_computable_each_partition": true
+        },
+        "seed_or_manifest": null,
+        "multi_view_grouping": "All labels and conformers for one molecule remain in one split.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "project_generated_3d_input",
+        "source": "dataset_smiles_plus_frozen_conformer_recipe",
+        "status": "conformer_recipe_pending",
+        "conformer_policy": "Freeze generator, protonation, stereochemistry, seed, conformer selection, and failure handling."
+      },
+      "metrics": {
+        "primary": ["ROC-AUC"],
+        "secondary": ["valid_conformer_coverage", "split_replica_mean_and_std", "within_replica_training_seed_mean_and_std_if_repeated"],
+        "selection_rule": "Select on validation ROC-AUC and report test ROC-AUC under the frozen split only."
+      },
+      "comparison_protocol": {
+        "reported_view": {"name": "bbbp_3dmolt5_compatibility_if_recoverable", "status": "optional_unresolved"},
+        "clean_view": {"name": "bbbp_kpgt_layout_candidate_v2", "status": "candidate_only_official_comparison_pending"}
+      },
+      "decontamination": {
+        "protected_splits": ["validation", "test"],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "official_source_comparison_formal_member_manifest_and_union_pending"
+      },
+      "readiness_status": "kpgt_candidate_present_official_source_comparison_pending",
+      "next_actions": ["Verify whether provenance-complete 3D-MolT5 BBBP data can be recovered; otherwise compare the candidate against KPGT Figshare file 35391163 from an accessible region.", "Only after equivalence or an authoritative replacement, publish the formal member manifest, derive canonical validation/test identities, and rebuild the protected union.", "In parallel and before downstream training, freeze the label join, 3D conformer recipe, evaluator, and encoder adapter."]
+    },
+    {
+      "task_id": "moleculenet_hiv_scientific_v2",
+      "dataset_id": "MoleculeNet-HIV",
+      "paper_role": "supporting",
+      "result_role": "supporting_transfer_result",
+      "task_family": "molecular_property_classification",
+      "protocol_type": "supervised_classification",
+      "scientific_question": "Does the learned motif-level representation transfer to HIV activity classification under a provenance-frozen benchmark split?",
+      "source_basis": {
+        "state": "deepchem_authoritative_source_frozen_derived_split_materialization_pending",
+        "v1_evidence_task_id": null,
+        "primary_source_acquisition_artifact_id": "deepchem_hiv_csv_authoritative_v1",
+        "fallback_source_acquisition_artifact_ids": [
+          "moleculestm_hiv_raw_csv_v1",
+          "moleculestm_hiv_processed_smiles_v1"
+        ],
+        "declared_revision": "DeepChem-2.8.0@d5b293934d427062f52e2d92c1569d53d10418f9/HIV.csv@sha256:9ffa7fe57dc86c342627ee1d5255e937e2ab812393c73c4d16c697022f6e1d22",
+        "verified_fallback_revision": "chao1224/MoleculeSTM@ff2de71fa6bb0533d5e740db6d88a0442a0d38e8",
+        "version_status": "3dmolt5_release_inventory_checked_no_traceable_hiv_kpgt_not_applicable_deepchem_source_frozen_derived_v1_pending",
+        "observed_artifacts": "The complete dataset table in official 3D-MolT5 main commit 82dbe088e424f19fa713dbd657f5235990bd324f and the author's public Hugging Face dataset inventory expose no traceable HIV members or split. KPGT's released eleven-task set also excludes HIV. The DeepChem HIV.csv object was remotely stream-verified as 2193844 bytes, 41127 rows, SHA-256 9ffa7fe57dc86c342627ee1d5255e937e2ab812393c73c4d16c697022f6e1d22, and MD5/ETag 9ad10c88f82f1dac7eb5c52b668c30a7.",
+        "reported_protocol": "Use the authoritative DeepChem MoleculeNet HIV.csv member and label source bound to DeepChem 2.8.0 commit d5b293934d427062f52e2d92c1569d53d10418f9.",
+        "clean_protocol": "Materialize and publish the deterministic non-chiral Bemis-Murcko 8:1:1 derived-v1 membership before full P1 protection. Never name the membership an exact 3D-MolT5, KPGT, or released DeepChem split."
+      },
+      "split_protocol": {
+        "status": "source_frozen_derived_membership_materialization_pending",
+        "protocol_id": "HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v1",
+        "authority": "project_deterministic_reproduction_of_deepchem_2_8_0_scaffoldsplitter_over_sha256_bound_hiv_csv",
+        "grouping_unit": "canonical_connectivity",
+        "source_member_count": 41127,
+        "train": {"status": "pending", "row_count": null, "molecule_count": null},
+        "validation": {"status": "pending", "row_count": null, "molecule_count": null},
+        "test": {"status": "pending", "row_count": null, "molecule_count": null},
+        "split_method": "deepchem_2_8_0_nonchiral_bemis_murcko_groups_sorted_by_group_size_then_first_source_index_descending_and_greedily_assigned_at_0_8_0_9_row_cutoffs",
+        "seed_or_manifest": "no_rng_seed_unused_by_algorithm_publish_exact_member_manifest",
+        "multi_view_grouping": "All labels and conformers for one molecule remain in one split.",
+        "external_protocol_boundary": "The implementation mirrors DeepChem 2.8.0 ScaffoldSplitter semantics but creates a new project membership manifest; exact historical 3D-MolT5, KPGT, or released DeepChem membership is not claimed.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "project_generated_3d_input",
+        "source": "dataset_smiles_plus_frozen_conformer_recipe",
+        "status": "conformer_recipe_pending",
+        "conformer_policy": "Freeze generator, protonation, stereochemistry, seed, conformer selection, and failure handling."
+      },
+      "metrics": {
+        "primary": ["ROC-AUC"],
+        "secondary": ["valid_conformer_coverage", "within_frozen_split_training_seed_mean_and_std_if_repeated"],
+        "selection_rule": "Select on validation ROC-AUC and report test ROC-AUC under the frozen split only."
+      },
+      "comparison_protocol": {
+        "reported_view": {"name": "hiv_3dmolt5_table7_published_background_only", "status": "published_result_not_same_protocol"},
+        "clean_view": {"name": "hiv_moleculenet_deepchem_murcko_8_1_1_derived_v1", "status": "source_frozen_membership_materialization_pending"}
+      },
+      "decontamination": {
+        "protected_splits": ["validation", "test"],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "derived_v1_member_manifest_and_union_pending"
+      },
+      "readiness_status": "source_frozen_derived_split_materialization_pending",
+      "next_actions": ["Run build_hiv_murcko_split.py over the SHA-256-bound official DeepChem HIV.csv object on the high-CPU RDKit environment.", "Freeze exact train/validation/test members, derive canonical validation/test identities, and rebuild the protected union without using a 3D-MolT5, KPGT, or released DeepChem exact-split label.", "In parallel and before downstream training, freeze the 3D conformer recipe, evaluator, and encoder adapter."]
+    },
+    {
+      "task_id": "moleculenet_clintox_scientific_v2",
+      "dataset_id": "MoleculeNet-ClinTox",
+      "paper_role": "supporting",
+      "result_role": "supporting_transfer_result",
+      "task_family": "molecular_property_classification",
+      "protocol_type": "supervised_classification",
+      "scientific_question": "Does the learned motif-level representation transfer to the two ClinTox classification labels under a provenance-frozen benchmark split?",
+      "source_basis": {
+        "state": "kpgt_layout_candidate_present_official_comparison_pending",
+        "v1_evidence_task_id": null,
+        "official_source_metadata_ids": [
+          "kpgt_official_github_revisions_v1",
+          "kpgt_figshare_19914811_metadata_v1"
+        ],
+        "candidate_source_acquisition_artifact_ids": [
+          "kpgt_layout_candidate_clintox_csv_v1",
+          "kpgt_layout_candidate_clintox_scaffold_0_v1",
+          "kpgt_layout_candidate_clintox_scaffold_1_v1",
+          "kpgt_layout_candidate_clintox_scaffold_2_v1"
+        ],
+        "fallback_source_acquisition_artifact_ids": [
+          "moleculestm_clintox_raw_csv_v1",
+          "moleculestm_clintox_processed_smiles_v1"
+        ],
+        "declared_revision": null,
+        "verified_fallback_revision": "chao1224/MoleculeSTM@ff2de71fa6bb0533d5e740db6d88a0442a0d38e8",
+        "version_status": "kpgt_official_metadata_known_candidate_layout_verified_official_payload_comparison_blocked_current_region_http_403",
+        "observed_artifacts": "The legacy candidate has 1478 CSV rows; each of its three split files gives complete, within-file pairwise-disjoint, duplicate-free Murcko scaffold 8:1:1 partitions of 1182/147/149. Chiral and achiral Murcko cross-partition overlap are zero, all SMILES are valid, and every partition has positive and negative labels, so both label AUROCs are computable. These facts do not prove official KPGT equivalence.",
+        "reported_protocol": "Prefer provenance-complete 3D-MolT5 ClinTox data if recoverable; otherwise compare the candidate with KPGT Figshare file 35391163 from an accessible region before calling it a KPGT released split.",
+        "clean_protocol": "After formal source comparison or authoritative replacement, freeze the exact source revision and validation/test membership before full P1 protection; freeze both label joins and the 3D conformer recipe before downstream training."
+      },
+      "split_protocol": {
+        "status": "kpgt_layout_candidate_validated_official_comparison_pending",
+        "authority": "kpgt_figshare_official_equivalence_pending_current_region_http_403",
+        "grouping_unit": "canonical_connectivity",
+        "fallback_evidence_member_count": 1478,
+        "candidate_member_count": 1478,
+        "train": {"status": "pending", "row_count": null, "molecule_count": null},
+        "validation": {"status": "pending", "row_count": null, "molecule_count": null},
+        "test": {"status": "pending", "row_count": null, "molecule_count": null},
+        "split_method": "candidate_murcko_scaffold_8_1_1_not_verified_official",
+        "candidate_partition_sizes": {
+          "scaffold-0": [1182, 147, 149],
+          "scaffold-1": [1182, 147, 149],
+          "scaffold-2": [1182, 147, 149]
+        },
+        "candidate_validation": {
+          "each_split_complete_and_within_split_pairwise_disjoint_duplicate_free": true,
+          "murcko_overlap_include_chirality_false": 0,
+          "murcko_overlap_include_chirality_true": 0,
+          "all_smiles_valid": true,
+          "auroc_computable_each_partition": true
+        },
+        "seed_or_manifest": null,
+        "multi_view_grouping": "Both labels and all conformers for one molecule remain in one split.",
+        "required_before_full_p1": true
+      },
+      "geometry_protocol": {
+        "role": "project_generated_3d_input",
+        "source": "dataset_smiles_plus_frozen_conformer_recipe",
+        "status": "conformer_recipe_pending",
+        "conformer_policy": "Freeze generator, protonation, stereochemistry, seed, conformer selection, and failure handling."
+      },
+      "metrics": {
+        "primary": ["ROC-AUC_macro", "ROC-AUC_per_label"],
+        "secondary": ["valid_conformer_coverage", "split_replica_mean_and_std", "within_replica_training_seed_mean_and_std_if_repeated"],
+        "selection_rule": "Select on validation macro ROC-AUC and report both label-wise and macro test ROC-AUC under the frozen split."
+      },
+      "comparison_protocol": {
+        "reported_view": {"name": "clintox_3dmolt5_compatibility_if_recoverable", "status": "optional_unresolved"},
+        "clean_view": {"name": "clintox_kpgt_layout_candidate_v2", "status": "candidate_only_official_comparison_pending"}
+      },
+      "decontamination": {
+        "protected_splits": ["validation", "test"],
+        "protection_timing": "before_full_p1",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": true,
+        "current_protected_union_status": "official_source_comparison_formal_member_manifest_and_union_pending"
+      },
+      "readiness_status": "kpgt_candidate_present_official_source_comparison_pending",
+      "next_actions": ["Verify whether provenance-complete 3D-MolT5 ClinTox data can be recovered; otherwise compare the candidate against KPGT Figshare file 35391163 from an accessible region.", "Only after equivalence or an authoritative replacement, publish the formal member manifest, derive canonical validation/test identities, and rebuild the protected union.", "In parallel and before downstream training, freeze both label joins, the 3D conformer recipe, evaluator, and encoder adapter."]
+    },
+    {
+      "task_id": "pubchemqc_property_deferred_v2",
+      "dataset_id": "PubChemQC",
+      "paper_role": "deferred",
+      "result_role": "deferred_no_current_result",
+      "task_family": "molecular_property_prediction",
+      "protocol_type": "deferred_property_generation",
+      "scientific_question": "Deferred: can a larger quantum-chemistry corpus confirm the geometry-sensitive property trends observed on QM9?",
+      "source_basis": {
+        "state": "deferred_not_resolved",
+        "v1_evidence_task_id": "pubchemqc_four_property_generation_legacy_v1",
+        "declared_revision": null,
+        "version_status": "legacy_join_and_split_provenance_unresolved",
+        "observed_artifacts": "Legacy task labels and separate molecular records exist, but the join, exact task scope, and scientific split are not ready.",
+        "reported_protocol": "Not part of the current paper protocol.",
+        "clean_protocol": "Define only if promoted after QM9 is stable."
+      },
+      "split_protocol": {
+        "status": "deferred_not_frozen",
+        "authority": null,
+        "grouping_unit": "canonical_connectivity",
+        "train": {"status": "deferred", "row_count": null, "molecule_count": null},
+        "validation": {"status": "deferred", "row_count": null, "molecule_count": null},
+        "test": {"status": "deferred", "row_count": null, "molecule_count": null},
+        "multi_view_grouping": "Would group all properties and conformers by molecule if promoted.",
+        "required_before_full_p1": false
+      },
+      "geometry_protocol": {
+        "role": "deferred",
+        "source": null,
+        "status": "deferred",
+        "conformer_policy": "Not frozen in the current protocol."
+      },
+      "metrics": {
+        "primary": [],
+        "secondary": [],
+        "selection_rule": "No current evaluation or checkpoint selection."
+      },
+      "comparison_protocol": {
+        "reported_view": {"name": null, "status": "deferred"},
+        "clean_view": {"name": null, "status": "deferred"}
+      },
+      "decontamination": {
+        "protected_splits": [],
+        "protection_timing": "not_in_current_protected_union",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": false,
+        "current_protected_union_status": "excluded_deferred"
+      },
+      "readiness_status": "deferred_not_in_current_protocol",
+      "next_actions": ["Do not consume current P1 resources; revisit only after the QM9 protocol and signal are stable."]
+    },
+    {
+      "task_id": "zero_shot_retrieval_deferred_v2",
+      "dataset_id": "Molecule-Text-Retrieval-TBD",
+      "paper_role": "deferred",
+      "result_role": "deferred_no_current_result",
+      "task_family": "cross_modal_retrieval",
+      "protocol_type": "deferred_retrieval",
+      "scientific_question": "Deferred: does the unified representation support molecule-text retrieval without adding a global contrastive objective to the current architecture?",
+      "source_basis": {
+        "state": "deferred_not_resolved",
+        "v1_evidence_task_id": "zero_shot_retrieval_secondary_v1",
+        "declared_revision": null,
+        "version_status": "dataset_and_protocol_not_selected",
+        "observed_artifacts": "No frozen candidate pool, query set, relevance labels, or negative-sampling protocol is registered.",
+        "reported_protocol": "Not part of the current paper protocol.",
+        "clean_protocol": "Define only if promoted with an explicit retrieval dataset and relevance protocol."
+      },
+      "split_protocol": {
+        "status": "deferred_not_frozen",
+        "authority": null,
+        "grouping_unit": "canonical_connectivity",
+        "train": {"status": "not_applicable", "row_count": null, "molecule_count": null},
+        "validation": {"status": "deferred", "row_count": null, "molecule_count": null},
+        "test": {"status": "deferred", "row_count": null, "molecule_count": null},
+        "multi_view_grouping": "Would group molecule variants by connectivity and freeze query-candidate membership if promoted.",
+        "required_before_full_p1": false
+      },
+      "geometry_protocol": {
+        "role": "deferred",
+        "source": null,
+        "status": "deferred",
+        "conformer_policy": "Not frozen in the current protocol."
+      },
+      "metrics": {
+        "primary": [],
+        "secondary": [],
+        "selection_rule": "No current evaluation or checkpoint selection."
+      },
+      "comparison_protocol": {
+        "reported_view": {"name": null, "status": "deferred"},
+        "clean_view": {"name": null, "status": "deferred"}
+      },
+      "decontamination": {
+        "protected_splits": [],
+        "protection_timing": "not_in_current_protected_union",
+        "primary_identity": "canonical_connectivity",
+        "downstream_train_overlap": "retain_and_disclose",
+        "global_scaffold_removal": "no_global_pretraining_scaffold_exclusion",
+        "blocks_architecture_canary": false,
+        "blocks_full_p1": false,
+        "current_protected_union_status": "excluded_deferred"
+      },
+      "readiness_status": "deferred_not_in_current_protocol",
+      "next_actions": ["Do not add a global contrastive objective for this deferred task; revisit only after core downstream evidence is stable."]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # P1 嵌套代理子集、多保真训练预算与晋级门禁
 
 日期：2026-08-06  
-状态：执行方案已形成；当前只允许生成清单与实现门禁，`P1_ADMISSION=false` 时禁止启动正式训练。
+状态：PF-CANARY/PF-1/PF-10/PF-FULL 的多保真定义继续有效；2026-08-06 起候选矩阵改为[文档 41](41_scientific_design_comparison_dataset_and_execution_plan_20260806.md)的 A0/A1/M0/M1 四格，不再默认展开 C0/C1-G/C1-L/C1-R/C3。当前只允许生成清单与实现门禁，`P1_ADMISSION=false` 时禁止启动正式训练。
 
 ## 0. 主干裁决
 
@@ -138,16 +138,16 @@ tokenizer 冻结后，再审计：
 
 同一保真层内，各模型条件必须共享：
 
-- 完全相同的 membership、样本顺序和 mask realization；
-- tokenizer、batch construction、最大长度、优化器和学习率日程；
-- 相同 non-padding encoder tokens/update；
-- 相同 masked target tokens、optimizer updates 与 early-stop rule；
+- 完全相同的 membership、样本顺序与随机种子；A0/A1 组内和 M0/M1 组内共享 exact mask realization；A/M 因 corruption unit 不同只共享 mask-rate 合同，不能声称 exact realization 相同；
+- 同一 frozen union tokenizer snapshot、最大长度、优化器和学习率日程；atom/motif 的序列化与 collator 是研究因素的一部分，不能冒充相同 batch construction；
+- 在可行范围内匹配 non-padding encoder tokens/update，并报告实际值；
+- A0/A1 与 M0/M1 各自匹配 masked target tokens；跨 A/M 记录并按实际 supervised target tokens 归一化，同时保持相同 optimizer updates 与 early-stop rule；
 - 相同初始化 seed；若补第二 seed，所有配对条件一起补；
 - 相同 checkpoint/evaluation cadence。
 
 必须同时报告：unique molecules、records、encoder/target tokens、重复次数/epoch、optimizer updates、GPU 小时、tokens/s、峰值显存和失败重启。数据比例描述“覆盖了多少成员”，训练 token/updates 描述“花了多少学习资源”，两者不能互换。
 
-精确 step/token 预算不在 tokenizer 和 4090 吞吐实测前拍脑袋决定：先由 `PF-CANARY` 和一次 `PF-1/C0` 学习曲线测得吞吐与最低可判别预算，随后在所有候选训练前冻结预算合同。
+精确 step/token 预算不在 tokenizer 和 4090 吞吐实测前拍脑袋决定：先由 `PF-CANARY` 和一次 `PF-1` 匹配条件学习曲线测得吞吐与最低可判别预算，随后在所有候选训练前冻结预算合同。
 
 ## 6. 模型条件的晋级顺序
 

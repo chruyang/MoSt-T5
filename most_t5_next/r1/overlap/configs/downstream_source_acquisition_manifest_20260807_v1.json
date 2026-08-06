@@ -1,0 +1,651 @@
+{
+  "schema_version": "most-t5-r1/downstream-source-acquisition-manifest/v1",
+  "manifest_id": "downstream-source-acquisition-manifest-20260807-v1",
+  "observed_date_utc": "2026-08-07",
+  "purpose": "Versioned scientific source locator for the Editing sealed compatibility-test members, FineMolTex protocol code, MoleculeSTM fallback evidence, KPGT official repository and Figshare metadata, the legacy KPGT-layout candidate files, and the authoritative DeepChem HIV source selected after 3D-MolT5 release recovery failed. Canonical origin and revision define provenance; AutoDL paths are only current remote locators. No local download is represented or required by this manifest.",
+  "storage_locator": {
+    "storage_root": "/root/autodl-fs/most-t5-r1/sources/downstream-scientific-v2-20260807",
+    "location_semantics": "current_remote_locator_not_scientific_identity",
+    "local_download_materialized": false
+  },
+  "sources": [
+    {
+      "source_id": "moleculestm_hf_ff2de71_v1",
+      "origin": {
+        "type": "huggingface_dataset_repository",
+        "repository_id": "chao1224/MoleculeSTM",
+        "url": "https://huggingface.co/datasets/chao1224/MoleculeSTM"
+      },
+      "revision": "ff2de71fa6bb0533d5e740db6d88a0442a0d38e8",
+      "acquisition_state": "remote_evidence_files_verified_without_primary_protocol_selection",
+      "artifacts": [
+        {
+          "artifact_id": "moleculestm_editing_single_multi_property_smiles_v1",
+          "scientific_role": "frozen_finemoltex_compatibility_sealed_test_member_source",
+          "origin_relative_path": "Editing_data/single_multi_property_SMILES.txt",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/Editing_data/single_multi_property_SMILES.txt",
+          "format": "smiles_text_one_record_per_nonempty_line",
+          "checksums": {
+            "sha256": "6fa09f81402bebe7c14c12404c4c5edba5de32abf8d88f4f733485b992e79daa"
+          },
+          "count": {
+            "record_count": 200,
+            "unique_record_count": 200,
+            "unit": "nonempty_smiles_lines"
+          },
+          "code_evidence_ids": [
+            "finemoltex_default_editing_source_v1",
+            "finemoltex_prompt_ids_v1"
+          ]
+        },
+        {
+          "artifact_id": "moleculestm_bace_raw_csv_v1",
+          "scientific_role": "raw_provenance_companion",
+          "origin_relative_path": "MoleculeNet_data/bace/raw/bace.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/bace/raw/bace.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "894a1efd23d2c391c6f6ee0fb5f719bf9d6633a6b534ec02472fa11e1d5862a3"
+          },
+          "count": {
+            "record_count": null,
+            "unit": "rows",
+            "status": "not_used_as_frozen_member_count"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "moleculestm_bace_processed_smiles_v1",
+          "scientific_role": "verified_fallback_member_source_evidence",
+          "origin_relative_path": "MoleculeNet_data/bace/processed/smiles.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/bace/processed/smiles.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "12a893de0cb3b7ff174fb9ca7314534facfb8fbcfb8ef5e64a54449c9a7629cf"
+          },
+          "count": {
+            "record_count": 1513,
+            "unit": "cleaned_smiles_rows",
+            "matches_3dmolt5_table7_reported_sample_count": true
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "moleculestm_bbbp_raw_csv_v1",
+          "scientific_role": "raw_provenance_companion",
+          "origin_relative_path": "MoleculeNet_data/bbbp/raw/BBBP.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/bbbp/raw/BBBP.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "6aecd84110e8c0549bc4e2e486c52267d4e775178fca8999f5465029e31e75bb"
+          },
+          "count": {
+            "record_count": null,
+            "unit": "rows",
+            "status": "not_used_as_frozen_member_count"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "moleculestm_bbbp_processed_smiles_v1",
+          "scientific_role": "verified_fallback_member_source_evidence",
+          "origin_relative_path": "MoleculeNet_data/bbbp/processed/smiles.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/bbbp/processed/smiles.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "9642ee43377730979f3771e8ea9ca505606f62cb294a78182e4aceea4fedc0c3"
+          },
+          "count": {
+            "record_count": 2039,
+            "unit": "cleaned_smiles_rows",
+            "matches_3dmolt5_table7_reported_sample_count": true
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "moleculestm_hiv_raw_csv_v1",
+          "scientific_role": "raw_provenance_companion",
+          "origin_relative_path": "MoleculeNet_data/hiv/raw/HIV.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/hiv/raw/HIV.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "8df84857edc602ae9267a73ebf2b68451f75c159637726cdc392dd7ef297b592"
+          },
+          "count": {
+            "record_count": null,
+            "unit": "rows",
+            "status": "not_used_as_frozen_member_count"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "moleculestm_hiv_processed_smiles_v1",
+          "scientific_role": "verified_fallback_member_source_evidence",
+          "origin_relative_path": "MoleculeNet_data/hiv/processed/smiles.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/hiv/processed/smiles.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "9d026d8ecd844190d9a627686d35f1ca0925db8c92a5d5ff95596d8c028755da"
+          },
+          "count": {
+            "record_count": 41127,
+            "unit": "cleaned_smiles_rows",
+            "matches_3dmolt5_table7_reported_sample_count": true
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "moleculestm_clintox_raw_csv_v1",
+          "scientific_role": "raw_provenance_companion",
+          "origin_relative_path": "MoleculeNet_data/clintox/raw/clintox.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/clintox/raw/clintox.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "f5c9da01b5f5b188db9e0fb611796d344e9259acd3ef59e2cfcb17557b455563"
+          },
+          "count": {
+            "record_count": null,
+            "unit": "rows",
+            "status": "not_used_as_frozen_member_count"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "moleculestm_clintox_processed_smiles_v1",
+          "scientific_role": "verified_fallback_member_source_evidence",
+          "origin_relative_path": "MoleculeNet_data/clintox/processed/smiles.csv",
+          "remote_relative_path": "downloads/MoleculeSTM-selected/MoleculeNet_data/clintox/processed/smiles.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "d19b6585041992eec7b32d67912cbafca3b14b68eeb0dbab5392b4dd34f2f86f"
+          },
+          "count": {
+            "record_count": 1478,
+            "unit": "cleaned_smiles_rows",
+            "matches_3dmolt5_table7_reported_sample_count": true
+          },
+          "code_evidence_ids": []
+        }
+      ]
+    },
+    {
+      "source_id": "deepchem_hiv_authoritative_20200807_v1",
+      "origin": {
+        "type": "official_deepchem_moleculenet_object",
+        "repository_id": "deepchem/deepchem",
+        "loader_url": "https://github.com/deepchem/deepchem/blob/d5b293934d427062f52e2d92c1569d53d10418f9/deepchem/molnet/load_function/hiv_datasets.py",
+        "splitter_url": "https://github.com/deepchem/deepchem/blob/d5b293934d427062f52e2d92c1569d53d10418f9/deepchem/splits/splitters.py#L1360-L1482",
+        "object_url": "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/HIV.csv"
+      },
+      "revision": {
+        "deepchem_version": "2.8.0",
+        "deepchem_commit": "d5b293934d427062f52e2d92c1569d53d10418f9",
+        "object_etag_md5": "9ad10c88f82f1dac7eb5c52b668c30a7",
+        "object_last_modified_utc": "2020-07-10T06:45:51Z"
+      },
+      "acquisition_state": "authoritative_remote_object_stream_verified_full_split_materialization_pending",
+      "artifacts": [
+        {
+          "artifact_id": "deepchem_hiv_csv_authoritative_v1",
+          "scientific_role": "primary_hiv_member_and_label_source",
+          "origin_relative_path": "HIV.csv",
+          "remote_relative_path": "downloads/DeepChem-HIV/HIV.csv",
+          "format": "csv",
+          "bytes": 2193844,
+          "checksums": {
+            "sha256": "9ffa7fe57dc86c342627ee1d5255e937e2ab812393c73c4d16c697022f6e1d22",
+            "md5_etag": "9ad10c88f82f1dac7eb5c52b668c30a7"
+          },
+          "count": {
+            "record_count": 41127,
+            "unit": "data_rows"
+          },
+          "code_evidence_ids": []
+        }
+      ],
+      "selection_boundary": {
+        "three_d_molt5_release_recovery": "The complete dataset table in official 3D-MolT5 main commit 82dbe088e424f19fa713dbd657f5235990bd324f and the author's public Hugging Face dataset inventory expose no traceable HIV member or split release.",
+        "kpgt_applicability": "KPGT's released eleven-task benchmark excludes HIV.",
+        "split_semantics": "The project will deterministically reproduce the non-chiral Bemis-Murcko group ordering and greedy 8:1:1 allocation of DeepChem 2.8.0 ScaffoldSplitter, while publishing a new membership manifest. It is not called an exact released DeepChem, 3D-MolT5, or KPGT split."
+      }
+    },
+    {
+      "source_id": "finemoltex_zenodo_15501037_v1",
+      "origin": {
+        "type": "zenodo_record",
+        "record_id": "15501037",
+        "doi": "10.5281/zenodo.15501037",
+        "url": "https://doi.org/10.5281/zenodo.15501037"
+      },
+      "revision": {
+        "release": "V0.0.0",
+        "archive_root": "liushiliushi-FineMolTex-fc56d6d"
+      },
+      "acquisition_state": "remote_archive_verified_not_extracted_into_local_workspace",
+      "artifacts": [
+        {
+          "artifact_id": "finemoltex_v0_0_0_zip_v1",
+          "scientific_role": "protocol_code_evidence_archive",
+          "origin_relative_path": "FineMolTex-V0.0.0.zip",
+          "remote_relative_path": "downloads/FineMolTex-V0.0.0.zip",
+          "format": "zip",
+          "bytes": 225134229,
+          "checksums": {
+            "md5_from_zenodo_metadata": "cbfd0819189d27caa899f40b3f0a0afc",
+            "sha256_remote_recomputed": "861cb0ceccd99cf07bb459dc70432be7d60006a27852abe540063b1eae013ae8"
+          },
+          "count": {
+            "record_count": 1,
+            "unit": "archive"
+          },
+          "code_evidence_ids": [
+            "finemoltex_default_editing_source_v1",
+            "finemoltex_prompt_ids_v1"
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "kpgt_official_github_revisions_v1",
+      "origin": {
+        "type": "official_github_repository",
+        "repository_id": "lihan97/KPGT",
+        "url": "https://github.com/lihan97/KPGT"
+      },
+      "revision": {
+        "current_commit": "47dc1646c70b2138a157de481d24a1ac35d174cd",
+        "paper_release_tag": "v1.0.0",
+        "paper_release_commit": "390f29529dde268fed19203e7435307ae15dc083"
+      },
+      "acquisition_state": "official_repository_metadata_verified_without_local_download",
+      "task_coverage": {
+        "released_downstream_task_count": 11,
+        "includes_hiv": false,
+        "hiv_rule": "KPGT must not be cited as the source of an HIV split."
+      },
+      "artifacts": []
+    },
+    {
+      "source_id": "kpgt_figshare_19914811_metadata_v1",
+      "origin": {
+        "type": "official_figshare_release_metadata",
+        "doi": "10.6084/m9.figshare.19914811",
+        "share_url": "https://figshare.com/s/8bbb8cad9ac644bf9caa",
+        "file_id": "35391163"
+      },
+      "revision": {
+        "page_size_label": "27.74MB",
+        "file_id": "35391163"
+      },
+      "acquisition_state": "official_metadata_known_payload_unavailable_in_current_region",
+      "release_file_metadata": {
+        "file_id": "35391163",
+        "page_size_label": "27.74MB",
+        "payload_checksum": null,
+        "payload_member_manifest": null
+      },
+      "access_boundary": {
+        "region_semantics": "current_remote_region_only_not_a_global_availability_claim",
+        "observed_http_status": 403,
+        "surfaces": [
+          "figshare_page_or_share_link",
+          "figshare_api",
+          "figshare_ndownloader"
+        ],
+        "consequence": "The official payload cannot currently be compared byte-for-byte or member-for-member with the legacy candidate copies. HTTP 403 is an access boundary, not evidence that the candidate copies are official."
+      },
+      "artifacts": []
+    },
+    {
+      "source_id": "kpgt_layout_candidate_legacy_r0_v1",
+      "origin": {
+        "type": "remote_legacy_candidate_copy",
+        "canonical_origin_status": "not_verified_against_official_kpgt_figshare_payload",
+        "layout_claim": "kpgt_layout_compatible_candidate_only"
+      },
+      "revision": "legacy-and-downstream-evidence-r0-v1",
+      "remote_storage_root": "/root/autodl-fs/most-t5-r1/sources/legacy-and-downstream-evidence-r0-v1/moleculenet-datasets",
+      "acquisition_state": "candidate_files_hash_count_and_internal_split_semantics_verified_but_official_equivalence_unverified_due_http_403",
+      "artifacts": [
+        {
+          "artifact_id": "kpgt_layout_candidate_bace_csv_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_csv_not_verified_official",
+          "remote_relative_path": "bace/bace.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "d7c3b46a688e87ec8489c8e4e0809139e0098ec69c7d3d527f297eedccece921"
+          },
+          "count": {
+            "record_count": 1513,
+            "unit": "data_rows"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_bace_scaffold_0_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "bace/splits/scaffold-0.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "22a697541418aeee65f130a9aa240e1fd98eb1dda99188f4b0d98500ae0ee9ed"
+          },
+          "count": {
+            "train_count": 1210,
+            "validation_count": 151,
+            "test_count": 152,
+            "total_count": 1513,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_bace_scaffold_1_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "bace/splits/scaffold-1.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "bae52768a4cc6926a072a42b0054bf35327e73cc12c40b8002ec09d5fc29e483"
+          },
+          "count": {
+            "train_count": 1210,
+            "validation_count": 151,
+            "test_count": 152,
+            "total_count": 1513,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_bace_scaffold_2_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "bace/splits/scaffold-2.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "7f529721508a0c17fc216c1076234c0fac1c07c94041e1232779796ed10909f1"
+          },
+          "count": {
+            "train_count": 1210,
+            "validation_count": 151,
+            "test_count": 152,
+            "total_count": 1513,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_bbbp_csv_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_csv_not_verified_official",
+          "remote_relative_path": "bbbp/bbbp.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "a61e17872cbec0743a6147dc802a1f7550acfe8dc1053f881f4c42a3ce2dc597"
+          },
+          "count": {
+            "record_count": 2039,
+            "unit": "data_rows"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_bbbp_scaffold_0_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "bbbp/splits/scaffold-0.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "f8b4ed48398e082a4a46702ee95daa9a1e19e90a51513f6804fccb6d5133dae4"
+          },
+          "count": {
+            "train_count": 1631,
+            "validation_count": 203,
+            "test_count": 205,
+            "total_count": 2039,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_bbbp_scaffold_1_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "bbbp/splits/scaffold-1.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "d3375a262d52b021e7e2511d2e0af4de691e3b3024fb559dccc107eb3996e2c8"
+          },
+          "count": {
+            "train_count": 1631,
+            "validation_count": 203,
+            "test_count": 205,
+            "total_count": 2039,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_bbbp_scaffold_2_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "bbbp/splits/scaffold-2.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "aa4cd63e7d77575f03615ae13746f0e9f5781aa07539f4b22b5c0da3afcbc6fa"
+          },
+          "count": {
+            "train_count": 1631,
+            "validation_count": 203,
+            "test_count": 205,
+            "total_count": 2039,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_clintox_csv_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_csv_not_verified_official",
+          "remote_relative_path": "clintox/clintox.csv",
+          "format": "csv",
+          "checksums": {
+            "sha256": "cc561402d058a0d996a9f5e5d02bc20f6652b7003525b32c3598b8da4b24e9b7"
+          },
+          "count": {
+            "record_count": 1478,
+            "unit": "data_rows"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_clintox_scaffold_0_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "clintox/splits/scaffold-0.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "49642f93fad8ceb6351111342d6b90f4602e0780315f64949775d7f94a39641e"
+          },
+          "count": {
+            "train_count": 1182,
+            "validation_count": 147,
+            "test_count": 149,
+            "total_count": 1478,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_clintox_scaffold_1_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "clintox/splits/scaffold-1.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "6220bfe30d678b05c6bbd9db4e6281d99af2b4e93ad53a2c9a8ee78978f50796"
+          },
+          "count": {
+            "train_count": 1182,
+            "validation_count": 147,
+            "test_count": 149,
+            "total_count": 1478,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        },
+        {
+          "artifact_id": "kpgt_layout_candidate_clintox_scaffold_2_v1",
+          "scientific_role": "kpgt_layout_compatible_candidate_split_not_verified_official",
+          "remote_relative_path": "clintox/splits/scaffold-2.npy",
+          "format": "npy_split_membership",
+          "checksums": {
+            "sha256": "ee1e58979f36abd30934e9ccdbfc90f09eb831ec1ec1ecc72dc3c74595cd5612"
+          },
+          "count": {
+            "train_count": 1182,
+            "validation_count": 147,
+            "test_count": 149,
+            "total_count": 1478,
+            "ratio_protocol": "8:1:1"
+          },
+          "code_evidence_ids": []
+        }
+      ],
+      "candidate_validation": {
+        "split_artifact_count": 9,
+        "split_names": [
+          "scaffold-0",
+          "scaffold-1",
+          "scaffold-2"
+        ],
+        "each_split_membership_complete_coverage": true,
+        "within_each_split_train_validation_test_pairwise_disjoint": true,
+        "within_each_split_duplicate_free": true,
+        "ratio_protocol": "8:1:1",
+        "all_smiles_valid": true,
+        "within_each_split_murcko_scaffold_cross_partition_overlap": {
+          "include_chirality_false": 0,
+          "include_chirality_true": 0
+        },
+        "label_validation": {
+          "positive_and_negative_present_in_every_dataset_split": true,
+          "auroc_computable_for_every_dataset_split": true
+        },
+        "scientific_boundary": "These internal properties validate the candidate files as coherent Murcko-scaffold 8:1:1 layouts. They do not prove byte or member equivalence to KPGT Figshare file 35391163."
+      }
+    }
+  ],
+  "code_evidence": [
+    {
+      "evidence_id": "finemoltex_default_editing_source_v1",
+      "source_id": "finemoltex_zenodo_15501037_v1",
+      "archive_member_path": "liushiliushi-FineMolTex-fc56d6d/scripts/generation_Optimization.py",
+      "line_start": 146,
+      "line_end": 146,
+      "claim": "The default editing run reads Editing_data/single_multi_property_SMILES.txt from the MoleculeSTM data layout."
+    },
+    {
+      "evidence_id": "finemoltex_prompt_ids_v1",
+      "source_id": "finemoltex_zenodo_15501037_v1",
+      "archive_member_path": "liushiliushi-FineMolTex-fc56d6d/scripts/FineMolTex/downstream_molecule_edit_utils.py",
+      "line_start": 34,
+      "line_end": 72,
+      "prompt_ids": [
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        205,
+        206,
+        501,
+        502,
+        503,
+        504
+      ],
+      "claim": "These twelve IDs define the published editing prompt families used by the available FineMolTex implementation."
+    }
+  ],
+  "task_bindings": {
+    "controlled_motif_editing_scientific_v2": {
+      "sealed_test_member_source_artifact_id": "moleculestm_editing_single_multi_property_smiles_v1",
+      "protocol_code_source_id": "finemoltex_zenodo_15501037_v1",
+      "frozen_fact": "The formal compatibility test member source is the published 200-line, 200-unique MoleculeSTM list at the registered revision. It remains sealed and is not development data.",
+      "full_p1_membership_blockers": [
+        "zinc250k_connectivity_disjoint_development_membership",
+        "development_and_test_canonical_identity_manifest",
+        "protected_union_rebuild"
+      ],
+      "downstream_evaluation_blockers_not_full_p1_blockers": [
+        "prompt_to_source_evaluation_manifest",
+        "source_conformer_recipe",
+        "output_and_evaluator_contract"
+      ]
+    },
+    "moleculenet_bace_scientific_v2": {
+      "fallback_member_source_artifact_id": "moleculestm_bace_processed_smiles_v1",
+      "raw_companion_artifact_id": "moleculestm_bace_raw_csv_v1",
+      "official_source_metadata_ids": [
+        "kpgt_official_github_revisions_v1",
+        "kpgt_figshare_19914811_metadata_v1"
+      ],
+      "kpgt_layout_candidate_source_id": "kpgt_layout_candidate_legacy_r0_v1",
+      "kpgt_layout_candidate_csv_artifact_id": "kpgt_layout_candidate_bace_csv_v1",
+      "kpgt_layout_candidate_split_artifact_ids": [
+        "kpgt_layout_candidate_bace_scaffold_0_v1",
+        "kpgt_layout_candidate_bace_scaffold_1_v1",
+        "kpgt_layout_candidate_bace_scaffold_2_v1"
+      ],
+      "primary_protocol_status": "candidate_internally_valid_but_not_verified_official_due_figshare_http_403",
+      "full_p1_membership_blockers": ["official_source_comparison_or_authoritative_replacement", "formal_member_manifest", "canonical_validation_test_identity_manifest", "protected_union_rebuild"],
+      "downstream_training_blockers_not_full_p1_blockers": ["label_join", "conformer_recipe", "evaluator_and_encoder_adapter"]
+    },
+    "moleculenet_bbbp_scientific_v2": {
+      "fallback_member_source_artifact_id": "moleculestm_bbbp_processed_smiles_v1",
+      "raw_companion_artifact_id": "moleculestm_bbbp_raw_csv_v1",
+      "official_source_metadata_ids": [
+        "kpgt_official_github_revisions_v1",
+        "kpgt_figshare_19914811_metadata_v1"
+      ],
+      "kpgt_layout_candidate_source_id": "kpgt_layout_candidate_legacy_r0_v1",
+      "kpgt_layout_candidate_csv_artifact_id": "kpgt_layout_candidate_bbbp_csv_v1",
+      "kpgt_layout_candidate_split_artifact_ids": [
+        "kpgt_layout_candidate_bbbp_scaffold_0_v1",
+        "kpgt_layout_candidate_bbbp_scaffold_1_v1",
+        "kpgt_layout_candidate_bbbp_scaffold_2_v1"
+      ],
+      "primary_protocol_status": "candidate_internally_valid_but_not_verified_official_due_figshare_http_403",
+      "full_p1_membership_blockers": ["official_source_comparison_or_authoritative_replacement", "formal_member_manifest", "canonical_validation_test_identity_manifest", "protected_union_rebuild"],
+      "downstream_training_blockers_not_full_p1_blockers": ["label_join", "conformer_recipe", "evaluator_and_encoder_adapter"]
+    },
+    "moleculenet_hiv_scientific_v2": {
+      "fallback_member_source_artifact_id": "moleculestm_hiv_processed_smiles_v1",
+      "raw_companion_artifact_id": "moleculestm_hiv_raw_csv_v1",
+      "primary_member_source_artifact_id": "deepchem_hiv_csv_authoritative_v1",
+      "primary_source_id": "deepchem_hiv_authoritative_20200807_v1",
+      "kpgt_applicability": "not_applicable_kpgt_released_11_task_set_excludes_hiv",
+      "three_d_molt5_release_status": "official_release_inventory_checked_no_traceable_hiv_members_or_split",
+      "primary_protocol_status": "deepchem_authoritative_source_frozen_murcko_8_1_1_derived_v1_materialization_pending",
+      "full_p1_membership_blockers": ["derived_v1_formal_member_manifest", "canonical_validation_test_identity_manifest", "protected_union_rebuild"],
+      "downstream_training_blockers_not_full_p1_blockers": ["label_join", "conformer_recipe", "evaluator_and_encoder_adapter"]
+    },
+    "moleculenet_clintox_scientific_v2": {
+      "fallback_member_source_artifact_id": "moleculestm_clintox_processed_smiles_v1",
+      "raw_companion_artifact_id": "moleculestm_clintox_raw_csv_v1",
+      "official_source_metadata_ids": [
+        "kpgt_official_github_revisions_v1",
+        "kpgt_figshare_19914811_metadata_v1"
+      ],
+      "kpgt_layout_candidate_source_id": "kpgt_layout_candidate_legacy_r0_v1",
+      "kpgt_layout_candidate_csv_artifact_id": "kpgt_layout_candidate_clintox_csv_v1",
+      "kpgt_layout_candidate_split_artifact_ids": [
+        "kpgt_layout_candidate_clintox_scaffold_0_v1",
+        "kpgt_layout_candidate_clintox_scaffold_1_v1",
+        "kpgt_layout_candidate_clintox_scaffold_2_v1"
+      ],
+      "primary_protocol_status": "candidate_internally_valid_but_not_verified_official_due_figshare_http_403",
+      "full_p1_membership_blockers": ["official_source_comparison_or_authoritative_replacement", "formal_member_manifest", "canonical_validation_test_identity_manifest", "protected_union_rebuild"],
+      "downstream_training_blockers_not_full_p1_blockers": ["two_label_join", "conformer_recipe", "evaluator_and_encoder_adapter"]
+    }
+  },
+  "scientific_boundary": {
+    "member_source_freeze_is_not_split_recovery": "The four processed MoleculeSTM counts match 3D-MolT5 Table 7, so this revision is preserved as verified fallback evidence. Count agreement alone recovers neither split, seed, conformer, nor fine-tuning protocol.",
+    "kpgt_candidate_boundary": "The legacy BACE, BBBP, and ClinTox files have exact hashes and internally coherent, complete, pairwise-disjoint Murcko-scaffold 8:1:1 splits. They remain KPGT-layout-compatible candidates, not verified official KPGT, until the Figshare payload is compared byte-for-byte or member-for-member from an accessible region.",
+    "hiv_boundary": "The official 3D-MolT5 repository dataset table and the author's public dataset inventory expose no traceable HIV members or split, and KPGT's released 11-task set excludes HIV. HIV therefore uses the SHA-256-bound DeepChem MoleculeNet HIV.csv source plus a versioned Murcko-scaffold 8:1:1 derived-v1 manifest; it is never described as an exact 3D-MolT5, KPGT, or released DeepChem split.",
+    "editing_member_freeze_is_not_protocol_completion": "The published 200-member file fixes the sealed compatibility test source and the twelve prompt IDs fix its operation namespace. A separate connectivity-disjoint ZINC250K development membership is still required for full-P1 protection; prompt pairing, conformer handling, and the evaluator contract are required only before editing evaluation.",
+    "admission_status": "not_full_p1_admitted"
+  }
+}

@@ -52,12 +52,14 @@
 | [32_downstream_dedup_minimal_ablations_and_anchor_decision_20260805.md](32_downstream_dedup_minimal_ablations_and_anchor_decision_20260805.md) | 3D-MolT5 下游、评估防泄漏、资源最小消融、CAMT5 对照与锚点因子化裁定 | 主干裁定完成，待执行 CPU 门禁 |
 | [33_downstream_portfolio_anchor_factorization_and_vocab_policy_20260805.md](33_downstream_portfolio_anchor_factorization_and_vocab_policy_20260805.md) | 下游任务重排、3D-MolT5 去污染证据、锚点创新边界与 motif 词表频率—覆盖率政策 | 文献复核和远端 census 实验完成，待 molecule-level 门禁 |
 | [34_lossless_fallback_motif_editing_3dmotif_and_downstream_freeze_20260805.md](34_lossless_fallback_motif_editing_3dmotif_and_downstream_freeze_20260805.md) | 无损回退边界、FineMolTex motif 编辑定位、3D motif 证据链与下游/词表冻结时序 | 主干裁决完成，P1 仍待 codec 与保护集门禁 |
-| [35_unified_motif_identity_codec_ema_teacher_and_integrated_roadmap_20260805.md](35_unified_motif_identity_codec_ema_teacher_and_integrated_roadmap_20260805.md) | motif 身份无损 codec、motif-local E3FP 聚合与接口角色残差、条件式 EMA teacher、logical motif 三域接口及整合路线 | 当前权威总计划，待实现 CPU codec/contract 门禁 |
-| [36_P1_multifidelity_proxy_subset_and_training_gates_20260806.md](36_P1_multifidelity_proxy_subset_and_training_gates_20260806.md) | PF-CANARY/1%/10%/全量嵌套代理子集、固定 manifest、公平 token 预算与逐级晋级门禁 | 当前 P1 资源控制与候选筛选方案 |
-| [37_overall_readiness_assessment_and_execution_roadmap_20260806.md](37_overall_readiness_assessment_and_execution_roadmap_20260806.md) | 从科学命题、数据/代码成熟度、因果实验、下游角色和单 4090 资源边界统一评估项目，并给出 R1 收口至论文证据的关键路径 | 当前整体评估与执行总路线 |
+| [35_unified_motif_identity_codec_ema_teacher_and_integrated_roadmap_20260805.md](35_unified_motif_identity_codec_ema_teacher_and_integrated_roadmap_20260805.md) | motif 身份无损 codec、motif-local E3FP 聚合与接口角色残差、条件式 EMA teacher、logical motif 三域接口及整合路线 | 三域 codec/teacher 设计依据；候选优先级见文档 41 |
+| [36_P1_multifidelity_proxy_subset_and_training_gates_20260806.md](36_P1_multifidelity_proxy_subset_and_training_gates_20260806.md) | PF-CANARY/1%/10%/全量嵌套代理子集、固定 manifest、公平 token 预算与逐级晋级门禁 | PF 层级定义保留；候选矩阵见文档 41 |
+| [37_overall_readiness_assessment_and_execution_roadmap_20260806.md](37_overall_readiness_assessment_and_execution_roadmap_20260806.md) | 从科学命题、数据/代码成熟度、因果实验、下游角色和单 4090 资源边界统一评估项目，并给出 R1 收口至论文证据的关键路径 | 2026-08-06 成熟度快照；当前总路线见文档 41 |
 | [38_compute_resource_switch_decision_20260806.md](38_compute_resource_switch_decision_20260806.md) | 现有 16 vCPU、条件式 96 vCPU、单卡 canary/PF-1 和 4/8 卡 PF-10/FULL 的切换门槛、I/O 与成本边界 | 当前资源租用裁决 |
 | [39_execution_start_and_remote_runtime_checkpoint_20260806.md](39_execution_start_and_remote_runtime_checkpoint_20260806.md) | 单卡实例启动后的 cgroup/GPU/存储/环境/持久化资产核验、下游源形态和三条并行执行支线 | 2026-08-06 执行起点 |
 | [40_P1_clean_membership_topology_and_ce_canary_checkpoint_20260806.md](40_P1_clean_membership_topology_and_ce_canary_checkpoint_20260806.md) | 当前三任务 clean-v0、32+256 拓扑回放、标准 T5 CE 的 4090 前后向与保存重载，以及进入真实 batch canary 的证据边界 | topology/CE canary PASS |
+| [41_scientific_design_comparison_dataset_and_execution_plan_20260806.md](41_scientific_design_comparison_dataset_and_execution_plan_20260806.md) | 以 atom/motif × no-3D/3D 四格收束架构比较，裁定 P1/P2 目标、motif/anchor/vocab、下游组合、数据准备与三天资源计划 | 当前科学执行总计划 |
+| [42_R1_downstream_protocol_and_four_grid_research_checkpoint_20260807.md](42_R1_downstream_protocol_and_four_grid_research_checkpoint_20260807.md) | 冻结 3D-MolT5 优先的下游来源、QM9/KPGT/HIV split 工具、level-aware 四格接口、科研 estimand 与 CPU/GPU 门禁 | 高 CPU 放行；GPU PF-CANARY 暂未放行 |
 
 ## 当前结论摘要
 
@@ -70,6 +72,8 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 2026-08-05 更新：R0 已形成确定性 tokenizer 合同；R1 已把 3,378,606 条 PCQM4Mv2 train-3D 记录制成 136 个不可变分片，并在 CPU 源端和 4090 区域持久化副本分别通过 v3 独立审计。该结果只放行 production release 与跨区传输，不等于 tokenizer 已绑定或 P1 可训练；语义复算策略、overlap proof、tokenizer freeze/binding 和 4090 Dataset/Collator/CE+MSE 梯度门禁仍为下一阶段硬条件。
 
 2026-08-06 更新：当前三任务的 `provisional clean-v0` 已派生；冻结 32+256 样本的 topology replay 为 288/288 PASS；标准 T5 CE 已在单张 RTX 4090 上完成前向、反向、一次 AdamW step 和 schema-v2 保存重载验证。下一门是把真实 production record 接入 BoundRecord/tokenizer/collator/model canary，而不是直接启动正式 P1。
+
+2026-08-06 科学路线更新：架构选择收束为 A0/A1/M0/M1（atom/motif × no-3D/3D）四格；C1-G、interface residual、legacy MSE 和多种 fusion 不再进入当前主比较。QM9 split、Motif Editing 协议、MoleculeNet 四任务版本及 P2 重线性化先于 full P1 冻结；GPU 只在 production 四格 canary 就绪后启用。
 
 ## 维护约定
 

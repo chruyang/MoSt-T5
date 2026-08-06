@@ -1,0 +1,199 @@
+{
+  "schema_version": "most-t5-r1/downstream-scientific-registry-contract/v2",
+  "contract_id": "downstream-scientific-registry-contract-v2",
+  "contract_version": 2,
+  "registry_schema_version": "most-t5-r1/downstream-scientific-registry/v2",
+  "purpose": "Scientific protocol contract for the downstream datasets that may appear in the paper. It freezes task role, version and split decisions, comparison views, metrics, and the minimum connectivity-level decontamination semantics. The v1 registry remains the immutable source-evidence inventory; this contract deliberately does not duplicate file hashes or byte-level audit fields.",
+  "required_top_level_fields": [
+    "schema_version",
+    "registry_id",
+    "contract_path",
+    "contract_id",
+    "contract_version",
+    "source_acquisition_manifest_path",
+    "source_acquisition_manifest_id",
+    "supersedes_for_scientific_planning",
+    "preserves_v1_as_evidence_inventory",
+    "paper_scope",
+    "decontamination_policy",
+    "planning_decisions",
+    "tasks"
+  ],
+  "required_task_fields": [
+    "task_id",
+    "dataset_id",
+    "paper_role",
+    "result_role",
+    "task_family",
+    "protocol_type",
+    "scientific_question",
+    "source_basis",
+    "split_protocol",
+    "geometry_protocol",
+    "metrics",
+    "comparison_protocol",
+    "decontamination",
+    "readiness_status",
+    "next_actions"
+  ],
+  "allowed_values": {
+    "paper_roles": [
+      "core",
+      "supporting",
+      "deferred"
+    ],
+    "result_roles": [
+      "headline_result",
+      "core_supporting_result",
+      "supporting_transfer_result",
+      "deferred_no_current_result"
+    ],
+    "protocol_types": [
+      "supervised_numeric_generation",
+      "supervised_text_generation",
+      "zero_shot_controlled_editing",
+      "supervised_classification",
+      "deferred_property_generation",
+      "deferred_retrieval"
+    ],
+    "source_states": [
+      "legacy_diagnostic_only",
+      "3dmolt5_artifact_frozen_clean_split_materialization_pending",
+      "present_local_evidence",
+      "missing_frozen_protocol",
+      "multiple_candidates_unresolved",
+      "sealed_test_member_source_frozen_development_members_pending",
+      "verified_fallback_evidence_primary_protocol_pending",
+      "kpgt_layout_candidate_present_official_comparison_pending",
+      "deepchem_authoritative_source_frozen_derived_split_materialization_pending",
+      "deferred_not_resolved"
+    ],
+    "split_statuses": [
+      "rebuild_required",
+      "derived_protocol_frozen_materialization_pending",
+      "reported_view_present_clean_view_pending",
+      "protocol_manifest_required",
+      "version_and_split_pending",
+      "sealed_test_frozen_development_membership_pending",
+      "preferred_source_and_split_pending",
+      "kpgt_layout_candidate_validated_official_comparison_pending",
+      "source_frozen_derived_membership_materialization_pending",
+      "deferred_not_frozen"
+    ],
+    "readiness_statuses": [
+      "blocked_clean_split_rebuild",
+      "source_frozen_clean_split_materialization_pending",
+      "source_present_clean_view_pending",
+      "blocked_protocol_and_source_manifest",
+      "sealed_test_source_frozen_development_membership_pending",
+      "preferred_source_and_split_verification_pending",
+      "kpgt_candidate_present_official_source_comparison_pending",
+      "source_frozen_derived_split_materialization_pending",
+      "deferred_not_in_current_protocol"
+    ],
+    "protection_timings": [
+      "before_full_p1",
+      "not_in_current_protected_union"
+    ],
+    "protected_split_names": [
+      "validation",
+      "test"
+    ],
+    "primary_identity": "canonical_connectivity",
+    "split_grouping_units": [
+      "canonical_connectivity",
+      "canonical_isomeric_molecular_identity"
+    ],
+    "downstream_train_overlap_rule": "retain_and_disclose",
+    "global_scaffold_rule": "no_global_pretraining_scaffold_exclusion"
+  },
+  "paper_scope_rules": [
+    "The core set is exactly QM9, PubChem captioning, ChEBI-20 text-to-molecule generation, and controlled motif editing.",
+    "BACE, BBBP, HIV, and ClinTox are supporting transfer benchmarks. They do not block architecture canaries, but their frozen validation and test identities are required before full P1 if they remain in the paper protocol.",
+    "PubChemQC and zero-shot retrieval are deferred. They do not enter the current protected identity union and cannot be described as evaluated until promoted by a new registry version.",
+    "Core is a data-governance role rather than a claim that every core task is a headline result. ChEBI-20 is core-protected but may remain a supporting generation result.",
+    "Unresolved datasets remain explicit entries; the registry must not silently narrow the planned paper scope."
+  ],
+  "scientific_data_rules": [
+    "A dataset version, split authority, and molecule grouping unit must be explicit before any full-run result is reported.",
+    "Official or legacy reported-protocol views are retained for external comparability. Connectivity-clean views are separate derived views and never rewrite the reported benchmark split in place.",
+    "QM9 retains the frozen 3D-MolT5 released E3FP and instruction artifact, but its duplicated and identity-leaking row split is diagnostic only. A paper-grade split is rebuilt by strict canonical isomeric molecular identity, groups every property prompt and retained geometry state for that identity, and emits canonical non-isomeric connectivity separately for conservative P1/P2 decontamination.",
+    "Multiple prompts, multiple target properties, and multiple conformers belonging to the same molecule stay in one split group.",
+    "Controlled editing has no supervised training split. The published MoleculeSTM 200-source-molecule list and FineMolTex twelve-prompt namespace define the sealed compatibility test source, not development data. A connectivity-disjoint development membership is selected separately from ZINC250K and its size is justified rather than guessed.",
+    "MoleculeNet member versions and validation/test memberships are frozen before full P1 protection is derived. Split seeds or manifests, task labels, and 3D conformer recipes are all frozen before supporting full-run evaluation, but evaluator and conformer implementation do not block P1 once protected memberships are complete.",
+    "For BACE, BBBP, and ClinTox, use a provenance-verified 3D-MolT5-provided dataset and split if recoverable; otherwise use the KPGT release after comparing the source payload or exact membership. The current legacy files are internally valid KPGT-layout-compatible candidates only, not verified official KPGT, because the official Figshare payload is HTTP 403 in the current region.",
+    "KPGT's released eleven-task set does not include HIV. HIV uses a provenance-complete 3D-MolT5 source if recoverable, otherwise an official MoleculeNet or DeepChem source plus a frozen Murcko-scaffold 8:1:1 derived-v1 membership; no HIV result or split is named KPGT.",
+    "The nine BACE, BBBP, and ClinTox candidate split files each form a complete, duplicate-free, pairwise-disjoint 8:1:1 membership; both chiral and achiral Murcko scaffold checks have zero cross-split overlap, all SMILES are valid, and every dataset split contains positive and negative labels so AUROC is computable. These internal facts do not establish official-source equivalence.",
+    "Metrics are task-family specific and are not replaced by one aggregate score."
+  ],
+  "decontamination_policy": {
+    "protected_roles": [
+      "core",
+      "supporting"
+    ],
+    "protected_splits": [
+      "validation",
+      "test"
+    ],
+    "primary_identity": "canonical_connectivity",
+    "grouping_rule": "All prompts, target properties, and conformers sharing one canonical connectivity identity are assigned as one molecule group.",
+    "training_memberships_subject_to_exclusion": [
+      "p1_structure_train",
+      "p2_permitted_train_membership",
+      "p2_alignment_train",
+      "p2_geometry_replay_train"
+    ],
+    "action": "Before full P1, exclude from every listed pretraining membership each molecule whose canonical connectivity identity occurs in a frozen paper-scope validation or test split. Preserve the downstream benchmark rows and record the derived clean-view manifest separately.",
+    "downstream_train_overlap": "retain_and_disclose",
+    "downstream_train_explanation": "Overlap between pretraining and an official downstream training split may be retained for benchmark comparability, but its rate is reported. No headline zero-shot claim may be inferred from that condition.",
+    "global_scaffold_policy": "no_global_pretraining_scaffold_exclusion",
+    "scaffold_explanation": "Scaffold isolation is a downstream split property where the benchmark calls for it; it is not a global deletion rule for P1 or P2.",
+    "deferred_task_rule": "Deferred tasks contribute no identities to the current protected union. Promotion requires a new registry version and a frozen validation and test manifest before the relevant full training run.",
+    "gate_boundary": "An architecture canary may run while scientific protocols are being frozen. Full P1 and all later full training memberships require the current paper-scope dataset versions, frozen validation/test molecule memberships, canonical connectivity identities, and protected union.",
+    "downstream_readiness_boundary": "Label interpretation, metric evaluators, model adapters, and 3D conformer recipes must be frozen before the corresponding downstream training or evaluation. They may be completed in parallel with P1 and are not additional full-P1 admission conditions."
+  },
+  "dataset_specific_requirements": {
+    "qm9": [
+      "Use one molecule-group-disjoint split for HOMO, LUMO, and gap.",
+      "Use strict canonical isomeric molecular identity for downstream split grouping and canonical non-isomeric connectivity only for the broader pretraining protected union; these are distinct fields.",
+      "Declare property units and parsing routes explicitly.",
+      "Do not accept byte-identical validation and test artifacts as independent evaluation splits.",
+      "Report generation validity and MAE, and retain a direct-regression probe for diagnosing objective coupling."
+    ],
+    "caption": [
+      "Freeze a reported-protocol view and a separate connectivity-clean view.",
+      "Report language-overlap metrics together with molecule-level factuality checks."
+    ],
+    "chebi20": [
+      "Freeze a reported-protocol view and a separate connectivity-clean view.",
+      "Use chemistry-validity, exact-structure, fingerprint, distributional, and text-molecule alignment metrics rather than SMILES token overlap alone."
+    ],
+    "controlled_editing": [
+      "Keep the published 200-source-molecule MoleculeSTM list as the sealed FineMolTex compatibility test and never use it for development or checkpoint selection.",
+      "Construct a separate canonical-connectivity-disjoint development membership from ZINC250K and freeze its justified size before full P1 protection is derived.",
+      "Freeze prompt IDs, prompt-to-target semantics, and evaluator definitions before editing evaluation; do not assume a full Cartesian product between molecules and prompts unless the evaluation manifest explicitly declares it."
+    ],
+    "moleculenet": [
+      "Prefer a provenance-verified 3D-MolT5-provided dataset and split. For BACE, BBBP, and ClinTox, KPGT is the next authoritative source after its official payload or exact membership is compared; coherent legacy layouts remain candidates until then.",
+      "Record KPGT official repository current and paper-release commits separately from Figshare dataset identity, and record a regional HTTP 403 as an access boundary rather than as source validation.",
+      "For each BACE, BBBP, and ClinTox candidate split, verify complete and disjoint membership coverage, 8:1:1 sizes, zero chiral and achiral Murcko scaffold overlap, valid SMILES, and positive and negative labels in every partition; call these files KPGT-layout-compatible candidates until official comparison succeeds.",
+      "KPGT does not cover HIV. Prefer recoverable 3D-MolT5 HIV provenance; otherwise freeze official MoleculeNet or DeepChem HIV members and publish a deterministic Murcko-scaffold 8:1:1 derived-v1 manifest.",
+      "Keep the acquired MoleculeSTM revision as fallback evidence because its cleaned counts match 3D-MolT5 Table 7, not as the final protocol by count alone.",
+      "Freeze the selected primary member-source revision and validation/test membership before full P1 protection; freeze label handling, the exact split manifest or seed, and the 3D conformer generation recipe before downstream training or evaluation.",
+      "Report ROC-AUC per dataset and per ClinTox label where applicable."
+    ]
+  },
+  "change_control": {
+    "v1_status": "preserved_immutable_evidence_inventory",
+    "v2_status": "scientific_protocol_source_of_truth",
+    "version_bump_required_for": [
+      "promoting_a_deferred_task",
+      "changing_a_dataset_revision",
+      "changing_a_frozen_split_manifest_or_seed",
+      "changing_a_task_role",
+      "changing_the_primary_decontamination_identity",
+      "changing_the_controlled_editing_prompt_or_source_manifest"
+    ],
+    "not_an_admission": "A syntactically valid v2 registry does not admit full P1. Full P1 requires the selected paper-scope source versions, formal validation/test membership manifests, canonical identities, and protected union. Label interpretation, downstream evaluators, and conformer recipes remain required before their downstream runs but are not additional P1 admission conditions."
+  }
+}

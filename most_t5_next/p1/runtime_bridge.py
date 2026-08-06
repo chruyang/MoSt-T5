@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from .bound_record import BoundRecord
 from .ce_collator import CEFirstExample, CollatorContractError
@@ -33,6 +33,14 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 class RuntimeBridgeError(ValueError):
     """Raised when independently valid layers cannot be bound safely."""
+
+
+class CEModelExample(Protocol):
+    """Small structural interface shared by synthetic and production CE rows."""
+
+    record_id: str
+    input_ids: tuple[int, ...]
+    labels: tuple[int, ...]
 
 
 def _require_sha256(value: str, field: str) -> None:
@@ -229,7 +237,7 @@ class PaddedCEBatch:
 
 
 def pad_ce_first_batch(
-    examples: Sequence[CEFirstExample],
+    examples: Sequence[CEModelExample],
     *,
     pad_token_id: int,
     label_pad_id: int = LABEL_PAD_ID,

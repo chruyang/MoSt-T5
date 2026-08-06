@@ -37,3 +37,56 @@ manifest argument order:
 The original pretraining payload remains the only payload store. A training
 dataset joins its original records to `permitted_member_ids.jsonl`; this
 offline derivation is not part of the per-batch model path.
+
+## Official KPGT scaffold membership
+
+`build_kpgt_scaffold_manifests.py` freezes the released BACE, BBBP, and
+ClinTox `scaffold-0/1/2.npy` memberships after checking index coverage,
+partition isolation, binary-label evaluability, canonical identities, and
+both chiral and achiral Bemis-Murcko isolation. It refuses candidate layouts:
+the CLI requires the exact provenance assertion
+`verified_official_kpgt_figshare` and the downloaded official archive's
+path and SHA-256 before entering the release's NumPy-pickle boundary. The tool
+hashes that regular, non-symlink ZIP/TAR archive itself, rejects traversal,
+links, duplicate or ambiguous members, and requires every one of the 12 input
+files to be byte-identical to its unique archive member before reading CSV or
+pickle content. Nothing is extracted to disk.
+
+```bash
+python -m most_t5_next.r1.overlap.build_kpgt_scaffold_manifests \
+  --dataset-root /path/to/extracted/KPGT/datasets \
+  --output-dir /path/to/new/kpgt-membership-v1 \
+  --official-archive-path /path/to/Figshare-file-35391163 \
+  --official-archive-sha256 <sha256-of-Figshare-file-35391163> \
+  --source-provenance verified_official_kpgt_figshare
+```
+
+The new output directory contains nine task/replica member JSONL files, 27
+partition-specific `identity-collection-manifest/v1` collections, the union of
+validation/test connectivity identities across all three replicas, and source
+and summary manifests. Validation/test collection manifests can be supplied
+directly to `derive_clean_pretrain_membership_v1.py`; training memberships are
+not added to the protected union.
+
+## HIV authoritative-source derived split
+
+`build_hiv_murcko_split.py` binds the official DeepChem MoleculeNet `HIV.csv`
+object by revision, byte size, SHA-256, MD5/ETag, header, and 41,127 members.
+It deterministically reproduces the non-chiral Bemis-Murcko group ordering and
+greedy 8:1:1 allocation semantics of DeepChem 2.8.0 `ScaffoldSplitter`. The
+result is deliberately named
+`HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v1`: it is a new published
+project membership, not an exact released 3D-MolT5, KPGT, or DeepChem split.
+
+```bash
+python -m most_t5_next.r1.overlap.build_hiv_murcko_split \
+  --source-csv /path/to/official/HIV.csv \
+  --source-sha256 9ffa7fe57dc86c342627ee1d5255e937e2ab812393c73c4d16c697022f6e1d22 \
+  --source-revision deepchem-HIV.csv-etag-9ad10c88f82f1dac7eb5c52b668c30a7 \
+  --output-dir /path/to/new/hiv-membership-v1
+```
+
+The builder rejects invalid source bytes, malformed or invalid molecules,
+label disagreement, incomplete coverage, scaffold leakage, and splits for
+which ROC-AUC is undefined. It emits the source/split manifests, exact member
+rows, and validation/test connectivity identities for the protected union.
