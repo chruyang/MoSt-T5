@@ -77,13 +77,10 @@ def write_canonical_json_new(path, value):
         os.fsync(handle.fileno())
 
 
-def load_molecule_collection(connection, manifest_path, expected_sha256):
-    """Strictly bind one manifest and its molecule rows, without loading text rows."""
+def load_molecule_collection(connection, manifest_path):
+    """Load one validated manifest and its molecule rows without reading text rows."""
     manifest_path = proof.regular_nonsymlink(Path(manifest_path), "collection manifest").resolve()
     manifest_bytes, observed_sha256 = proof.sha256_file(manifest_path)
-    proof.require_sha256(expected_sha256, "collection manifest reference SHA-256")
-    if observed_sha256 != expected_sha256:
-        raise ValueError("collection manifest SHA-256 differs from supplied binding")
     collection = proof.load_json(manifest_path, "collection manifest")
     proof.validate_collection_manifest(collection)
     molecule_observation = proof.load_molecule_rows(connection, collection, manifest_path)
@@ -148,7 +145,7 @@ def named_dimension_counts(counts):
     }
 
 
-def report_stereo(connection, pretrain, protected):
+def report_stereo(connection, pretrain, protected, pretrain_unique_count):
     comparable, reason = proof.dimension_availability(pretrain, protected, "stereo_identity")
     result = {"used_for_exclusion": False}
     if comparable:
@@ -161,6 +158,7 @@ def report_stereo(connection, pretrain, protected):
                         pretrain["collection_id"],
                         protected["collection_id"],
                         "stereo_identity",
+                        left_unique_count=pretrain_unique_count,
                     )
                 ),
             }
@@ -272,11 +270,10 @@ def write_membership_artifacts(connection, pretrain, protected, output_dir):
 
 def derive_clean_membership(
     pretrain_manifest_path,
-    pretrain_manifest_sha256,
-    protected_manifest_refs,
+    protected_manifest_paths,
     output_dir,
 ):
-    if not protected_manifest_refs:
+    if not protected_manifest_paths:
         raise ValueError("at least one protected validation/test manifest is required")
     output_dir = Path(output_dir).resolve()
     if output_dir.exists():
@@ -284,12 +281,10 @@ def derive_clean_membership(
 
     connection = proof.create_database(":memory:")
     try:
-        pretrain, pretrain_observation = load_molecule_collection(
-            connection, pretrain_manifest_path, pretrain_manifest_sha256
-        )
+        pretrain, pretrain_observation = load_molecule_collection(connection, pretrain_manifest_path)
         protected_pairs = [
-            load_molecule_collection(connection, path, expected_sha256)
-            for path, expected_sha256 in protected_manifest_refs
+            load_molecule_collection(connection, path)
+            for path in protected_manifest_paths
         ]
         protected_pairs.sort(key=lambda pair: protected_sort_key(pair[0]))
         protected = [pair[0] for pair in protected_pairs]
@@ -303,6 +298,12 @@ def derive_clean_membership(
                 ON molecules(collection_id, stereo_sha256);
             """
         )
+        pretrain_unique_counts = {
+            dimension: proof.dimension_unique_count(
+                connection, pretrain["collection_id"], dimension
+            )
+            for dimension in ("connectivity_identity", "stereo_identity")
+        }
 
         output_dir.mkdir(parents=True, exist_ok=False)
         permitted_artifact, excluded_artifact, excluded_multiple = write_membership_artifacts(
@@ -334,6 +335,7 @@ def derive_clean_membership(
                     pretrain["collection_id"],
                     collection["collection_id"],
                     "connectivity_identity",
+                    left_unique_count=pretrain_unique_counts["connectivity_identity"],
                 )
             )
             protected_reports.append(
@@ -343,19 +345,24 @@ def derive_clean_membership(
                         "used_for_exclusion": True,
                         "counts": connectivity_counts,
                     },
-                    "report_only_stereo": report_stereo(connection, pretrain, collection),
+                    "report_only_stereo": report_stereo(
+                        connection,
+                        pretrain,
+                        collection,
+                        pretrain_unique_counts["stereo_identity"],
+                    ),
                     "report_only_text": report_text(pretrain, collection),
                 }
             )
 
-        source_hashes = {
+        source_observations = {
             "pretrain_manifest_sha256": pretrain_observation["manifest_sha256"],
             "protected_manifest_sha256": [
                 observation["manifest_sha256"] for _, observation in protected_pairs
             ],
             "policy": "exclude_on_connectivity_identity_sha256_union_only",
         }
-        binding_sha256 = proof.sha256_bytes(proof.canonical_json_bytes(source_hashes))
+        binding_sha256 = proof.sha256_bytes(proof.canonical_json_bytes(source_observations))
         manifest = {
             "schema_version": MANIFEST_SCHEMA,
             "derivation_id": "clean-pretrain-membership-{}".format(binding_sha256[:20]),
@@ -371,6 +378,15 @@ def derive_clean_membership(
                 "source_releases_preserved": True,
                 "molecule_payload_copied": False,
                 "derived_membership_only": True,
+            },
+            "provenance_observation_policy": {
+                "caller_supplied_digest_required": False,
+                "observed_artifact_digests_are_scientific_admission_gates": False,
+                "semantic_admission_basis": [
+                    "collection schema and role",
+                    "referenced molecule-row closure",
+                    "compatible connectivity identity specification",
+                ],
             },
             "pretrain_source": source_binding(pretrain, pretrain_observation),
             "protected_collections": protected_reports,
@@ -401,12 +417,10 @@ def derive_clean_membership(
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pretrain-manifest", required=True)
-    parser.add_argument("--pretrain-manifest-sha256", required=True)
     parser.add_argument(
         "--protected-manifest",
         action="append",
-        nargs=2,
-        metavar=("PATH", "SHA256"),
+        metavar="PATH",
         required=True,
         help="Repeat for each protected downstream validation/test collection.",
     )
@@ -418,7 +432,6 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     manifest = derive_clean_membership(
         args.pretrain_manifest,
-        args.pretrain_manifest_sha256,
         args.protected_manifest,
         args.output_dir,
     )

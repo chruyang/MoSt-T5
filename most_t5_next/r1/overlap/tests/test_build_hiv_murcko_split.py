@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from most_t5_next.r1.overlap import build_hiv_murcko_split as hiv
 
@@ -45,14 +46,21 @@ def fixture_rows() -> list[tuple[str, str, int]]:
     return rows
 
 
-def binding_for(path: Path, member_count: int) -> hiv.SourceBinding:
+def binding_for(
+    path: Path,
+    member_count: int,
+    *,
+    invalid_member_count: int = 0,
+) -> hiv.SourceBinding:
     payload = path.read_bytes()
     return hiv.SourceBinding(
         revision="fixture-hiv-source-v1",
-        expected_sha256=hashlib.sha256(payload).hexdigest(),
-        expected_md5=hashlib.md5(payload).hexdigest(),
-        expected_bytes=len(payload),
+        reference_sha256=hashlib.sha256(payload).hexdigest(),
+        reference_md5=hashlib.md5(payload).hexdigest(),
+        reference_bytes=len(payload),
         expected_member_count=member_count,
+        expected_eligible_member_count=member_count - invalid_member_count,
+        expected_invalid_member_count=invalid_member_count,
         source_url="https://example.invalid/HIV-fixture.csv",
         authority="test fixture",
     )
@@ -79,6 +87,9 @@ class HivMurckoDerivedSplitTests(unittest.TestCase):
 
             self.assertEqual(result["protocol_id"], hiv.PROTOCOL_ID)
             self.assertFalse(result["official_exact_split_reproduction"])
+            self.assertEqual(result["counts"]["source_population"], 30)
+            self.assertEqual(result["counts"]["eligible_population"], 30)
+            self.assertEqual(result["counts"]["excluded_rdkit_invalid"], 0)
             self.assertEqual(
                 result["counts"]["member_counts"],
                 {"train": 24, "validation": 3, "test": 3},
@@ -136,12 +147,13 @@ class HivMurckoDerivedSplitTests(unittest.TestCase):
                 hiv.SOURCE_MANIFEST_FILENAME,
                 hiv.SPLIT_MANIFEST_FILENAME,
                 hiv.MEMBER_MANIFEST_FILENAME,
+                hiv.INVALID_MEMBER_LEDGER_FILENAME,
                 hiv.PROTECTED_ROWS_FILENAME,
                 hiv.PROTECTED_MANIFEST_FILENAME,
             ):
                 self.assertEqual((first / name).read_bytes(), (second / name).read_bytes())
 
-    def test_hash_invalid_smiles_and_label_mismatch_fail_before_output(self):
+    def test_hash_is_observational_and_invalid_smiles_are_ledgered(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "HIV.csv"
@@ -149,23 +161,53 @@ class HivMurckoDerivedSplitTests(unittest.TestCase):
             binding = binding_for(source, 30)
             bad_binding = hiv.SourceBinding(
                 revision=binding.revision,
-                expected_sha256="0" * 64,
+                reference_sha256="not-even-a-valid-digest",
                 source_url=binding.source_url,
+                expected_member_count=30,
+                expected_eligible_member_count=30,
+                expected_invalid_member_count=0,
             )
-            with self.assertRaisesRegex(hiv.HivSplitProtocolError, "SHA-256"):
-                hiv.build_hiv_murcko_split(
-                    source, root / "hash-failure", source_binding=bad_binding
-                )
-            self.assertFalse((root / "hash-failure").exists())
+            hash_output = root / "hash-observation"
+            hiv.build_hiv_murcko_split(
+                source, hash_output, source_binding=bad_binding
+            )
+            source_manifest = read_json(hash_output / hiv.SOURCE_MANIFEST_FILENAME)
+            self.assertFalse(
+                source_manifest["file_integrity_observations"]["matches_reference"][
+                    "sha256"
+                ]
+            )
+            self.assertIn(
+                "file_sha256", source_manifest["admission_criteria"]["not_hard"]
+            )
 
             write_csv(source, [("not-a-smiles", "CI", 0)] + fixture_rows()[1:])
-            with self.assertRaisesRegex(hiv.HivSplitProtocolError, "invalid SMILES"):
-                hiv.build_hiv_murcko_split(
-                    source,
-                    root / "smiles-failure",
-                    source_binding=binding_for(source, 30),
-                )
-            self.assertFalse((root / "smiles-failure").exists())
+            invalid_output = root / "invalid-ledger"
+            result = hiv.build_hiv_murcko_split(
+                source,
+                invalid_output,
+                source_binding=binding_for(source, 30, invalid_member_count=1),
+            )
+            invalid_rows = read_jsonl(
+                invalid_output / hiv.INVALID_MEMBER_LEDGER_FILENAME
+            )
+            eligible_rows = read_jsonl(invalid_output / hiv.MEMBER_MANIFEST_FILENAME)
+            self.assertEqual(result["counts"]["source_population"], 30)
+            self.assertEqual(result["counts"]["eligible_population"], 29)
+            self.assertEqual(result["counts"]["excluded_rdkit_invalid"], 1)
+            self.assertEqual(len(invalid_rows), 1)
+            self.assertEqual(invalid_rows[0]["source_member_index"], 0)
+            self.assertFalse(invalid_rows[0]["eligible_for_model_or_metric"])
+            self.assertIsNone(invalid_rows[0]["assigned_split"])
+            self.assertNotIn(
+                invalid_rows[0]["member_id"],
+                {row["member_id"] for row in eligible_rows},
+            )
+
+    def test_label_mismatch_and_population_mismatch_fail_before_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "HIV.csv"
 
             write_csv(source, [("C", "CI", 1)] + fixture_rows()[1:])
             with self.assertRaisesRegex(hiv.HivSplitProtocolError, "inconsistent"):
@@ -176,21 +218,59 @@ class HivMurckoDerivedSplitTests(unittest.TestCase):
                 )
             self.assertFalse((root / "label-failure").exists())
 
-    def test_production_cli_accepts_only_frozen_official_binding(self):
+            write_csv(source, fixture_rows())
+            with self.assertRaisesRegex(hiv.HivSplitProtocolError, "population"):
+                hiv.build_hiv_murcko_split(
+                    source,
+                    root / "population-failure",
+                    source_binding=binding_for(source, 31),
+                )
+            self.assertFalse((root / "population-failure").exists())
+
+    def test_production_cli_gates_url_and_revision_but_not_sha(self):
         parsed = hiv.parse_args(
             [
                 "--source-csv",
                 "HIV.csv",
+                "--source-url",
+                hiv.OFFICIAL_SOURCE_URL,
                 "--source-sha256",
-                "0" * 64,
+                "wrong-observation-does-not-block",
                 "--source-revision",
-                "unbound",
+                hiv.OFFICIAL_SOURCE_REVISION,
                 "--output-dir",
                 "derived",
             ]
         )
-        with self.assertRaisesRegex(hiv.HivSplitProtocolError, "frozen official"):
+        hiv._require_official_cli_binding(parsed)
+
+        no_sha = hiv.parse_args(
+            [
+                "--source-csv",
+                "HIV.csv",
+                "--source-url",
+                hiv.OFFICIAL_SOURCE_URL,
+                "--source-revision",
+                hiv.OFFICIAL_SOURCE_REVISION,
+                "--output-dir",
+                "derived",
+            ]
+        )
+        self.assertIsNone(no_sha.source_sha256)
+        hiv._require_official_cli_binding(no_sha)
+
+        parsed.source_revision = "unbound"
+        with self.assertRaisesRegex(hiv.HivSplitProtocolError, "official HIV.csv revision"):
             hiv._require_official_cli_binding(parsed)
+
+    def test_official_protocol_pins_rdkit_canonicalization_version(self):
+        with mock.patch.object(
+            hiv.rdBase, "rdkitVersion", hiv.PRODUCTION_RDKIT_VERSION
+        ):
+            hiv.require_official_rdkit_version(hiv.OFFICIAL_SOURCE_BINDING)
+        with mock.patch.object(hiv.rdBase, "rdkitVersion", "2025.09.1"):
+            with self.assertRaisesRegex(hiv.HivSplitProtocolError, "requires RDKit"):
+                hiv.require_official_rdkit_version(hiv.OFFICIAL_SOURCE_BINDING)
 
 
 if __name__ == "__main__":

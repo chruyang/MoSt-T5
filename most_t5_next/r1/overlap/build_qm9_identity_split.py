@@ -28,6 +28,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -54,30 +55,23 @@ SOURCE_REVISION = "QizhiPei/e3fp-mol-instructions-qm9@bfe55090be9ebf1c9cbbe6687a
 ALLOWED_SOURCE_SPLITS = ("train", "validation")
 FORBIDDEN_SOURCE_SPLITS = frozenset(("test",))
 SOURCE_SPLIT_ORDER = {name: index for index, name in enumerate(ALLOWED_SOURCE_SPLITS)}
-FROZEN_SOURCE_FILES = {
-    "train": (
-        "train-00000-of-00001.parquet",
-        40_016_993,
-        "95731ca5b9ea05fb5b22b41ee9654e01d12ce47aa54b3f162c1470782ff7a574",
-    ),
-    "validation": (
-        "validation-00000-of-00001.parquet",
-        224_673,
-        "cc211b2c38b21f669047cbed17aeb0e0610fbddabf630266ee7638ceaca5fdc0",
-    ),
-}
 
 RNG_SEED = 42
 DEFAULT_TRAIN_GROUP_COUNT = 110_000
 DEFAULT_VALIDATION_GROUP_COUNT = 10_000
-FROZEN_EXPECTED_COUNTS = {
+PRODUCTION_RDKIT_VERSION = "2024.03.5"
+PRODUCTION_EXPECTED_COUNTS = {
     "input_rows": 349_702,
     "retained_rows": 349_660,
     "removed_model_visible_duplicates": 42,
     "molecule_groups": 128_836,
-    "output_rows": {"train": 298_529, "validation": 27_211, "test": 23_920},
     "output_groups": {"train": 110_000, "validation": 10_000, "test": 8_836},
 }
+
+RELEASED_NUMERIC_TARGET_PATTERN = re.compile(
+    r"(?P<numeric_literal>[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)"
+    r"(?P<terminal_sentence_period>\.)?"
+)
 
 REQUIRED_COLUMNS = ("smiles", "selfies", "instruction", "output", "molecule_fp")
 SOURCE_MANIFEST_FILENAME = "source_manifest.json"
@@ -207,7 +201,12 @@ def serialize_complete_molecule_fp(value: Any) -> bytes:
 
 
 def normalize_numeric_target(value: Any) -> str:
-    """Return one finite Decimal in non-exponent, negative-zero-free form."""
+    """Normalize one finite numeric literal in the released output grammar.
+
+    A string must full-match exactly one numeric literal followed by at most
+    one terminal sentence period.  No substring search or unit stripping is
+    permitted.
+    """
     if isinstance(value, bool) or value is None:
         raise Qm9SplitProtocolError("numeric target must be a finite decimal literal")
     if isinstance(value, Decimal):
@@ -223,11 +222,17 @@ def normalize_numeric_target(value: Any) -> str:
         stripped = value.strip()
         if not stripped:
             raise Qm9SplitProtocolError("numeric target must not be empty")
+        match = RELEASED_NUMERIC_TARGET_PATTERN.fullmatch(stripped)
+        if match is None:
+            raise Qm9SplitProtocolError(
+                "numeric target must be exactly one numeric literal optionally "
+                "followed by one terminal sentence period"
+            )
         try:
-            decimal_value = Decimal(stripped)
+            decimal_value = Decimal(match.group("numeric_literal"))
         except InvalidOperation as exc:
             raise Qm9SplitProtocolError(
-                "numeric target must contain only one decimal literal"
+                "numeric target literal is not a valid decimal"
             ) from exc
     else:
         raise Qm9SplitProtocolError(
@@ -317,8 +322,27 @@ def bind_source_files(
     return bound
 
 
-def require_frozen_source_files(source_files: Sequence[SourceFile]) -> None:
-    """Bind a production run to the exact files observed at SOURCE_REVISION."""
+def require_production_protocol(
+    source_files: Sequence[SourceFile],
+    *,
+    train_group_count: int,
+    validation_group_count: int,
+) -> None:
+    """Require the scientific input layout and split scale for production.
+
+    File names, byte sizes, and SHA-256 observations are deliberately absent
+    from this admission decision.  The official Hugging Face revision, full
+    row parsing, required schema, pinned canonicalization version, and final
+    semantic census define the source protocol instead.
+    """
+
+    if rdBase.rdkitVersion != PRODUCTION_RDKIT_VERSION:
+        raise Qm9SplitProtocolError(
+            "production QM9 canonicalization requires RDKit "
+            + PRODUCTION_RDKIT_VERSION
+            + "; observed "
+            + rdBase.rdkitVersion
+        )
 
     by_split: dict[str, list[SourceFile]] = defaultdict(list)
     for source in source_files:
@@ -327,18 +351,23 @@ def require_frozen_source_files(source_files: Sequence[SourceFile]) -> None:
         files = by_split[split]
         if len(files) != 1:
             raise Qm9SplitProtocolError(
-                f"frozen {split} source must contain exactly one Parquet file"
+                f"production {split} source must contain exactly one Parquet file"
             )
         source = files[0]
-        expected_name, expected_bytes, expected_sha256 = FROZEN_SOURCE_FILES[split]
-        if source.path.name != expected_name:
+        if source.path.suffix.lower() != ".parquet":
             raise Qm9SplitProtocolError(
-                f"frozen {split} source file name differs from {expected_name}"
+                f"production {split} source must be one Parquet file"
             )
-        if source.bytes != expected_bytes or source.sha256 != expected_sha256:
-            raise Qm9SplitProtocolError(
-                f"frozen {split} source bytes or SHA-256 differ from {SOURCE_REVISION}"
-            )
+    if train_group_count != DEFAULT_TRAIN_GROUP_COUNT:
+        raise Qm9SplitProtocolError(
+            "production train_group_count must equal "
+            + str(DEFAULT_TRAIN_GROUP_COUNT)
+        )
+    if validation_group_count != DEFAULT_VALIDATION_GROUP_COUNT:
+        raise Qm9SplitProtocolError(
+            "production validation_group_count must equal "
+            + str(DEFAULT_VALIDATION_GROUP_COUNT)
+        )
 
 
 def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
@@ -573,13 +602,16 @@ def _write_json_new(path: Path, value: object) -> dict[str, object]:
     return _write_new(path, canonical_json_bytes(value) + b"\n")
 
 
-def require_frozen_output_counts(observed: Mapping[str, object]) -> None:
+def require_production_semantic_census(observed: Mapping[str, object]) -> None:
     """Reject production materialization whose semantic census has drifted."""
 
-    if dict(observed) != FROZEN_EXPECTED_COUNTS:
+    admission_view = {
+        key: observed.get(key) for key in PRODUCTION_EXPECTED_COUNTS
+    }
+    if admission_view != PRODUCTION_EXPECTED_COUNTS:
         raise Qm9SplitProtocolError(
-            "frozen QM9 semantic census differs from the preregistered production counts: "
-            + canonical_json_bytes(observed).decode("utf-8")
+            "QM9 semantic census differs from the preregistered production counts: "
+            + canonical_json_bytes(admission_view).decode("utf-8")
         )
 
 
@@ -589,25 +621,31 @@ def build_qm9_identity_split(
     *,
     train_group_count: int = DEFAULT_TRAIN_GROUP_COUNT,
     validation_group_count: int = DEFAULT_VALIDATION_GROUP_COUNT,
-    enforce_frozen_source: bool = True,
+    enforce_production_protocol: bool = True,
 ) -> dict[str, object]:
-    """Materialize the frozen split and return its summary.
+    """Materialize the molecule-group-disjoint split and return its summary.
 
     ``train_group_count`` and ``validation_group_count`` exist only so unit
     fixtures can exercise the exact algorithm with a few groups.  Production
-    CLI runs fix the 110000/10000 boundaries and enforce the two known source
-    file hashes.  Tests using synthetic JSONL must explicitly set
-    ``enforce_frozen_source=False``.
+    CLI runs fix the official revision, one-Parquet-per-split layout,
+    110000/10000 boundaries, full semantic census, and all row-level protocol
+    checks.  File names, byte sizes, and SHA-256 values remain observations and
+    do not decide admission.  Tests using synthetic JSONL must explicitly set
+    ``enforce_production_protocol=False``.
     """
     _require_source_mapping(source_paths)
     output_path = Path(output_dir)
     if output_path.exists():
         raise Qm9SplitProtocolError("output directory already exists: " + str(output_path))
     source_files = bind_source_files(source_paths)
-    if not isinstance(enforce_frozen_source, bool):
-        raise Qm9SplitProtocolError("enforce_frozen_source must be Boolean")
-    if enforce_frozen_source:
-        require_frozen_source_files(source_files)
+    if not isinstance(enforce_production_protocol, bool):
+        raise Qm9SplitProtocolError("enforce_production_protocol must be Boolean")
+    if enforce_production_protocol:
+        require_production_protocol(
+            source_files,
+            train_group_count=train_group_count,
+            validation_group_count=validation_group_count,
+        )
     retained, removed, state_variants, source_row_counts = _process_sources(source_files)
     if not retained:
         raise Qm9SplitProtocolError("no records were retained from the frozen sources")
@@ -646,14 +684,17 @@ def build_qm9_identity_split(
             for split in ("train", "validation", "test")
         },
     }
-    if enforce_frozen_source:
-        require_frozen_output_counts(observed_counts)
+    if enforce_production_protocol:
+        require_production_semantic_census(observed_counts)
 
     output_path.mkdir(parents=True, exist_ok=False)
 
     canonicalization_contract = {
         "library": "RDKit",
         "rdkit_version": rdBase.rdkitVersion,
+        "production_required_version": (
+            PRODUCTION_RDKIT_VERSION if enforce_production_protocol else None
+        ),
         "input_parser": "Chem.MolFromSmiles(smiles.strip())",
         "serializer": "Chem.MolToSmiles",
         "split_molecule_identity": {
@@ -684,6 +725,7 @@ def build_qm9_identity_split(
                 "file_name": source.path.name,
                 "bytes": source.bytes,
                 "sha256": source.sha256,
+                "observation_role": "provenance_metadata_not_admission_criterion",
                 "row_count": source_row_counts[(source.split, source.file_ordinal)],
             }
         )
@@ -691,9 +733,13 @@ def build_qm9_identity_split(
         "schema_version": SOURCE_MANIFEST_SCHEMA,
         "dataset_id": "3dmolt5-e3fp-mol-instructions-qm9-clean-view",
         "frozen_source_revision": SOURCE_REVISION,
-        "frozen_source_binding_enforced": enforce_frozen_source,
-        "frozen_expected_production_counts": (
-            FROZEN_EXPECTED_COUNTS if enforce_frozen_source else None
+        "production_protocol_enforced": enforce_production_protocol,
+        "source_file_observation_policy": (
+            "file_name_bytes_and_sha256_are_recorded_for_provenance_only_"
+            "and_do_not_decide_scientific_admission"
+        ),
+        "expected_production_counts": (
+            PRODUCTION_EXPECTED_COUNTS if enforce_production_protocol else None
         ),
         "accepted_source_splits": list(ALLOWED_SOURCE_SPLITS),
         "forbidden_source_split": {
@@ -712,7 +758,13 @@ def build_qm9_identity_split(
             ],
             "serialization": "canonical_json_utf8_v1",
             "digest": "sha256",
-            "numeric_normalization": "finite Decimal from stripped string or str(finite numeric); map signed zero to 0; Decimal.normalize(); format with f and no exponent",
+            "released_numeric_target_grammar": {
+                "scope": "full stripped output string; substring extraction is forbidden",
+                "numeric_literal_regex": RELEASED_NUMERIC_TARGET_PATTERN.pattern,
+                "terminal_sentence_period": "optional; at most one",
+                "units_extra_tokens_and_malformed_punctuation": "rejected",
+            },
+            "numeric_normalization": "parse the matched literal as finite Decimal; map signed zero to 0; Decimal.normalize(); format with f and no exponent",
         },
         "model_visible_duplicate_identity": {
             "fields": [
@@ -795,7 +847,7 @@ def build_qm9_identity_split(
         },
         "invariants": {
             "source_test_not_consumed": True,
-            "frozen_production_counts_enforced": enforce_frozen_source,
+            "production_semantic_census_enforced": enforce_production_protocol,
             "all_input_rows_accounted_for": input_row_count == len(retained) + len(removed),
             "each_retained_row_assigned_once": sum(row_counts.values()) == len(retained),
             "molecule_groups_are_split_disjoint": True,
@@ -838,7 +890,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         arguments.output_dir,
         train_group_count=DEFAULT_TRAIN_GROUP_COUNT,
         validation_group_count=DEFAULT_VALIDATION_GROUP_COUNT,
-        enforce_frozen_source=True,
+        enforce_production_protocol=True,
     )
     print(canonical_json_bytes(summary).decode("utf-8"))
     return 0

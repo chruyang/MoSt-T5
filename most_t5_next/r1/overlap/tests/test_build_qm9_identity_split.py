@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from most_t5_next.r1.overlap import build_qm9_identity_split as qm9
 
@@ -77,7 +78,7 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
             output,
             train_group_count=3,
             validation_group_count=1,
-            enforce_frozen_source=False,
+            enforce_production_protocol=False,
         )
         return output, summary
 
@@ -107,6 +108,23 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
             self.assertEqual({item["normalized_numeric_target"] for item in cc_homo}, {"1"})
             self.assertEqual(summary["counts"]["input_rows"], 9)
             self.assertEqual(summary["counts"]["retained_rows"], 8)
+
+    def test_released_numeric_sentence_grammar_is_exact(self):
+        self.assertEqual(qm9.normalize_numeric_target("0.1913."), "0.1913")
+        self.assertEqual(qm9.normalize_numeric_target("-0.243."), "-0.243")
+        self.assertEqual(qm9.normalize_numeric_target("1."), "1")
+        self.assertEqual(qm9.normalize_numeric_target(" -0.0000. "), "0")
+        for invalid in (
+            "0.1913 eV",
+            "value=0.1913.",
+            "0.1 0.2",
+            "0.1913..",
+            "NaN.",
+            "inf.",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(qm9.Qm9SplitProtocolError):
+                    qm9.normalize_numeric_target(invalid)
 
     def test_group_never_crosses_split_and_counts_cover_every_record(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -157,23 +175,89 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
                     root / "forbidden",
                     train_group_count=3,
                     validation_group_count=1,
-                    enforce_frozen_source=False,
+                    enforce_production_protocol=False,
                 )
             self.assertFalse((root / "forbidden").exists())
 
-    def test_production_source_hash_gate_precedes_row_processing(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            train = root / "train-00000-of-00001.parquet"
-            validation = root / "validation-00000-of-00001.parquet"
-            train.write_bytes(b"not the frozen train parquet")
-            validation.write_bytes(b"not the frozen validation parquet")
-            with self.assertRaisesRegex(qm9.Qm9SplitProtocolError, "bytes or SHA-256"):
-                qm9.build_qm9_identity_split(
-                    {"train": [train], "validation": [validation]},
-                    root / "derived",
+    def test_production_protocol_uses_layout_and_scale_not_file_observations(self):
+        sources = [
+            qm9.SourceFile(
+                split="train",
+                file_ordinal=0,
+                path=Path("arbitrarily-renamed-train.parquet"),
+                bytes=17,
+                sha256="a" * 64,
+            ),
+            qm9.SourceFile(
+                split="validation",
+                file_ordinal=0,
+                path=Path("arbitrarily-renamed-validation.parquet"),
+                bytes=29,
+                sha256="b" * 64,
+            ),
+        ]
+        with mock.patch.object(
+            qm9.rdBase, "rdkitVersion", qm9.PRODUCTION_RDKIT_VERSION
+        ):
+            qm9.require_production_protocol(
+                sources,
+                train_group_count=qm9.DEFAULT_TRAIN_GROUP_COUNT,
+                validation_group_count=qm9.DEFAULT_VALIDATION_GROUP_COUNT,
+            )
+
+        changed_observations = [
+            qm9.SourceFile(
+                split=source.split,
+                file_ordinal=source.file_ordinal,
+                path=source.path,
+                bytes=source.bytes + 10_000,
+                sha256="f" * 64,
+            )
+            for source in sources
+        ]
+        with mock.patch.object(
+            qm9.rdBase, "rdkitVersion", qm9.PRODUCTION_RDKIT_VERSION
+        ):
+            qm9.require_production_protocol(
+                changed_observations,
+                train_group_count=qm9.DEFAULT_TRAIN_GROUP_COUNT,
+                validation_group_count=qm9.DEFAULT_VALIDATION_GROUP_COUNT,
+            )
+
+    def test_production_protocol_requires_one_parquet_per_split_and_fixed_scale(self):
+        train = qm9.SourceFile("train", 0, Path("train.parquet"), 1, "a" * 64)
+        validation = qm9.SourceFile(
+            "validation", 0, Path("validation.parquet"), 1, "b" * 64
+        )
+        with mock.patch.object(
+            qm9.rdBase, "rdkitVersion", qm9.PRODUCTION_RDKIT_VERSION
+        ):
+            with self.assertRaisesRegex(qm9.Qm9SplitProtocolError, "exactly one Parquet"):
+                qm9.require_production_protocol(
+                    [train, validation, qm9.SourceFile("train", 1, Path("part.parquet"), 1, "c" * 64)],
+                    train_group_count=qm9.DEFAULT_TRAIN_GROUP_COUNT,
+                    validation_group_count=qm9.DEFAULT_VALIDATION_GROUP_COUNT,
                 )
-            self.assertFalse((root / "derived").exists())
+            with self.assertRaisesRegex(qm9.Qm9SplitProtocolError, "must be one Parquet"):
+                qm9.require_production_protocol(
+                    [train, qm9.SourceFile("validation", 0, Path("validation.jsonl"), 1, "b" * 64)],
+                    train_group_count=qm9.DEFAULT_TRAIN_GROUP_COUNT,
+                    validation_group_count=qm9.DEFAULT_VALIDATION_GROUP_COUNT,
+                )
+            with self.assertRaisesRegex(qm9.Qm9SplitProtocolError, "train_group_count"):
+                qm9.require_production_protocol(
+                    [train, validation],
+                    train_group_count=3,
+                    validation_group_count=qm9.DEFAULT_VALIDATION_GROUP_COUNT,
+                )
+
+        with mock.patch.object(qm9.rdBase, "rdkitVersion", "2025.09.1"):
+            with self.assertRaisesRegex(qm9.Qm9SplitProtocolError, "requires RDKit"):
+                qm9.require_production_protocol(
+                    [train, validation],
+                    train_group_count=qm9.DEFAULT_TRAIN_GROUP_COUNT,
+                    validation_group_count=qm9.DEFAULT_VALIDATION_GROUP_COUNT,
+                )
 
     def test_production_cli_does_not_expose_fixture_split_sizes(self):
         with contextlib.redirect_stderr(io.StringIO()):
@@ -192,20 +276,31 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
                 )
 
     def test_production_semantic_census_is_an_exact_admission_gate(self):
-        observed = dict(qm9.FROZEN_EXPECTED_COUNTS)
-        qm9.require_frozen_output_counts(observed)
+        observed = dict(qm9.PRODUCTION_EXPECTED_COUNTS)
+        observed["output_rows"] = {
+            "train": 298_518,
+            "validation": 27_147,
+            "test": 23_995,
+        }
+        qm9.require_production_semantic_census(observed)
         wrong = dict(observed)
         wrong["retained_rows"] = observed["retained_rows"] - 1
         with self.assertRaisesRegex(
             qm9.Qm9SplitProtocolError, "semantic census differs"
         ):
-            qm9.require_frozen_output_counts(wrong)
+            qm9.require_production_semantic_census(wrong)
 
-    def test_source_manifest_binds_revision_rows_hashes_and_rdkit_contract(self):
+    def test_source_manifest_records_revision_rows_observations_and_rdkit_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
             output, _ = self.build(Path(temporary))
             manifest = read_json(output / qm9.SOURCE_MANIFEST_FILENAME)
             self.assertEqual(manifest["frozen_source_revision"], qm9.SOURCE_REVISION)
+            self.assertFalse(manifest["production_protocol_enforced"])
+            self.assertIsNone(manifest["expected_production_counts"])
+            self.assertIn(
+                "do_not_decide_scientific_admission",
+                manifest["source_file_observation_policy"],
+            )
             self.assertEqual(
                 [item["source_split"] for item in manifest["source_files"]],
                 ["train", "validation"],
@@ -215,6 +310,13 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
             )
             self.assertTrue(
                 all(len(item["sha256"]) == 64 for item in manifest["source_files"])
+            )
+            self.assertTrue(
+                all(
+                    item["observation_role"]
+                    == "provenance_metadata_not_admission_criterion"
+                    for item in manifest["source_files"]
+                )
             )
             self.assertEqual(manifest["canonicalization"]["library"], "RDKit")
             self.assertEqual(
@@ -247,7 +349,7 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
                 output,
                 train_group_count=1,
                 validation_group_count=1,
-                enforce_frozen_source=False,
+                enforce_production_protocol=False,
             )
             rows = read_jsonl(output / qm9.SPLIT_MANIFEST_FILENAME)
             stereo_rows = [item for item in rows if "Br" in item["strict_canonical_isomeric_smiles"]]

@@ -135,7 +135,7 @@ class CleanMembershipDerivationTests(unittest.TestCase):
         protected = [refs[index] for index in protected_order]
         output = root / "derived"
         manifest = derive.derive_clean_membership(
-            refs[0][0], refs[0][1], protected, output
+            refs[0][0], [path for path, _ in protected], output
         )
         return root, output, manifest
 
@@ -214,6 +214,28 @@ class CleanMembershipDerivationTests(unittest.TestCase):
         )
         self.assertTrue(manifest["release_handling"]["source_releases_preserved"])
         self.assertFalse(manifest["release_handling"]["molecule_payload_copied"])
+        self.assertFalse(
+            manifest["provenance_observation_policy"][
+                "caller_supplied_digest_required"
+            ]
+        )
+
+    def test_cli_accepts_manifest_paths_without_digest_arguments(self):
+        parser = derive.build_parser()
+        args = parser.parse_args(
+            [
+                "--pretrain-manifest",
+                "pretrain.json",
+                "--protected-manifest",
+                "validation.json",
+                "--protected-manifest",
+                "test.json",
+                "--output-dir",
+                "derived",
+            ]
+        )
+        self.assertEqual(args.pretrain_manifest, "pretrain.json")
+        self.assertEqual(args.protected_manifest, ["validation.json", "test.json"])
 
 
 if __name__ == "__main__":

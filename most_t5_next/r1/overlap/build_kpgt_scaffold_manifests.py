@@ -5,10 +5,11 @@ The KPGT release stores each scaffold replica as a NumPy object array.  Reading
 such an array requires pickle.  This module deliberately keeps that trust
 boundary narrow: ``allow_pickle=True`` is reached only after the caller has
 asserted the exact official-source provenance token and the tool has hashed
-the supplied official Figshare archive, matched its required SHA-256, and
-proved that all 12 files under ``dataset_root`` are byte-identical to unique,
-safe regular members of that archive. A merely layout-compatible directory is
-therefore not silently promoted to an official benchmark release.
+the supplied official Figshare archive and proved that all 12 files under
+``dataset_root`` are byte-identical to unique, safe regular members of that
+archive. A caller-provided SHA-256 is optional integrity metadata, not a
+scientific-admission condition. A merely layout-compatible directory is not
+silently promoted to an official benchmark release.
 
 The input tree is read only.  Output is written only to a new directory.
 """
@@ -146,16 +147,18 @@ def sha256_file(path: Path) -> FileFact:
 
 
 def _validate_official_provenance(
-    source_provenance: str, official_archive_sha256: str
-) -> str:
+    source_provenance: str, official_archive_sha256: str | None
+) -> str | None:
     if source_provenance != OFFICIAL_SOURCE_PROVENANCE:
         raise KpgtManifestError(
             "source_provenance must be exactly " + OFFICIAL_SOURCE_PROVENANCE
         )
+    if official_archive_sha256 is None:
+        return None
     normalized = official_archive_sha256.lower()
     if not SHA256_RE.fullmatch(normalized):
         raise KpgtManifestError(
-            "official_archive_sha256 must be exactly 64 hexadecimal characters"
+            "optional official_archive_sha256 must be exactly 64 hexadecimal characters"
         )
     return normalized
 
@@ -734,21 +737,17 @@ def build_kpgt_scaffold_manifests(
     output_dir: Path | str,
     *,
     official_archive_path: Path | str,
-    official_archive_sha256: str,
+    official_archive_sha256: str | None = None,
     source_provenance: str,
 ) -> dict[str, object]:
     """Validate official KPGT files and write deterministic benchmark manifests."""
-    archive_sha256 = _validate_official_provenance(
+    recorded_archive_sha256 = _validate_official_provenance(
         source_provenance, official_archive_sha256
     )
     archive_path = _require_regular_nonsymlink(
         Path(official_archive_path), "official_archive_path"
     )
     archive_fact = sha256_file(archive_path)
-    if archive_fact.sha256 != archive_sha256:
-        raise KpgtManifestError(
-            "official archive observed SHA-256 differs from official_archive_sha256"
-        )
     root = Path(dataset_root)
     output = Path(output_dir)
     if not root.is_dir():
@@ -827,7 +826,14 @@ def build_kpgt_scaffold_manifests(
             "format": archive_format,
             "bytes": archive_fact.bytes,
             "sha256": archive_fact.sha256,
-            "sha256_basis": "computed by this tool and matched to the required caller binding",
+            "sha256_role": "optional_integrity_record_not_scientific_admission",
+            "sha256_basis": "observed digest computed by this tool",
+            "caller_recorded_sha256": recorded_archive_sha256,
+            "caller_record_matches_observed": (
+                None
+                if recorded_archive_sha256 is None
+                else recorded_archive_sha256 == archive_fact.sha256
+            ),
         },
         "repository": {
             "url": KPGT_REPOSITORY_URL,
@@ -838,8 +844,9 @@ def build_kpgt_scaffold_manifests(
             "allow_pickle": True,
             "scope": "only the nine exact task/splits/scaffold-{0,1,2}.npy paths listed below",
             "precondition": (
-                "official archive SHA-256 validated; every required dataset_root file "
-                "is byte-identical to one unique safe regular archive member before loading"
+                "official-source provenance asserted; every required dataset_root file "
+                "is byte-identical to one unique safe regular archive member before loading; "
+                "SHA-256 is recorded but is not the scientific-admission criterion"
             ),
         },
         "canonicalization": {
@@ -922,7 +929,7 @@ def build_kpgt_scaffold_manifests(
                             for column in payload["csv_columns"]
                             if column != spec.smiles_column
                         ],
-                        archive_sha256=archive_sha256,
+                        archive_sha256=archive_fact.sha256,
                     )
                 )
                 for row_index in membership[partition]:
@@ -1009,8 +1016,9 @@ def build_kpgt_scaffold_manifests(
             "identity": "canonical non-isomeric molecular connectivity",
             "training_members": "not included in the protected union",
             "clean_membership_integration": (
-                "Pass the validation/test collection_manifest.json paths and their "
-                "SHA-256 bindings directly to derive_clean_pretrain_membership_v1.py"
+                "Pass the validation/test collection_manifest.json paths directly to "
+                "derive_clean_pretrain_membership_v1.py; observed digests are provenance "
+                "records, not caller-supplied scientific-admission arguments"
             ),
         },
     }
@@ -1023,7 +1031,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--official-archive-path", type=Path, required=True)
-    parser.add_argument("--official-archive-sha256", required=True)
+    parser.add_argument(
+        "--official-archive-sha256",
+        default=None,
+        help=(
+            "Optional integrity record. The observed archive digest is always computed; "
+            "this value does not control scientific admission."
+        ),
+    )
     parser.add_argument(
         "--source-provenance",
         required=True,

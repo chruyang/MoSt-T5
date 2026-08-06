@@ -667,10 +667,16 @@ def dimension_availability(left, right, dimension):
     return True, None
 
 
-def dimension_counts(connection, left_id, right_id, dimension):
+def dimension_unique_count(connection, collection_id, dimension):
     table, column = DIMENSION_TABLE_COLUMN[dimension]
     nonnull = " AND {} IS NOT NULL".format(column)
     unique_query = "SELECT COUNT(DISTINCT {0}) FROM {1} WHERE collection_id=?{2}".format(column, table, nonnull)
+    return scalar(connection, unique_query, (collection_id,))
+
+
+def dimension_counts(connection, left_id, right_id, dimension, left_unique_count=None):
+    table, column = DIMENSION_TABLE_COLUMN[dimension]
+    nonnull = " AND {} IS NOT NULL".format(column)
     overlap_query = (
         "SELECT COUNT(*) FROM ("
         "SELECT {0} FROM {1} WHERE collection_id=?{2} GROUP BY {0} "
@@ -682,8 +688,12 @@ def dimension_counts(connection, left_id, right_id, dimension):
         "WHERE right_rows.collection_id=? AND right_rows.{1}=left_rows.{1})"
     ).format(table, column)
     return {
-        "left_unique_count": scalar(connection, unique_query, (left_id,)),
-        "right_unique_count": scalar(connection, unique_query, (right_id,)),
+        "left_unique_count": (
+            dimension_unique_count(connection, left_id, dimension)
+            if left_unique_count is None
+            else left_unique_count
+        ),
+        "right_unique_count": dimension_unique_count(connection, right_id, dimension),
         "overlap_unique_count": scalar(connection, overlap_query, (left_id, right_id)),
         "left_rows_impacted": scalar(connection, impacted_query, (left_id, right_id)),
         "right_rows_impacted": scalar(connection, impacted_query, (right_id, left_id)),

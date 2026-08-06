@@ -95,13 +95,11 @@ class KpgtScaffoldManifestTests(unittest.TestCase):
         archive = root / "official-kpgt-fixture.zip"
         if not archive.exists():
             make_archive(archive, source)
-        archive_sha256 = kpgt.sha256_file(archive).sha256
         output = root / output_name
         summary = kpgt.build_kpgt_scaffold_manifests(
             source,
             output,
             official_archive_path=archive,
-            official_archive_sha256=archive_sha256,
             source_provenance=kpgt.OFFICIAL_SOURCE_PROVENANCE,
         )
         return output, summary
@@ -118,6 +116,12 @@ class KpgtScaffoldManifestTests(unittest.TestCase):
             self.assertEqual(source["official_archive"]["bytes"], archive.stat().st_size)
             self.assertEqual(source["official_archive"]["file_name"], archive.name)
             self.assertEqual(source["official_archive"]["format"], "zip")
+            self.assertIsNone(source["official_archive"]["caller_recorded_sha256"])
+            self.assertIsNone(source["official_archive"]["caller_record_matches_observed"])
+            self.assertEqual(
+                source["official_archive"]["sha256_role"],
+                "optional_integrity_record_not_scientific_admission",
+            )
             self.assertEqual(source["official_archive"]["figshare_doi"], kpgt.FIGSHARE_DOI)
             self.assertEqual(source["official_archive"]["figshare_file_id"], kpgt.FIGSHARE_FILE_ID)
             self.assertEqual(
@@ -229,21 +233,22 @@ class KpgtScaffoldManifestTests(unittest.TestCase):
                 )
             self.assertFalse((root / "derived").exists())
 
-    def test_archive_hash_mismatch_is_rejected_before_pickle_or_output(self):
+    def test_optional_archive_hash_mismatch_is_recorded_but_not_an_admission_gate(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             make_dataset(root / "source")
             archive = root / "official-kpgt-fixture.zip"
             make_archive(archive, root / "source")
-            with self.assertRaisesRegex(kpgt.KpgtManifestError, "observed SHA-256"):
-                kpgt.build_kpgt_scaffold_manifests(
-                    root / "source",
-                    root / "derived",
-                    official_archive_path=archive,
-                    official_archive_sha256="a" * 64,
-                    source_provenance=kpgt.OFFICIAL_SOURCE_PROVENANCE,
-                )
-            self.assertFalse((root / "derived").exists())
+            kpgt.build_kpgt_scaffold_manifests(
+                root / "source",
+                root / "derived",
+                official_archive_path=archive,
+                official_archive_sha256="a" * 64,
+                source_provenance=kpgt.OFFICIAL_SOURCE_PROVENANCE,
+            )
+            manifest = read_json(root / "derived" / kpgt.SOURCE_MANIFEST_FILENAME)
+            self.assertEqual(manifest["official_archive"]["caller_recorded_sha256"], "a" * 64)
+            self.assertFalse(manifest["official_archive"]["caller_record_matches_observed"])
 
     def test_dataset_root_bytes_must_match_the_hashed_archive_members(self):
         with tempfile.TemporaryDirectory() as temporary:
