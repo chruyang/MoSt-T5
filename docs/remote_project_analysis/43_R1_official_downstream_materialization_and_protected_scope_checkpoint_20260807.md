@@ -1,6 +1,8 @@
 # R1 正式下游数据物化与保护范围检查点（2026-08-07）
 
-状态：**QM9、KPGT、HIV、PCQM 预训练身份集合及当前可执行保护差集已经物化；最终论文范围的保护集合尚未完成。**
+> **历史快照，已由文档 44 取代。** 本文保留旧 QM9/HIV v1 和当时保护差集的执行证据；不得把其中成员数、路径或“当前状态”用于新的训练。现行结果为 QM9/HIV v2 与 paper-scope-final-v4：3,365,577 个 PCQM members 中排除 5,510、保留 3,360,067；详见文档 44。
+
+状态：**历史执行检查点；最终论文范围的保护集合后来已完成。**
 
 本文接续文档 40–42 的执行状态。旧文中的架构假设、四格实验设计与任务优先级仍然有效；其中关于数据“待物化”、旧 QM9 行数、HIV 7 条无效以及 0.5 vCPU 调度的描述，不再代表当前事实。
 
@@ -86,7 +88,7 @@ PCQM production-v2 identity（3,365,577）
 
 按任务来源观察 PCQM 命中：QM9 为 2,725 members / 1,948 unique connectivity，KPGT 为 279 / 48，HIV 为 93 / 60。来源组合中，2,725 条仅命中 QM9，277 条仅命中 KPGT，91 条仅命中 HIV，2 条同时命中 KPGT 与 HIV。这里的分来源数字用于解释组成；正式排除仍以 29,273 个 connectivity 的总并集一次性完成。
 
-该结果只称为 `QM9+MoleculeNet current executable clean membership`。它可以用于接口联调和 PF-CANARY，但不能替代最终论文范围的 clean membership。
+该结果只称为历史的 `QM9+MoleculeNet current executable clean membership`。它仅可用于 membership 接口联调，不能单独构成 PF-CANARY 放行依据；当前 GPU 门禁见文档 44 的 CPU-G0/G1。
 
 ## 6. 仍未冻结的核心论文任务
 
@@ -118,4 +120,4 @@ CPU 路线继续按以下顺序推进：
 3. 在最终 clean membership 上完成 motif census、词表覆盖/OOV 与 producer 输入输出检验；
 4. 之后才进入 1×4090 的 A0/A1/M0/M1 PF-CANARY；胜出架构再进行全量预训练，避免把所有候选架构都做完整实验。
 
-若三天窗口要求先验证训练链路，可在当前 22 集合差集结果上运行短 PF-CANARY，但必须标注为架构筛选证据，不能记作 full-P1 或最终论文结果。
+本文当时曾建议在 22 集合差集上运行短 PF-CANARY；该建议现已撤销。新的 production canary 必须先满足文档 44 的 graph+ports codec、同源 A/M producer 与 inherited-E3FP 输入合同。

@@ -6,10 +6,11 @@ artifact.  It deliberately consumes only ``train`` and ``validation`` from the
 frozen revision below: the released ``test`` file is a byte-identical copy of
 ``validation`` and is therefore forbidden as an input to the clean view.
 
-The derivation has two different identity levels:
+The derivation has two related identity levels:
 
-* strict canonical isomeric SMILES defines the molecule group that must stay
-  in one output split; and
+* canonical non-isomeric connectivity defines the molecule group that must
+  stay in one output split; every stereoisomer/state of that connectivity is
+  assigned together; and
 * a model-visible duplicate requires equal semantic signature, byte-for-byte
   SELFIES, and equal canonical serialization of the *complete* ``molecule_fp``
   value.  A later record satisfying all three conditions is removed in stable
@@ -50,6 +51,8 @@ except ImportError as exc:  # pragma: no cover - exercised only in broken enviro
         "build_qm9_identity_split.py requires RDKit for canonical isomeric SMILES"
     ) from exc
 
+from most_t5_next.r1.overlap import shared_identity_normalization_v1 as identity_normalization
+
 
 SOURCE_REVISION = "QizhiPei/e3fp-mol-instructions-qm9@bfe55090be9ebf1c9cbbe6687a5796711ac0edd8"
 ALLOWED_SOURCE_SPLITS = ("train", "validation")
@@ -64,9 +67,11 @@ PRODUCTION_EXPECTED_COUNTS = {
     "input_rows": 349_702,
     "retained_rows": 349_660,
     "removed_model_visible_duplicates": 42,
-    "molecule_groups": 128_836,
-    "output_groups": {"train": 110_000, "validation": 10_000, "test": 8_836},
+    "molecule_groups": 128_783,
+    "output_groups": {"train": 110_000, "validation": 10_000, "test": 8_783},
 }
+
+SPLIT_PROTOCOL_ID = "qm9-3dmolt5-connectivity-group-110k10k-rest-s42-v2"
 
 RELEASED_NUMERIC_TARGET_PATTERN = re.compile(
     r"(?P<numeric_literal>[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)"
@@ -79,10 +84,15 @@ SPLIT_MANIFEST_FILENAME = "split_manifest.jsonl"
 DUPLICATE_REPORT_FILENAME = "duplicate_report.json"
 SPLIT_SUMMARY_FILENAME = "split_summary.json"
 
-SOURCE_MANIFEST_SCHEMA = "most-t5-r1/qm9-clean-source-manifest/v1"
-SPLIT_ROW_SCHEMA = "most-t5-r1/qm9-clean-split-member/v1"
+SOURCE_MANIFEST_SCHEMA = "most-t5-r1/qm9-clean-source-manifest/v2"
+SPLIT_ROW_SCHEMA = "most-t5-r1/qm9-clean-split-member/v2"
 DUPLICATE_REPORT_SCHEMA = "most-t5-r1/qm9-model-visible-duplicate-report/v1"
-SPLIT_SUMMARY_SCHEMA = "most-t5-r1/qm9-clean-split-summary/v1"
+SPLIT_SUMMARY_SCHEMA = "most-t5-r1/qm9-clean-split-summary/v2"
+IDENTITY_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "contracts"
+    / "pcqm4mv2_identity_normalization_contract.json"
+)
 
 
 class Qm9SplitProtocolError(ValueError):
@@ -245,38 +255,26 @@ def normalize_numeric_target(value: Any) -> str:
     return format(decimal_value.normalize(), "f")
 
 
+def canonicalize_identity_forms(value: Any) -> tuple[str, str]:
+    try:
+        forms = identity_normalization.canonical_forms_from_smiles(value)
+    except identity_normalization.IdentityNormalizationError as exc:
+        raise Qm9SplitProtocolError(str(exc)) from exc
+    return forms.strict_isomeric_smiles, forms.connectivity_smiles
+
+
 def canonicalize_isomeric_smiles(value: Any) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise Qm9SplitProtocolError("smiles must be a non-empty string")
-    molecule = Chem.MolFromSmiles(value.strip())
-    if molecule is None:
-        raise Qm9SplitProtocolError("RDKit could not parse smiles")
-    return Chem.MolToSmiles(
-        molecule,
-        canonical=True,
-        isomericSmiles=True,
-        kekuleSmiles=False,
-    )
+    return canonicalize_identity_forms(value)[0]
 
 
 def canonicalize_connectivity_smiles(value: Any) -> str:
-    """Canonical non-isomeric identity used only for protected-union exclusion."""
-    if not isinstance(value, str) or not value.strip():
-        raise Qm9SplitProtocolError("smiles must be a non-empty string")
-    molecule = Chem.MolFromSmiles(value.strip())
-    if molecule is None:
-        raise Qm9SplitProtocolError("RDKit could not parse smiles")
-    return Chem.MolToSmiles(
-        molecule,
-        canonical=True,
-        isomericSmiles=False,
-        kekuleSmiles=False,
-    )
+    """Canonical non-isomeric identity used for grouping and protection."""
+    return canonicalize_identity_forms(value)[1]
 
 
-def group_id_for_smiles(canonical_smiles: str) -> str:
+def group_id_for_connectivity_smiles(canonical_smiles: str) -> str:
     digest = sha256_bytes(canonical_smiles.encode("utf-8"))
-    return "qm9-canonical-isomeric-smiles-sha256:" + digest
+    return "qm9-canonical-connectivity-smiles-sha256:" + digest
 
 
 def _require_source_mapping(source_paths: Mapping[str, Sequence[Path | str]]) -> None:
@@ -463,8 +461,9 @@ def _process_sources(
         for row_index, row in enumerate(iter_source_rows(source.path)):
             source_label = f"{source.split}[{source.file_ordinal}] row {row_index}"
             _require_record_columns(row, source_label)
-            canonical_smiles = canonicalize_isomeric_smiles(row["smiles"])
-            connectivity_smiles = canonicalize_connectivity_smiles(row["smiles"])
+            canonical_smiles, connectivity_smiles = canonicalize_identity_forms(
+                row["smiles"]
+            )
             instruction = row["instruction"]
             if not isinstance(instruction, str):
                 raise Qm9SplitProtocolError(source_label + " instruction must be a string")
@@ -489,7 +488,7 @@ def _process_sources(
                 source_file_sha256=source.sha256,
                 source_row_index=row_index,
                 source_ordinal=stable_source_ordinal,
-                group_id=group_id_for_smiles(canonical_smiles),
+                group_id=group_id_for_connectivity_smiles(connectivity_smiles),
                 strict_canonical_isomeric_smiles=canonical_smiles,
                 strict_canonical_isomeric_smiles_sha256=canonical_smiles_sha256,
                 canonical_connectivity_smiles=connectivity_smiles,
@@ -687,6 +686,8 @@ def build_qm9_identity_split(
     if enforce_production_protocol:
         require_production_semantic_census(observed_counts)
 
+    identity_spec_id = sha256_bytes(IDENTITY_CONTRACT_PATH.read_bytes())
+
     output_path.mkdir(parents=True, exist_ok=False)
 
     canonicalization_contract = {
@@ -698,13 +699,14 @@ def build_qm9_identity_split(
         "input_parser": "Chem.MolFromSmiles(smiles.strip())",
         "serializer": "Chem.MolToSmiles",
         "split_molecule_identity": {
-            "name": "strict_canonical_isomeric_smiles",
+            "name": "canonical_non_isomeric_connectivity_smiles",
             "parameters": {
                 "canonical": True,
-                "isomericSmiles": True,
+                "isomericSmiles": False,
                 "kekuleSmiles": False,
             },
-            "group_identity": "sha256_utf8_strict_canonical_isomeric_smiles",
+            "group_identity": "sha256_utf8_canonical_non_isomeric_connectivity_smiles",
+            "stereoisomer_policy": "retain_all_states_and_assign_them_with_the_connectivity_group",
         },
         "protected_union_identity": {
             "name": "canonical_non_isomeric_connectivity_smiles",
@@ -713,7 +715,12 @@ def build_qm9_identity_split(
                 "isomericSmiles": False,
                 "kekuleSmiles": False,
             },
-            "role": "conservative_p1_p2_decontamination_only_not_split_grouping",
+            "role": "same_identity_used_for_split_grouping_and_p1_p2_decontamination",
+        },
+        "explicit_hydrogen_projection": {
+            "operation": "Chem.RemoveHs(Chem.Mol(mol), RemoveHsParameters(), sanitize=True)",
+            "removeDefiningBondStereo": True,
+            "post_steps": ["Chem.SanitizeMol", "Chem.AssignStereochemistry(cleanIt=True,force=True)"],
         },
     }
     source_entries = []
@@ -732,6 +739,7 @@ def build_qm9_identity_split(
     source_manifest = {
         "schema_version": SOURCE_MANIFEST_SCHEMA,
         "dataset_id": "3dmolt5-e3fp-mol-instructions-qm9-clean-view",
+        "split_protocol_id": SPLIT_PROTOCOL_ID,
         "frozen_source_revision": SOURCE_REVISION,
         "production_protocol_enforced": enforce_production_protocol,
         "source_file_observation_policy": (
@@ -750,6 +758,7 @@ def build_qm9_identity_split(
         "required_columns": list(REQUIRED_COLUMNS),
         "source_files": source_entries,
         "canonicalization": canonicalization_contract,
+        "identity_normalization_contract_sha256": identity_spec_id,
         "semantic_signature": {
             "fields": [
                 "strict_canonical_isomeric_smiles",
@@ -821,8 +830,10 @@ def build_qm9_identity_split(
     summary = {
         "schema_version": SPLIT_SUMMARY_SCHEMA,
         "dataset_id": "3dmolt5-e3fp-mol-instructions-qm9-clean-view",
+        "split_protocol_id": SPLIT_PROTOCOL_ID,
         "frozen_source_revision": SOURCE_REVISION,
         "canonicalization": canonicalization_contract,
+        "identity_normalization_contract_sha256": identity_spec_id,
         "rng_contract": rng_contract,
         "counts": {
             "input_rows": input_row_count,
@@ -850,7 +861,8 @@ def build_qm9_identity_split(
             "production_semantic_census_enforced": enforce_production_protocol,
             "all_input_rows_accounted_for": input_row_count == len(retained) + len(removed),
             "each_retained_row_assigned_once": sum(row_counts.values()) == len(retained),
-            "molecule_groups_are_split_disjoint": True,
+            "connectivity_groups_are_split_disjoint": True,
+            "all_stereoisomer_states_follow_their_connectivity_group": True,
             "different_e3fp_states_are_retained": True,
         },
         "artifacts": {

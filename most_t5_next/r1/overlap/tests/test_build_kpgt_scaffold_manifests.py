@@ -88,6 +88,27 @@ def make_archive(
 
 
 class KpgtScaffoldManifestTests(unittest.TestCase):
+    def test_identity_and_scaffold_use_shared_explicit_h_projection(self):
+        labels = {"Class": 1}
+        explicit = kpgt._canonicalize_molecule(
+            "C[C@]([H])(O)F", task="bace", row_index=0, labels=labels
+        )
+        implicit = kpgt._canonicalize_molecule(
+            "C[C@H](O)F", task="bace", row_index=1, labels=labels
+        )
+        self.assertEqual(
+            explicit.canonical_isomeric_smiles,
+            implicit.canonical_isomeric_smiles,
+        )
+        self.assertEqual(
+            explicit.canonical_connectivity_smiles,
+            implicit.canonical_connectivity_smiles,
+        )
+        self.assertEqual(
+            explicit.murcko_scaffold_achiral,
+            implicit.murcko_scaffold_achiral,
+        )
+
     def build(self, root: Path, output_name: str = "derived") -> tuple[Path, dict[str, object]]:
         source = root / "source"
         if not source.exists():

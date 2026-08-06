@@ -21,6 +21,37 @@ Dataset, model, or launcher.
 Neither path reads SDF, imports RDKit, invokes the linearizer, nor recomputes
 E3FP.  A tokenizer release remains separate from the P1 admission decision.
 
+## Scientific status of the v1 pure projection (2026-08-07)
+
+The v1 builder remains useful only as a deterministic engineering fixture. It
+must not be used to freeze the final motif vocabulary. Its "pure motif" is
+created by deleting every ``<N*>`` anchor from a fragment string; deleting an
+anchor inside a branch leaves an empty branch such as ``C()`` or ``C()()``.
+
+The complete paper-scope-v2 clean-P1 census established:
+
+| Projection | Unique values invalid to RDKit | Occurrence-weighted invalid |
+|---|---:|---:|
+| exact lexeme after anchor deletion | 278,695 / 441,452 (63.1314%) | 6,001,259 / 24,153,133 (24.8467%) |
+| aggregated deleted-anchor pure core | 108,506 / 214,378 (50.6143%) | same invalid occurrences as above |
+| exact lexeme with each anchor replaced by legal ``[*]`` port | 0 / 441,452 | 0 / 24,153,133 |
+| slot template with ``<*>`` represented as legal ``[*]`` port | 0 / 229,359 | 0 / 229,359 |
+
+These counts are a full-census diagnosis of the projection used at that point,
+not the final vocabulary input.  The later paper-scope-final-v4 membership
+excludes 5,510 rather than 5,386 PCQM members, so its exact frequencies and
+coverage must be rematerialized before selecting a vocabulary.  The v2 result
+still establishes the structural failure mode: every invalid surface contains
+an empty branch left by anchor deletion, whereas preserving the same anchors as
+legal dummy-atom ports made every tested exact and slot surface parseable.
+
+Thus "no projection failure" in the historical census meant only that the
+regular expression returned a non-empty string; it did not establish a valid
+chemical graph. The replacement design is a canonical core graph plus ordered
+motif-local attachment ports and a reversible rare-identity fallback. Macro
+and fallback forms must round-trip to the same graph+port identity before any
+new tokenizer release is admitted.
+
 ## Required caller-owned decisions
 
 The builder has no default for any item that changes research semantics.  A
@@ -41,10 +72,12 @@ For a frozen release, every used scope lock must be `complete` and bind both a
 downstream identity-exclusion proof and a permitted-membership census derivation
 audit.  Candidate/global census inputs cannot be relabelled as frozen.
 
-## Current read-only full-census observations
+## Historical deleted-anchor observations (superseded for vocabulary design)
 
 These values were observed on 2026-08-05 from the completed production-v2
-global census.  They are parameter evidence, not a cutoff decision or release:
+global census. They describe only the now-rejected deleted-anchor string
+projection; they are retained for provenance and must not determine a cutoff
+or vocabulary release:
 
 | Candidate rule | Pure motif tokens | P1 occurrence coverage |
 |---|---:|---:|
@@ -112,6 +145,11 @@ the linearizer:
 7. require motif count to equal `len(atom_to_motif_map)`, emit a sorted
    digest/fragment/count census plus membership/reject/derivation receipts, and
    repeat the extraction in a second process for byte equality.
+
+Step 6 is retained only to reproduce the historical P1/P2 compatibility
+diagnostic. It cannot supply the final vocabulary after the full-census
+parseability result above; a P2 slot-aware graph+port projection must be added
+before P1/P2 vocabulary union is reconsidered.
 
 This conclusion is currently a bounded schema proof, not a completed full P2
 census.  The full extractor must still prove these invariants for all 301,655

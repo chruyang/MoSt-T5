@@ -46,8 +46,10 @@ except ImportError as exc:  # pragma: no cover - exercised in a broken environme
         "build_hiv_murcko_split.py requires RDKit for canonicalization and scaffolds"
     ) from exc
 
+from most_t5_next.r1.overlap import shared_identity_normalization_v1 as identity_normalization
 
-PROTOCOL_ID = "HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v1"
+
+PROTOCOL_ID = "HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v2"
 DATASET_ID = "HIV-MoleculeNet-DeepChem"
 
 DEEPCHEM_VERSION = "2.8.0"
@@ -93,12 +95,17 @@ INVALID_MEMBER_LEDGER_FILENAME = "invalid_member_ledger.jsonl"
 PROTECTED_ROWS_FILENAME = "protected_union_identity_rows.jsonl"
 PROTECTED_MANIFEST_FILENAME = "protected_union_manifest.json"
 
-SOURCE_MANIFEST_SCHEMA = "most-t5-r1/hiv-authoritative-source-manifest/v1"
-SPLIT_MANIFEST_SCHEMA = "most-t5-r1/hiv-murcko-derived-split-manifest/v1"
-MEMBER_ROW_SCHEMA = "most-t5-r1/hiv-derived-split-member/v1"
-INVALID_MEMBER_ROW_SCHEMA = "most-t5-r1/hiv-rdkit-invalid-member/v1"
+SOURCE_MANIFEST_SCHEMA = "most-t5-r1/hiv-authoritative-source-manifest/v2"
+SPLIT_MANIFEST_SCHEMA = "most-t5-r1/hiv-murcko-derived-split-manifest/v2"
+MEMBER_ROW_SCHEMA = "most-t5-r1/hiv-derived-split-member/v2"
+INVALID_MEMBER_ROW_SCHEMA = "most-t5-r1/hiv-rdkit-invalid-member/v2"
 PROTECTED_ROW_SCHEMA = "most-t5-r1/protected-connectivity-identity-row/v1"
 PROTECTED_MANIFEST_SCHEMA = "most-t5-r1/protected-connectivity-union-manifest/v1"
+IDENTITY_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "contracts"
+    / "pcqm4mv2_identity_normalization_contract.json"
+)
 
 
 class HivSplitProtocolError(ValueError):
@@ -286,16 +293,14 @@ def canonical_forms(smiles: str) -> tuple[str, str, str] | None:
     molecule = Chem.MolFromSmiles(smiles)
     if molecule is None:
         return None
-    isomeric = Chem.MolToSmiles(
-        molecule, canonical=True, isomericSmiles=True, kekuleSmiles=False
-    )
-    connectivity = Chem.MolToSmiles(
-        molecule, canonical=True, isomericSmiles=False, kekuleSmiles=False
-    )
-    scaffold = MurckoScaffoldSmiles(mol=molecule, includeChirality=False)
+    try:
+        forms = identity_normalization.canonical_forms_from_molecule(molecule)
+    except identity_normalization.IdentityNormalizationError as exc:
+        raise HivSplitProtocolError(str(exc)) from exc
+    scaffold = MurckoScaffoldSmiles(mol=forms.molecule, includeChirality=False)
     if not isinstance(scaffold, str):
         raise RuntimeError("RDKit returned a non-string Bemis-Murcko scaffold")
-    return isomeric, connectivity, scaffold
+    return forms.strict_isomeric_smiles, forms.connectivity_smiles, scaffold
 
 
 def read_population(
@@ -522,6 +527,7 @@ def build_hiv_murcko_split(
         "eligible_population": len(members),
         "excluded_rdkit_invalid": len(invalid_members),
     }
+    identity_spec_id = hashlib.sha256(IDENTITY_CONTRACT_PATH.read_bytes()).hexdigest()
 
     reference_observations = {
         "admission_role": "provenance_observation_only_not_a_hard_gate",
@@ -583,6 +589,7 @@ def build_hiv_murcko_split(
         },
         "file_integrity_observations": reference_observations,
         "population_counts": population_counts,
+        "identity_normalization_contract_sha256": identity_spec_id,
         "admission_criteria": {
             "hard": [
                 "official_source_url_and_revision",
@@ -731,6 +738,15 @@ def build_hiv_murcko_split(
             "library": "RDKit",
             "version": rdBase.rdkitVersion,
             "production_required_version": PRODUCTION_RDKIT_VERSION,
+            "identity_normalization_contract_sha256": identity_spec_id,
+            "explicit_hydrogen_projection": {
+                "operation": "Chem.RemoveHs(Chem.Mol(mol), RemoveHsParameters(), sanitize=True)",
+                "only_nondefault_override": {"removeDefiningBondStereo": True},
+                "post_steps": [
+                    "Chem.SanitizeMol",
+                    "Chem.AssignStereochemistry(cleanIt=True,force=True)",
+                ],
+            },
             "function": "Chem.MolToSmiles",
             "parameters": {
                 "canonical": True,
@@ -795,6 +811,16 @@ def build_hiv_murcko_split(
             "library": "RDKit",
             "version": rdBase.rdkitVersion,
             "production_required_version": PRODUCTION_RDKIT_VERSION,
+            "identity_normalization_contract_sha256": identity_spec_id,
+            "explicit_hydrogen_projection": {
+                "operation": "Chem.RemoveHs(Chem.Mol(mol), RemoveHsParameters(), sanitize=True)",
+                "only_nondefault_override": {"removeDefiningBondStereo": True},
+                "post_steps": [
+                    "Chem.SanitizeMol",
+                    "Chem.AssignStereochemistry(cleanIt=True,force=True)",
+                ],
+                "scaffold_is_computed_from_projected_molecule": True,
+            },
             "molecule_identity": {
                 "strict": {
                     "canonical": True,

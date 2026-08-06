@@ -321,14 +321,14 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
             self.assertEqual(manifest["canonicalization"]["library"], "RDKit")
             self.assertEqual(
                 manifest["canonicalization"]["split_molecule_identity"]["parameters"],
-                {"canonical": True, "isomericSmiles": True, "kekuleSmiles": False},
+                {"canonical": True, "isomericSmiles": False, "kekuleSmiles": False},
             )
             self.assertEqual(
                 manifest["canonicalization"]["protected_union_identity"]["parameters"],
                 {"canonical": True, "isomericSmiles": False, "kekuleSmiles": False},
             )
 
-    def test_stereoisomers_are_distinct_split_identities_but_share_protection_identity(self):
+    def test_stereoisomers_share_connectivity_group_but_keep_distinct_stereo_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             train = root / "train.jsonl"
@@ -364,7 +364,13 @@ class Qm9CleanIdentitySplitTests(unittest.TestCase):
             grouped: dict[str, set[str]] = {}
             for item in stereo_rows:
                 grouped.setdefault(item["group_id"], set()).add(item["assigned_split"])
+            self.assertEqual(len(grouped), 1)
             self.assertTrue(all(len(splits) == 1 for splits in grouped.values()))
+
+    def test_declared_explicit_h_projection_matches_implicit_form(self):
+        explicit = qm9.canonicalize_identity_forms("C[C@]([H])(O)F")
+        implicit = qm9.canonicalize_identity_forms("C[C@H](O)F")
+        self.assertEqual(explicit, implicit)
 
 
 if __name__ == "__main__":

@@ -272,6 +272,17 @@ class HivMurckoDerivedSplitTests(unittest.TestCase):
             with self.assertRaisesRegex(hiv.HivSplitProtocolError, "requires RDKit"):
                 hiv.require_official_rdkit_version(hiv.OFFICIAL_SOURCE_BINDING)
 
+    def test_canonical_forms_use_shared_explicit_h_projection(self):
+        explicit = hiv.canonical_forms("C[C@]([H])(O)F")
+        implicit = hiv.canonical_forms("C[C@H](O)F")
+        self.assertIsNotNone(explicit)
+        self.assertEqual(explicit, implicit)
+
+        explicit_alkene = hiv.canonical_forms("[H]/C=C/F")
+        implicit_alkene = hiv.canonical_forms("C=CF")
+        self.assertIsNotNone(explicit_alkene)
+        self.assertEqual(explicit_alkene, implicit_alkene)
+
 
 if __name__ == "__main__":
     unittest.main()

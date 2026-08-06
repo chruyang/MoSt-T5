@@ -40,6 +40,8 @@ except ImportError as exc:  # pragma: no cover - only a broken runtime reaches t
         "build_kpgt_scaffold_manifests.py requires RDKit"
     ) from exc
 
+from most_t5_next.r1.overlap import shared_identity_normalization_v1 as identity_normalization
+
 
 OFFICIAL_SOURCE_PROVENANCE = "verified_official_kpgt_figshare"
 KPGT_REPOSITORY_URL = "https://github.com/lihan97/KPGT"
@@ -376,24 +378,15 @@ def _canonicalize_molecule(
     row_index: int,
     labels: Mapping[str, int | None],
 ) -> MoleculeFact:
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        raise KpgtManifestError(f"{task} row {row_index} has invalid SMILES: {smiles!r}")
-    parameters = Chem.RemoveHsParameters()
-    if not hasattr(parameters, "removeDefiningBondStereo"):
-        raise RuntimeError(
-            "installed RDKit lacks RemoveHsParameters.removeDefiningBondStereo"
-        )
-    parameters.removeDefiningBondStereo = True
-    normalized = Chem.RemoveHs(Chem.Mol(mol), parameters, sanitize=True)
-    Chem.SanitizeMol(normalized)
-    Chem.AssignStereochemistry(normalized, cleanIt=True, force=True)
-    isomeric = Chem.MolToSmiles(
-        normalized, canonical=True, isomericSmiles=True, kekuleSmiles=False
-    )
-    connectivity = Chem.MolToSmiles(
-        normalized, canonical=True, isomericSmiles=False, kekuleSmiles=False
-    )
+    try:
+        forms = identity_normalization.canonical_forms_from_smiles(smiles)
+    except identity_normalization.IdentityNormalizationError as exc:
+        raise KpgtManifestError(
+            f"{task} row {row_index} has invalid SMILES: {smiles!r}"
+        ) from exc
+    normalized = forms.molecule
+    isomeric = forms.strict_isomeric_smiles
+    connectivity = forms.connectivity_smiles
     achiral = MurckoScaffold.MurckoScaffoldSmiles(
         mol=normalized, includeChirality=False
     )

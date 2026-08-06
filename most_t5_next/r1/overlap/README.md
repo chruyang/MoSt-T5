@@ -55,11 +55,16 @@ group membership, not independent admission targets. Input file names,
 byte sizes, and SHA-256 values are recorded only as provenance observations;
 they never decide admission.
 
+Molecule grouping uses canonical non-isomeric connectivity after the shared
+identity contract's minimal explicit-H projection. Distinct stereochemical
+states remain distinct identities and instruction states, while every state
+of one connectivity is assigned to the same split.
+
 ```bash
 python -m most_t5_next.r1.overlap.build_qm9_identity_split \
   --train /path/to/revision/train.parquet \
   --validation /path/to/revision/validation.parquet \
-  --output-dir /path/to/new/qm9-clean-split-v1
+  --output-dir /path/to/new/qm9-connectivity-clean-split-v2
 ```
 
 ## Official KPGT scaffold membership
@@ -106,15 +111,18 @@ RDKit 2025.09.1 rejects seven organometallic rows and 1,116 rows in the released
 QM9 artifact, so that newer-version result is retained only as a version-drift
 diagnostic and is not mixed into the official membership. The result is
 deliberately named
-`HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v1`: it is a new published
+`HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v2`: it is a new published
 project membership, not an exact released 3D-MolT5, KPGT, or DeepChem split.
+Version 2 computes both molecule identities and the non-chiral Murcko scaffold
+from the same post-projection molecule returned by
+`shared_identity_normalization_v1.py`.
 
 ```bash
 python -m most_t5_next.r1.overlap.build_hiv_murcko_split \
   --source-csv /path/to/official/HIV.csv \
   --source-url https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/HIV.csv \
   --source-revision deepchem-HIV.csv-etag-9ad10c88f82f1dac7eb5c52b668c30a7 \
-  --output-dir /path/to/new/hiv-membership-v1
+  --output-dir /path/to/new/hiv-membership-v2
 ```
 
 `--source-sha256` may optionally record a caller-supplied observation; it is
@@ -129,9 +137,13 @@ validation/test connectivity identities for the protected union.
 `build_qm9_hiv_identity_collections_v1.py` projects the already-frozen QM9
 group split and HIV member split into the same
 `identity-collection-manifest/v1` interface used by KPGT and PCQM. It performs
-no chemistry, no resplitting, and no task filtering. QM9 instruction rows are
-deduplicated by frozen molecule `group_id`; HIV rows retain their frozen source
-member identity. Only validation and test collections are emitted.
+no chemistry, no resplitting, and no task filtering. Both upstream releases
+must declare the same executable identity-normalization contract used by PCQM.
+QM9 connectivity-group membership is preserved while one collection member is
+emitted per distinct stereochemical identity within the group; repeated
+instruction rows for the same stereochemical identity are not multiplied.
+HIV rows retain their frozen source-member identity. Only validation and test
+collections are emitted.
 
 ```bash
 python -m most_t5_next.r1.overlap.build_qm9_hiv_identity_collections_v1 \
@@ -145,3 +157,54 @@ python -m most_t5_next.r1.overlap.build_qm9_hiv_identity_collections_v1 \
 The adapter records source observations in its summary, while scientific
 membership remains defined by the two upstream split manifests and their
 semantic invariants.
+
+## Reported and connectivity-clean downstream views
+
+`derive_downstream_connectivity_clean_view_v1.py` preserves an imported
+reported train/validation/test protocol and derives a second, explicitly named
+view whose molecular connectivity groups are disjoint.  A connectivity is
+assigned once using the fixed priority `test > validation > train`.  Every
+occurrence and every molecule-text pair in the owning split is retained; lower
+priority occurrences are written to a disposition ledger with their reason.
+The reported inputs are never rewritten, and the test molecule and text-pair
+projections must remain unchanged.
+
+```bash
+python -m most_t5_next.r1.overlap.derive_downstream_connectivity_clean_view_v1 \
+  --train-manifest /path/to/reported/train/collection_manifest.json \
+  --validation-manifest /path/to/reported/validation/collection_manifest.json \
+  --test-manifest /path/to/reported/test/collection_manifest.json \
+  --output-dir /path/to/connectivity-clean-view
+```
+
+This is a molecule-identity split guarantee.  It does not imply that distinct
+molecules cannot share identical or normalized text; text-overlap statistics
+remain a separate reported diagnostic.  Paper tables should retain the
+published/reported split result and label the connectivity-clean result as a
+second protocol rather than replacing the former silently.
+
+## Controlled Motif Editing evaluation membership
+
+`build_controlled_editing_memberships_v1.py` freezes the 200 published
+MoleculeSTM editing molecules as a sealed compatibility test and samples a
+separate 400-molecule development membership from the complete ZINC250K source
+at the same repository revision.  The ZINC population is canonicalized under
+RDKit 2024.03.5 using the shared explicit-hydrogen projection, deduplicated by
+canonical non-isomeric connectivity, and filtered against test connectivity
+before the deterministic seed-42 selection.  The test set is used only for
+this leakage exclusion; it is not used for model or hyperparameter selection.
+
+```bash
+python -m most_t5_next.r1.overlap.build_controlled_editing_memberships_v1 \
+  --sealed-test-smiles /path/to/single_multi_property_SMILES.txt \
+  --zinc-csv /path/to/250k_rndm_zinc_drugs_clean_3.csv \
+  --source-revision ff2de71fa6bb0533d5e740db6d88a0442a0d38e8 \
+  --output-dir /path/to/controlled-editing-membership-v2
+```
+
+Only validation/test molecule membership and the twelve published prompt IDs
+are frozen here.  No supervised train set, molecule-prompt Cartesian product,
+or text-pair identity is invented.  The `n=400` binomial half-width recorded in
+the summary is a membership-size precision heuristic for a future
+one-result-per-molecule Bernoulli metric, not a power guarantee for multi-prompt
+or stratified analyses.

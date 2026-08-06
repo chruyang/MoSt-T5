@@ -60,20 +60,22 @@
 | [40_P1_clean_membership_topology_and_ce_canary_checkpoint_20260806.md](40_P1_clean_membership_topology_and_ce_canary_checkpoint_20260806.md) | 当前三任务 clean-v0、32+256 拓扑回放、标准 T5 CE 的 4090 前后向与保存重载，以及进入真实 batch canary 的证据边界 | topology/CE canary PASS |
 | [41_scientific_design_comparison_dataset_and_execution_plan_20260806.md](41_scientific_design_comparison_dataset_and_execution_plan_20260806.md) | 以 atom/motif × no-3D/3D 四格收束架构比较，裁定 P1/P2 目标、motif/anchor/vocab、下游组合、数据准备与三天资源计划 | 当前科学执行总计划 |
 | [42_R1_downstream_protocol_and_four_grid_research_checkpoint_20260807.md](42_R1_downstream_protocol_and_four_grid_research_checkpoint_20260807.md) | 冻结 3D-MolT5 优先的下游来源、QM9/KPGT/HIV split 工具、level-aware 四格接口、科研 estimand 与 CPU/GPU 门禁 | 高 CPU 放行；GPU PF-CANARY 暂未放行 |
+| [43_R1_official_downstream_materialization_and_protected_scope_checkpoint_20260807.md](43_R1_official_downstream_materialization_and_protected_scope_checkpoint_20260807.md) | 正式下游成员、PCQM identity、保护并集与 paper-scope 差集的物化过程和边界 | 历史执行检查点；最终身份口径见文档 44 |
+| [44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md](44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md) | 统一化学入口、QM9/HIV v2、final-v4 保护集、motif parseability、E3FP duplicate-shell 与模型 I/O 的上卡前审计 | 当前 CPU→GPU 交接依据 |
 
 ## 当前结论摘要
 
-MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列、原子级多层 E3FP 三维特征和自然语言统一到 T5 编解码框架中，并通过局部 atom-to-motif 融合、三维掩码重建和多任务训练学习跨模态表示。
+MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列、原子级多层 E3FP 三维特征和自然语言统一到 T5 编解码框架中，并拟通过局部 atom-to-motif 融合、三维掩码重建和多任务训练学习跨模态表示。
 
-但当前 checkpoint 还不能直接作为“思路已经有效”的可靠证据。最高优先级问题是 motif 词表 ID 不稳定：源码使用 `set` 收集词表后直接 `list(set)` 注册 token。远端两个独立进程的实测顺序不同；训练脚本又没有固定 `PYTHONHASHSEED`，且最终模型未保存 tokenizer。这可能导致多卡各 rank 的 motif ID 语义不同，也可能导致 Phase 1 到 Phase 2 的旧 embedding 对不上原 motif。
+早期 checkpoint 的最高优先级问题曾是 legacy tokenizer 通过 `list(set)` 注册 motif，导致 ID 不稳定；R0 已形成确定性 tokenizer 合同，因此它是已定位并有替代路径的历史问题，不再是当前首要阻断项。当前优先级依次是：按显式 duplicate inheritance 重算 E3FP、实现可逆 graph+ports motif codec、从同一 SDF Mol 生产真实 A/M records，以及闭合 Trainer 与 checkpoint/resume。完成这些输入合同前，不能把旧 checkpoint 当作“整体思路已有效”的证据，也不启动 10% 或全量训练。
 
-因此后续工作应先完成 tokenizer 可复现性和 checkpoint 可信度审计，再投入大规模训练或继续比较模型性能。
+2026-08-05 历史更新：R0 已形成确定性 tokenizer 合同；R1 已把 3,378,606 条 PCQM4Mv2 train-3D 记录制成 136 个不可变分片，并在 CPU 源端和 4090 区域持久化副本分别通过 v3 独立审计。该结果只放行 production release 与跨区传输，不等于 tokenizer 已绑定或 P1 可训练；当时计划的 CE+MSE 门禁已被后续四格路线取代，现行 GPU-G0 先做 CE-only，不引入 MSE/teacher。
 
-2026-08-05 更新：R0 已形成确定性 tokenizer 合同；R1 已把 3,378,606 条 PCQM4Mv2 train-3D 记录制成 136 个不可变分片，并在 CPU 源端和 4090 区域持久化副本分别通过 v3 独立审计。该结果只放行 production release 与跨区传输，不等于 tokenizer 已绑定或 P1 可训练；语义复算策略、overlap proof、tokenizer freeze/binding 和 4090 Dataset/Collator/CE+MSE 梯度门禁仍为下一阶段硬条件。
-
-2026-08-06 更新：当前三任务的 `provisional clean-v0` 已派生；冻结 32+256 样本的 topology replay 为 288/288 PASS；标准 T5 CE 已在单张 RTX 4090 上完成前向、反向、一次 AdamW step 和 schema-v2 保存重载验证。下一门是把真实 production record 接入 BoundRecord/tokenizer/collator/model canary，而不是直接启动正式 P1。
+2026-08-06 更新：当时三任务的 `provisional clean-v0` 已派生；冻结 32+256 样本的 topology replay 为 288/288 PASS；标准 T5 CE 已在单张 RTX 4090 上完成 synthetic/contract canary 的前向、反向、一次 AdamW step 和 schema-v2 保存重载验证。这不是尚未放行的 production A0/A1/M0/M1 canary；下一门仍是接入真实 production records。
 
 2026-08-06 科学路线更新：架构选择收束为 A0/A1/M0/M1（atom/motif × no-3D/3D）四格；C1-G、interface residual、legacy MSE 和多种 fusion 不再进入当前主比较。QM9 split、Motif Editing 协议、MoleculeNet 四任务版本及 P2 重线性化先于 full P1 冻结；GPU 只在 production 四格 canary 就绪后启用。
+
+2026-08-07 CPU 审计更新：QM9/HIV 已统一到与 PCQM 相同的显式氢身份投影，QM9 改为 connectivity-group split；最终 paper-scope 保护差集保留 3,360,067 / 3,365,577 个 PCQM members。paper-scope-v2 的全量 motif 审计足以否定删除 anchor 的 pure identity，但 final-v4 的词频与 K 尚待重物化；10% PCQM E3FP 审计已裁决 duplicate shell 使用显式 inheritance，但 payload 尚未重算。下一步是实现 graph+ports codec、同源 A/M producer，并先在 128 条 paired records 上生成 inherited E3FP；完成前不启动 10% 或全量 GPU 训练。
 
 ## 维护约定
 
