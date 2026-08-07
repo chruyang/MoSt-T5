@@ -2,23 +2,26 @@
 
 The wrapper deliberately fixes the scientific difference outside T5 itself:
 
-* every cell owns the same base-T5 module and the same
-  :class:`SharedE3FPCarrierFusion` parameter schema;
+* every cell owns the same base-T5 module and the same selected geometry
+  fusion parameter schema;
 * A0/M0 call the ordinary ``input_ids`` + ``labels`` T5 CE forward and reject
   geometry tensors;
 * A1/M1 obtain the base input embeddings, apply the one shared additive E3FP
   carrier path, and call that same T5 with ``inputs_embeds`` and ``labels``.
 
 No auxiliary loss, teacher, gate, concatenation, or condition-specific
-geometry module is implemented here.  The fixed ``condition_id`` is ordinary
-wrapper metadata rather than a model parameter, so all four cells have
-identical state-dict keys when constructed from identical T5 backbones.
+geometry module is implemented here.  P1 defaults to
+:class:`SharedE3FPCarrierFusion`; a later mechanism screen may inject one
+common factory for every matched cell.  The fixed ``condition_id`` is ordinary
+wrapper metadata rather than a model parameter, so matched cells have
+identical state-dict keys when constructed from identical T5 backbones and the
+same factory.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Callable
 
 import torch
 from torch import Tensor, nn
@@ -49,9 +52,14 @@ class FourGridT5Wrapper(nn.Module):
         ``condition_id`` field, it is checked and removed before the T5 call.
     num_e3fp_embeddings:
         Number of valid E3FP IDs at each of the four ordered shell levels.
-        Four level-specific tables (plus one padding row per table) are
-        constructed for every cell, including A0/M0, to preserve the complete
-        parameter and checkpoint schema.
+        The default P1 fusion constructs four level-specific tables.  A
+        supplied common ``geometry_fusion_factory`` may define a different
+        matched experiment schema; A0/M0 still instantiate it so paired cells
+        retain identical parameters and checkpoints.
+    geometry_fusion_factory:
+        Optional common constructor accepting ``num_e3fp_embeddings`` and
+        ``hidden_size``.  It changes only the fusion module; condition-specific
+        factories are outside this wrapper's comparison contract.
 
     The explicit forward signature lets Hugging Face Trainer retain the three
     geometry columns when ``remove_unused_columns=True``.  Returned objects
@@ -64,6 +72,7 @@ class FourGridT5Wrapper(nn.Module):
         *,
         condition_id: str,
         num_e3fp_embeddings: int,
+        geometry_fusion_factory: Callable[..., nn.Module] | None = None,
     ) -> None:
         super().__init__()
         if not isinstance(t5_model, nn.Module):
@@ -120,11 +129,21 @@ class FourGridT5Wrapper(nn.Module):
         self.t5 = t5_model
         self.condition_id = spec.condition_id
         self.condition_spec: P1ConditionSpec = spec
-        # This module name and shape are intentionally present in every cell.
-        self.geometry_fusion = SharedE3FPCarrierFusion(
+        # The selected module name and shape are intentionally present in every
+        # matched cell, including the geometry-disabled control.
+        fusion_factory = (
+            SharedE3FPCarrierFusion
+            if geometry_fusion_factory is None
+            else geometry_fusion_factory
+        )
+        self.geometry_fusion = fusion_factory(
             num_e3fp_embeddings=num_e3fp_embeddings,
             hidden_size=hidden_size,
         )
+        if not isinstance(self.geometry_fusion, nn.Module):
+            raise FourGridT5WrapperError(
+                "geometry_fusion_factory must return a torch.nn.Module"
+            )
 
     @staticmethod
     def _get_embedding_module(

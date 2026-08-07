@@ -65,6 +65,7 @@
 | [45_P0_paired_records_union_init_and_gpu_canary_closure_20260807.md](45_P0_paired_records_union_init_and_gpu_canary_closure_20260807.md) | 官方参考代码裁决、同源 paired-128、graph+ports/SELFIES codec、union-init 与真实 RTX 4090 四格前后向 | 当前 P0 最终状态；GPU canary PASS |
 | [46_P1_paired128_learnability_and_PF1_optimizer_decision_20260807.md](46_P1_paired128_learnability_and_PF1_optimizer_decision_20260807.md) | paired-128 四格真实 AdamW 短程学习、两档 LR 稳定性事实与 PF-1 优化协议裁决 | learnability PASS；进入 PF-1 数据/训练准备 |
 | [47_PF1_frozen_subset_training_protocol_and_resource_gate_20260807.md](47_PF1_frozen_subset_training_protocol_and_resource_gate_20260807.md) | 33,600-member PF-1、codec 边界修复、SELFIES 2.2.0、run3 paired release、完整 collator gate、union-init 与共享训练协议 | 数据/init PASS；进入单卡 GPU PF-1 |
+| [48_PF2_reference_fusion_and_geometry_required_CE_plan_20260807.md](48_PF2_reference_fusion_and_geometry_required_CE_plan_20260807.md) | PF-1 失败机制、3D-MolT5 参考融合、条件式 T3MI 与 teacher/MSE 后置裁决 | PF-2A 代码/smoke PASS；待配对 M0-R/M1-F |
 
 ## 当前结论摘要
 
