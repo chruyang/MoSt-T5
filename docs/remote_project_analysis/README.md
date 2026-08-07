@@ -86,6 +86,8 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 
 2026-08-07 PF-1 数据门更新：修复 AtomSELFIES/GraphPorts 的真实边界案例并正式固定 SELFIES 2.2.0 后，原冻结 cohort 的严格 codec 扫描为 33,600/33,600 PASS；run3 paired release 为 train/dev 30,240/3,360、零拒绝、完整 LMDB replay 通过，union tokenizer 为 34,666 tokens。A0/A1/M0/M1 的 full-collator gate 各遍历 4,200 batches，配对 CE 与 A1/M1 geometry mapping 全部一致；对应 union-init 已通过。最长 M1 序列资源探针在任何 optimizer update 前将单卡实现冻结为 microbatch 32 × accumulation 4，effective batch 仍为 128。当前进入 GPU PF-1；这些结果仍是 sample-bound 数据流证据，不是完整预训练或架构效果结论。详见文档 47。
 
+2026-08-07 PF-1 训练更新：单卡已在约 67 分钟内完成四格各 1,000 updates。A1/M1 到 step 500 后 aligned-vs-shuffled E3FP ΔNLL 已接近 0，最终分别不优于 A0/M0；当前 raw E3FP sum + direct residual addition + CE-only 几何融合被 PF-1 淘汰，但该结果不否定 E3FP 或 motif 级 3D。训练后资源复测证明同一长度域的 M1 batch 64 连续 10 步可运行，下一阶段单卡候选为 64×2；ordered prefetch 实测约提速 5.7%，并已实现 4×4090 各跑一格及严格合并。详见文档 47。
+
 ## 维护约定
 
 - 远端实际训练资产是运行证据的权威来源。

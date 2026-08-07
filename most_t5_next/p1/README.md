@@ -11,6 +11,13 @@ full LMDB replay, and a four-condition full-collator gate with zero rejects.
 It is admitted only to the sample-bound PF-1 failure screen; it is not the
 final full-pretraining vocabulary or evidence of model superiority.
 
+The first completed 1,000-update four-grid screen found that the current raw
+E3FP level-sum/direct-addition path loses aligned-vs-shuffled geometry
+sensitivity by step 500 and does not improve A1 over A0 or M1 over M0.  That
+specific CE-only fusion is therefore not admitted to PF-10 unchanged.  The
+result is a fusion/objective failure-screen outcome, not evidence against
+E3FP or motif-level 3D in general; see protocol document 47 for the metrics.
+
 The authoritative current protocol and evidence are recorded in
 `docs/remote_project_analysis/47_PF1_frozen_subset_training_protocol_and_resource_gate_20260807.md`.
 The sections below retain the contract's development history and model

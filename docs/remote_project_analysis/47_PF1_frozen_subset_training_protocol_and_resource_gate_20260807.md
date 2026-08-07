@@ -1,6 +1,6 @@
 # PF-1 子集、训练协议与资源切换门槛（2026-08-07）
 
-状态：**PF-1 的 33,600 条 paired release、全量 collator 门禁与 34,666-token union-init 均已通过；当前尚未产生 PF-1 optimizer update 或训练结果。RTX 4090 最长序列资源探针已将单卡实现冻结为 microbatch 32 × accumulation 4，下一步直接运行 A0/A1/M0/M1。**
+状态：**PF-1 的 33,600 条 paired release、全量 collator 门禁、34,666-token union-init 与单卡四格训练均已完成。A0/A1/M0/M1 各完成 1,000 次 optimizer update，8 个 checkpoint 与最终 manifest 齐全。当前 raw E3FP sum + direct residual addition + CE-only 的几何路径没有通过 PF-1：A1/M1 到 step 500 后几何打乱 ΔNLL 已接近 0，且最终表现不优于各自无 3D 对照；该融合不能原样进入 PF-10。**
 
 ## 1. PF-1 的角色
 
@@ -137,9 +137,11 @@ AtomSELFIES 的 19 条 SELFIES 2.1.1 边界样本跨 18 个 connectivity groups�
 | effective batch | 128 members |
 | 单卡实现 | microbatch 32 × gradient accumulation 4 |
 
-该调整不改变 effective batch、成员顺序、更新次数或四格公平性。它是在任何 optimizer update 或训练结果产生前，由同一 RTX 4090 上的最长 M1 序列资源探针确定；当前 runner 仍是单卡顺序执行，增加可见 GPU 数量不会自动并行。
+该调整不改变 effective batch、成员顺序、更新次数或四格公平性。它是在任何 optimizer update 或训练结果产生前，由同一 RTX 4090 上的最长 M1 序列资源探针确定；本次正式 PF-1 结果必须按实际使用的 32×4 解释。
 
-最长 M1 输入上的实测资源为：microbatch 8/16/32 的峰值显存分别约 6.15/8.62/13.40 GB，对应每个 effective-batch update 的纯前后向投影约 1.285/0.709/0.507 秒。microbatch 32 仍为 24GB 4090 留出约 10GB 余量，同时 train `30,240` 与 dev `3,360` 均可整除 32，因此采用 32×4，而不继续冒险扩大到更大的 microbatch。
+正式运行结束后的压力复测使用 run3 中 64 条互不重复的最长 M1 记录（最大 input/target width `137/78`）。batch 48 与 64 均完成真实 BF16 forward/backward/AdamWScale step；batch 64 连续 10 步仍通过，峰值 allocated/reserved 为 `22.852/24.505 GB`，设备总量 `25.251 GB`。因此对同一长度支持域，下一轮单卡可使用 64×2；若 PF-10 出现更长序列，先按其真实最大宽度复测，而不是机械沿用 PF-1 数字。
+
+runner 已加入深度 2 的有序预取。真实 M1 50-update 对照中，同步/预取墙钟为 `43.72/41.35 s`，吞吐为 `146.4/154.8 members/s`，提速约 `1.057×`，最终 cursor 完全一致。该结果说明预取值得保留，但 CPU 解码不是主要瓶颈；刻意占满 16 核没有依据。commit `716e597` 还加入了 `--condition-id` 单格运行与四格 manifest 合并器，4×4090 可各跑一格；顺序单进程仍不会因增加可见 GPU 而自动并行。
 
 1,000 updates 对约 30,240 个 train members 相当于约 4.23 次成员曝光。PF-1 不 early-stop，也不因某格收敛较慢而延长。train corruption 随 epoch/position 确定性变化；dev corruption 使用固定独立 seed。
 
@@ -162,28 +164,60 @@ A1/M1 在最终 step 增加 aligned E3FP 与完整 dev 内、相同 model-atom-c
 - 跨粒度优劣只由同一个冻结 3D-sensitive dev probe 和后续下游任务判断；
 - PF-1 只做淘汰，晋级方向还需 PF-10 和 full 证据确认。
 
-## 9. 当前资源结论与下一步
+## 9. PF-1 实际训练结果与架构裁决
+
+正式单卡运行使用 commit `3a74251`、microbatch 32×accumulation 4，约 67 分钟完成四格；状态为 `pass`。以下只做同粒度配对比较，A 与 M 的绝对 NLL 不横向排名：
+
+| 条件 | step-0 NLL | step-1000 NLL | step-1000 accuracy | 最终 shuffled-minus-aligned ΔNLL | wall s | peak GiB |
+|---|---:|---:|---:|---:|---:|---:|
+| A0 | 92.5890 | 0.6381 | 0.8333 | — | 946.59 | 6.61 |
+| A1 | 76.9112 | 0.6756 | 0.8308 | +0.000195 | 992.68 | 6.75 |
+| M0 | 67.8328 | 1.4231 | 0.6775 | — | 955.88 | 12.30 |
+| M1 | 68.1980 | 1.9156 | 0.5772 | +0.000848 | 1044.79 | 12.43 |
+
+四格均能学习，但所有 1,000 个 update 都触发 global-norm clip 1.0。A1 相比 A0 的最终 NLL/accuracy 没有改善；M1 相比 M0 明显退化。更关键的是几何敏感性轨迹：
+
+| 条件 | step 0 ΔNLL | step 500 ΔNLL | step 1000 ΔNLL |
+|---|---:|---:|---:|
+| A1 | +0.222940 | −0.001435 | +0.000195 |
+| M1 | +0.230766 | +0.003304 | +0.000848 |
+
+这说明几何入口并非从一开始就完全无效，而是训练很快学会忽略它。参数审计进一步排除了“几何表被压到零”：四张表初始 RMS 约 `1.0002`，step 1000 后仍约 `1.0002`；A1/M1 几何参数相对初始 RMS 仅改变约 `0.88%/0.61%`。当前实现把四层默认尺度约 1 的 embedding 直接求和后加到 T5 carrier，没有方差校准、归一化或受控残差；标准 CE 也没有显式约束表示持续保留 3D。两者是下一轮优先验证的机制解释，而不是已经被单次实验分别证明的唯一因果原因。因此 PF-1 的科学裁决是：
+
+1. 保留 A0/M0 作为有效基线；不按其绝对 NLL判断 atom 与 motif 谁更优；
+2. 淘汰当前 A1/M1 的 **raw sum + direct add + CE-only** 组合，而不是据此否定 E3FP 或 motif 级 3D；
+3. 下一轮先设计一个统一、文献支撑的受控几何残差与明确几何学习信号，再做同样的 A0/A1、M0/M1 配对屏；
+4. 在新几何方案通过 sensitivity gate 前，不扩大到 PF-10 或完整预训练。
+
+## 10. 当前资源结论与下一步
 
 paired-128 的 AdamW learnability 实测在 batch 8 时峰值约 5.1–5.3 GB，单步约 0.11–0.15 秒；正式 PF-1 数据与 collator 已在 CPU 端闭合。与 **34,666-token** run3 tokenizer 精确绑定的新 union-init 已在 nmb1 生成并通过验证：base/union vocab 为 `32,100/34,666`，model seed `20260807`，geometry seed `20260808`，E3FP embedding count `4,096`。paired-128 的旧 32,499-token union-init 未被复用。
 
-执行顺序冻结为：
+本轮执行结果为：
 
 1. **已完成：**从同一 `google-t5-v1_1-base` snapshot 建立 34,666-token union-init，复制原 32,100 行权重，按预注册 seed 初始化新增行，并保存 tokenizer/model 绑定合同；
-2. 为 A1/M1 以独立冻结 seed 初始化同一 geometry fusion，先做一次 save/load 与 one-batch BF16 forward/backward；
-3. 使用当前 runner 在 1×4090 上依次运行 A0/A1/M0/M1 的共享 1,000-update 协议；本轮不临时加入尚未实现的多进程单格调度；
-4. 输出 step 0/250/500/750/1000 配对 dev 指标和 geometry perturbation 诊断，再决定 PF-10 晋级者，不在结果出现后扩展架构矩阵。
+2. **已完成：**A1/M1 使用同一 geometry fusion 初始化并通过 save/load 与 BF16 数据流门；
+3. **已完成：**1×4090 顺序完成 A0/A1/M0/M1 的共享 1,000-update 协议；
+4. **已完成：**step 0/250/500/750/1000 指标及 step 0/500/1000 geometry perturbation 轨迹均已获得；当前几何融合被 PF-1 淘汰；
+5. **下一步：**在文献与机制诊断基础上冻结新的受控几何残差/学习信号，只重跑最小必要配对格；代码已支持 4×4090 各跑一格并合并结果。
 
-当前不需要 8×4090；一张 4090 足以完成 PF-1。未来若为 PF-10 或最终预训练实现经过验证的按格/按 seed 并行调度，再考虑 4–8 张卡；不能仅通过增加可见 GPU 就假定当前单卡 runner 会自动并行。
+当前不需要 8×4090。单卡已证明 PF-1 可在约一小时内完成；若下一轮需要同时比较四格，4×4090 的单格进程接口已经实现，8 卡没有额外收益。最终预训练再单独实现/验证数据并行，不能把四格并行与单模型 DDP 混为一谈。
 
 最后必须保持证据边界：PF-1 是约 1% 样本上的 failure screen。run3 的零拒绝证明这批数据可训练，未来 PF-1 loss/probe 只能淘汰明显失败条件；二者都不能推出 3,119,717 条第一阶段预训练已可行、motif/3D 已有效或最终词表已冻结。最终方法主张仍需 PF-10 尺度确认、胜出架构的完整预训练以及冻结下游任务结果。
 
-## 10. 机器可读证据锚点
+## 11. 机器可读证据锚点
 
 - 1,024 基准：`tmp/pf1_materialization_benchmark_1024_westc_w16_run2_manifest.json`
 - AtomSELFIES 分类：`tmp/pf1_atom_selfies_reject_taxonomy_v1.md` 与 `tmp/pf1_atom_selfies_reject_diagnosis_v1.jsonl`
 - SELFIES 2.2.0 全 cohort 扫描：`tmp/selfies220_full33600_formal_summary_v2.json`
 - run3 manifest：`tmp/pf1_paired_release_run3_manifest.json`
 - full-collator gate：`tmp/pf1_full_collator_gate_v1_run3.json`
+- PF-1 训练 manifest：`tmp/pf1_training_manifest_run3_mb32_3a74251.json`
+- M1 batch 48/64：`tmp/pf1_gpu_batch_ceiling_m1_48_64_20260807_v2.json`
+- M1 batch 64 连续 10 步：`tmp/pf1_gpu_batch_ceiling_m1_b64_repeat10_20260807.json`
+- ordered prefetch 实测：`tmp/pf1_gpu_prefetch_benchmark_m1_50updates_20260807.json`
+- geometry sensitivity 轨迹：`tmp/pf1_geometry_sensitivity_trajectory_20260807.json`
+- geometry 参数轨迹：`tmp/pf1_geometry_parameter_trajectory_20260807.json`
 - 远端正式 release：`/root/autodl-tmp/most-t5-r1-pf1/pf1-paired-release-v1-run3`
 - 本地便携归档：`dataset/pf1-run3-transfer-20260807.tar.gz`
 - nmb1 持久化副本：`/autodl-fs/data/most-t5-r1/pf1-run3-transfer-20260807.tar.gz`
