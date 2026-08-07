@@ -14,6 +14,8 @@ training.
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, replace
 import gc
@@ -22,6 +24,7 @@ import math
 import os
 from pathlib import Path
 import statistics
+import threading
 import time
 from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 
@@ -67,6 +70,7 @@ CHECKPOINT_UPDATES = (500, 1000)
 GEOMETRY_PERTURBATION_UPDATE = 1000
 GEOMETRY_DERANGEMENT_SEED = 20260809
 GEOMETRY_PAIRED_FORWARD_SEED = 20260810
+TRAIN_PREFETCH_DEPTH = 2
 
 
 class PF1TrainingError(RuntimeError):
@@ -80,6 +84,14 @@ class PF1GeometryDerangementPlan:
     eligible_indices: tuple[int, ...]
     donor_indices: tuple[int, ...]
     excluded_singleton_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _PreparedTrainUpdate:
+    """One ordered optimizer update and its exact consumed-data cursor."""
+
+    batches: tuple[P1ConditionBatch, ...]
+    committed_cursor_state: dict[str, int]
 
 
 class PF1RecordReader(Protocol):
@@ -217,6 +229,122 @@ class _TrainCursor:
         self._iterator = iterator
 
 
+def _prepare_train_update(
+    *,
+    cursor: _TrainCursor,
+    gradient_accumulation_steps: int,
+    condition_id: str,
+    tokenizer_runtime: Any,
+    data_lock: Any | None,
+) -> _PreparedTrainUpdate:
+    """Decode and collate one update without changing its ordered semantics.
+
+    The cursor is owned by the single producer while prefetch is active.  Its
+    state is copied into the payload only after every micro-batch in the update
+    has been consumed.  The training thread therefore checkpoints this
+    committed state rather than the producer's potentially prefetched state.
+    """
+
+    guard = data_lock if data_lock is not None else nullcontext()
+    with guard:
+        batches: list[P1ConditionBatch] = []
+        for _ in range(gradient_accumulation_steps):
+            epoch, records = cursor.next()
+            batches.append(
+                collate_pf1_condition(
+                    records,
+                    condition_id=condition_id,
+                    tokenizer_runtime=tokenizer_runtime,
+                    seed=TRAIN_CORRUPTION_SEED,
+                    epoch=epoch,
+                )
+            )
+        return _PreparedTrainUpdate(
+            batches=tuple(batches),
+            committed_cursor_state=dict(cursor.state_dict()),
+        )
+
+
+class _OrderedTrainPrefetch:
+    """Bounded single-producer prefetch with strict in-order delivery."""
+
+    def __init__(
+        self,
+        *,
+        cursor: _TrainCursor,
+        total_updates: int,
+        depth: int,
+        gradient_accumulation_steps: int,
+        condition_id: str,
+        tokenizer_runtime: Any,
+        data_lock: Any,
+    ) -> None:
+        if total_updates < 0 or depth <= 0:
+            raise PF1TrainingError("invalid PF-1 train prefetch bounds")
+        self._cursor = cursor
+        self._total_updates = total_updates
+        self._depth = depth
+        self._gradient_accumulation_steps = gradient_accumulation_steps
+        self._condition_id = condition_id
+        self._tokenizer_runtime = tokenizer_runtime
+        self._data_lock = data_lock
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="pf1-ordered-prefetch",
+        )
+        self._futures: deque[Future[_PreparedTrainUpdate]] = deque()
+        self._submitted = 0
+        self._delivered = 0
+        self.closed = False
+        for _ in range(min(depth, total_updates)):
+            self._submit_one()
+
+    def _submit_one(self) -> None:
+        self._futures.append(
+            self._executor.submit(
+                _prepare_train_update,
+                cursor=self._cursor,
+                gradient_accumulation_steps=self._gradient_accumulation_steps,
+                condition_id=self._condition_id,
+                tokenizer_runtime=self._tokenizer_runtime,
+                data_lock=self._data_lock,
+            )
+        )
+        self._submitted += 1
+
+    def __iter__(self) -> "_OrderedTrainPrefetch":
+        return self
+
+    def __next__(self) -> _PreparedTrainUpdate:
+        if self._delivered >= self._total_updates:
+            raise StopIteration
+        future = self._futures.popleft()
+        try:
+            prepared = future.result()
+        except BaseException:
+            self.close()
+            raise
+        self._delivered += 1
+        if self._submitted < self._total_updates:
+            self._submit_one()
+        return prepared
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        for future in self._futures:
+            future.cancel()
+        self._executor.shutdown(wait=True)
+        self._futures.clear()
+
+    def __enter__(self) -> "_OrderedTrainPrefetch":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+
 def _autocast(torch_module: Any, use_bf16: bool) -> Any:
     if not use_bf16:
         return nullcontext()
@@ -239,6 +367,7 @@ def evaluate_pf1_condition(
     use_bf16: bool,
     protocol: PF1OptimizationProtocol,
     torch_module: Any,
+    data_lock: Any | None = None,
 ) -> dict[str, object]:
     """Evaluate token-weighted NLL and teacher-forced masked-token accuracy."""
 
@@ -248,36 +377,42 @@ def evaluate_pf1_condition(
     target_tokens = 0
     encoder_tokens = 0
     members = 0
-    with torch_module.no_grad():
-        for records in reader.iter_dev(batch_size=protocol.micro_batch_size):
-            rows = tuple(records)
-            if not rows:
-                continue
-            batch = collate_pf1_condition(
-                rows,
-                condition_id=condition_id,
-                tokenizer_runtime=tokenizer_runtime,
-                seed=DEV_CORRUPTION_SEED,
-                epoch=DEV_CORRUPTION_EPOCH,
-            )
-            encoded = to_four_grid_batch_encoding(batch, device=device)
-            forward_inputs = select_four_grid_forward_inputs(encoded)
-            with _autocast(torch_module, use_bf16):
-                outputs = model(
-                    **forward_inputs,
-                    use_cache=False,
-                    return_dict=True,
+    # The same concrete reader and tokenizer runtime are shared with the
+    # producer.  Evaluation takes the data lock for its complete fixed replay,
+    # preventing an LMDB/tokenizer call from overlapping across the two
+    # threads; GPU execution can still overlap with already prepared batches.
+    guard = data_lock if data_lock is not None else nullcontext()
+    with guard:
+        with torch_module.no_grad():
+            for records in reader.iter_dev(batch_size=protocol.micro_batch_size):
+                rows = tuple(records)
+                if not rows:
+                    continue
+                batch = collate_pf1_condition(
+                    rows,
+                    condition_id=condition_id,
+                    tokenizer_runtime=tokenizer_runtime,
+                    seed=DEV_CORRUPTION_SEED,
+                    epoch=DEV_CORRUPTION_EPOCH,
                 )
-            loss_value = _finite_loss(torch_module, outputs.loss, condition_id)
-            labels = forward_inputs["labels"]
-            active = labels.ne(-100)
-            count = int(active.sum().item())
-            predictions = outputs.logits.argmax(dim=-1)
-            correct_tokens += int((predictions.eq(labels) & active).sum().item())
-            target_tokens += count
-            nll_sum += loss_value * count
-            encoder_tokens += sum(batch.ce_batch.input_lengths)
-            members += len(rows)
+                encoded = to_four_grid_batch_encoding(batch, device=device)
+                forward_inputs = select_four_grid_forward_inputs(encoded)
+                with _autocast(torch_module, use_bf16):
+                    outputs = model(
+                        **forward_inputs,
+                        use_cache=False,
+                        return_dict=True,
+                    )
+                loss_value = _finite_loss(torch_module, outputs.loss, condition_id)
+                labels = forward_inputs["labels"]
+                active = labels.ne(-100)
+                count = int(active.sum().item())
+                predictions = outputs.logits.argmax(dim=-1)
+                correct_tokens += int((predictions.eq(labels) & active).sum().item())
+                target_tokens += count
+                nll_sum += loss_value * count
+                encoder_tokens += sum(batch.ce_batch.input_lengths)
+                members += len(rows)
     if target_tokens == 0:
         raise PF1TrainingError("PF-1 dev reader produced no supervised tokens")
     return {
@@ -732,11 +867,15 @@ def _train_one_condition(
     torch_module: Any,
     checkpoint_writer: Callable[..., str],
     resume_checkpoint: Path | None = None,
+    train_prefetch_depth: int = TRAIN_PREFETCH_DEPTH,
 ) -> dict[str, object]:
     model.to(device)
     optimizer = build_pf1_optimizer(model, protocol)
     scheduler = PF1LearningRateSchedule(optimizer, protocol)
     cursor = _TrainCursor(reader, protocol.micro_batch_size)
+    if train_prefetch_depth < 0:
+        raise PF1TrainingError("PF-1 train prefetch depth must be nonnegative")
+    data_lock = threading.Lock() if train_prefetch_depth else None
     evaluations: list[dict[str, object]] = []
     checkpoints: list[str] = []
     preclip_norms: list[float] = []
@@ -807,109 +946,138 @@ def _train_one_condition(
     model.train()
     started = time.perf_counter()
 
-    for update in range(completed_updates + 1, protocol.total_updates + 1):
-        batches: list[P1ConditionBatch] = []
-        for _ in range(protocol.gradient_accumulation_steps):
-            epoch, records = cursor.next()
-            batches.append(
-                collate_pf1_condition(
-                    records,
-                    condition_id=condition_id,
-                    tokenizer_runtime=tokenizer_runtime,
-                    seed=TRAIN_CORRUPTION_SEED,
-                    epoch=epoch,
-                )
-            )
-
-        update_target_tokens = sum(
-            sum(batch.ce_batch.target_lengths) for batch in batches
+    remaining_updates = protocol.total_updates - completed_updates
+    committed_cursor_state = dict(cursor.state_dict())
+    if train_prefetch_depth:
+        update_stream_context: Any = _OrderedTrainPrefetch(
+            cursor=cursor,
+            total_updates=remaining_updates,
+            depth=train_prefetch_depth,
+            gradient_accumulation_steps=protocol.gradient_accumulation_steps,
+            condition_id=condition_id,
+            tokenizer_runtime=tokenizer_runtime,
+            data_lock=data_lock,
         )
-        optimizer.zero_grad(set_to_none=True)
-        learning_rate = float(optimizer.param_groups[0]["lr"])
-        for batch in batches:
-            batch_target_tokens = sum(batch.ce_batch.target_lengths)
-            encoded = to_four_grid_batch_encoding(batch, device=device)
-            forward_inputs = select_four_grid_forward_inputs(encoded)
-            with _autocast(torch_module, use_bf16):
-                outputs = model(
-                    **forward_inputs,
-                    use_cache=False,
-                    return_dict=True,
-                )
-                loss = outputs.loss
-            loss_value = _finite_loss(torch_module, loss, condition_id)
-            (loss * (batch_target_tokens / update_target_tokens)).backward()
-            train_nll_sum += loss_value * batch_target_tokens
-            target_tokens += batch_target_tokens
-            encoder_tokens += sum(batch.ce_batch.input_lengths)
-            members_seen += len(batch.ce_batch.record_ids)
-
-        preclip_norm = clip_pf1_gradients(model, protocol)
-        if not math.isfinite(preclip_norm):
-            raise PF1TrainingError(condition_id + " produced a non-finite gradient norm")
-        preclip_norms.append(preclip_norm)
-        clipped_updates += int(preclip_norm > protocol.gradient_clip_norm)
-        optimizer.step()
-        scheduler.step()
-
-        if update in EVALUATION_UPDATES:
-            model.train(False)
-            evaluations.append(
-                {
-                    "update": update,
-                    **evaluate_pf1_condition(
-                        model,
-                        condition_id=condition_id,
-                        reader=reader,
-                        tokenizer_runtime=tokenizer_runtime,
-                        device=device,
-                        use_bf16=use_bf16,
-                        protocol=protocol,
-                        torch_module=torch_module,
-                    ),
-                }
-            )
-            if (
-                update == GEOMETRY_PERTURBATION_UPDATE
-                and condition_id in ("A1", "M1")
-            ):
-                geometry_sensitivity = evaluate_pf1_geometry_sensitivity(
-                    model,
-                    condition_id=condition_id,
-                    reader=reader,
-                    tokenizer_runtime=tokenizer_runtime,
-                    device=device,
-                    use_bf16=use_bf16,
-                    protocol=protocol,
-                    torch_module=torch_module,
-                )
-            model.train()
-        if update in CHECKPOINT_UPDATES:
-            checkpoint_path = checkpoint_writer(
-                output_dir=output_dir,
+    else:
+        synchronous_stream = (
+            _prepare_train_update(
+                cursor=cursor,
+                gradient_accumulation_steps=protocol.gradient_accumulation_steps,
                 condition_id=condition_id,
-                update=update,
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                cursor_state=cursor.state_dict(),
-                torch_module=torch_module,
-                training_progress={
-                    "evaluations": evaluations,
-                    "checkpoints": checkpoints,
-                    "preclip_norms": preclip_norms,
-                    "clipped_updates": clipped_updates,
-                    "train_nll_sum": train_nll_sum,
-                    "encoder_tokens": encoder_tokens,
-                    "target_tokens": target_tokens,
-                    "members_seen": members_seen,
-                    "wall_seconds": elapsed_before_resume
-                    + (time.perf_counter() - started),
-                    "last_update_learning_rate": learning_rate,
-                    "geometry_sensitivity": geometry_sensitivity,
-                },
+                tokenizer_runtime=tokenizer_runtime,
+                data_lock=None,
             )
-            checkpoints.append(checkpoint_path)
+            for _ in range(remaining_updates)
+        )
+        update_stream_context = nullcontext(synchronous_stream)
+
+    with update_stream_context as update_stream:
+        for update, prepared in zip(
+            range(completed_updates + 1, protocol.total_updates + 1),
+            update_stream,
+        ):
+            batches = prepared.batches
+
+            update_target_tokens = sum(
+                sum(batch.ce_batch.target_lengths) for batch in batches
+            )
+            optimizer.zero_grad(set_to_none=True)
+            learning_rate = float(optimizer.param_groups[0]["lr"])
+            for batch in batches:
+                batch_target_tokens = sum(batch.ce_batch.target_lengths)
+                encoded = to_four_grid_batch_encoding(batch, device=device)
+                forward_inputs = select_four_grid_forward_inputs(encoded)
+                with _autocast(torch_module, use_bf16):
+                    outputs = model(
+                        **forward_inputs,
+                        use_cache=False,
+                        return_dict=True,
+                    )
+                    loss = outputs.loss
+                loss_value = _finite_loss(torch_module, loss, condition_id)
+                (loss * (batch_target_tokens / update_target_tokens)).backward()
+                train_nll_sum += loss_value * batch_target_tokens
+                target_tokens += batch_target_tokens
+                encoder_tokens += sum(batch.ce_batch.input_lengths)
+                members_seen += len(batch.ce_batch.record_ids)
+
+            preclip_norm = clip_pf1_gradients(model, protocol)
+            if not math.isfinite(preclip_norm):
+                raise PF1TrainingError(
+                    condition_id + " produced a non-finite gradient norm"
+                )
+            preclip_norms.append(preclip_norm)
+            clipped_updates += int(preclip_norm > protocol.gradient_clip_norm)
+            optimizer.step()
+            scheduler.step()
+            # Commit only after the optimizer update has succeeded.  The
+            # producer may already be decoding later updates, but those reads
+            # must never move a checkpoint's resume boundary.
+            committed_cursor_state = dict(prepared.committed_cursor_state)
+
+            if update in EVALUATION_UPDATES:
+                model.train(False)
+                evaluations.append(
+                    {
+                        "update": update,
+                        **evaluate_pf1_condition(
+                            model,
+                            condition_id=condition_id,
+                            reader=reader,
+                            tokenizer_runtime=tokenizer_runtime,
+                            device=device,
+                            use_bf16=use_bf16,
+                            protocol=protocol,
+                            torch_module=torch_module,
+                            data_lock=data_lock,
+                        ),
+                    }
+                )
+                if (
+                    update == GEOMETRY_PERTURBATION_UPDATE
+                    and condition_id in ("A1", "M1")
+                ):
+                    geometry_guard = (
+                        data_lock if data_lock is not None else nullcontext()
+                    )
+                    with geometry_guard:
+                        geometry_sensitivity = evaluate_pf1_geometry_sensitivity(
+                            model,
+                            condition_id=condition_id,
+                            reader=reader,
+                            tokenizer_runtime=tokenizer_runtime,
+                            device=device,
+                            use_bf16=use_bf16,
+                            protocol=protocol,
+                            torch_module=torch_module,
+                        )
+                model.train()
+            if update in CHECKPOINT_UPDATES:
+                checkpoint_path = checkpoint_writer(
+                    output_dir=output_dir,
+                    condition_id=condition_id,
+                    update=update,
+                    model=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    cursor_state=committed_cursor_state,
+                    torch_module=torch_module,
+                    training_progress={
+                        "evaluations": evaluations,
+                        "checkpoints": checkpoints,
+                        "preclip_norms": preclip_norms,
+                        "clipped_updates": clipped_updates,
+                        "train_nll_sum": train_nll_sum,
+                        "encoder_tokens": encoder_tokens,
+                        "target_tokens": target_tokens,
+                        "members_seen": members_seen,
+                        "wall_seconds": elapsed_before_resume
+                        + (time.perf_counter() - started),
+                        "last_update_learning_rate": learning_rate,
+                        "geometry_sensitivity": geometry_sensitivity,
+                    },
+                )
+                checkpoints.append(checkpoint_path)
     elapsed = elapsed_before_resume + (time.perf_counter() - started)
     peak_memory = (
         int(torch_module.cuda.max_memory_allocated(device))
@@ -919,6 +1087,7 @@ def _train_one_condition(
     return {
         "condition": condition_id,
         "optimizer_updates": protocol.total_updates,
+        "train_prefetch_depth": train_prefetch_depth,
         "members_seen": members_seen,
         "train_encoder_nonpadding_tokens": encoder_tokens,
         "train_supervised_target_tokens": target_tokens,
@@ -933,7 +1102,7 @@ def _train_one_condition(
         "peak_gpu_memory_bytes": peak_memory,
         "evaluations": evaluations,
         "checkpoints": checkpoints,
-        "final_data_cursor": cursor.state_dict(),
+        "final_data_cursor": committed_cursor_state,
         "last_update_learning_rate": learning_rate,
         "final_e3fp_shuffle_diagnostic": geometry_sensitivity,
     }

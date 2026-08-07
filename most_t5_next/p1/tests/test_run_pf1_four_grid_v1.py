@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -742,6 +743,182 @@ class PF1RunnerTest(unittest.TestCase):
         self.assertEqual(restored.state_dict(), saved)
         self.assertEqual(restored.next(), uninterrupted.next())
         self.assertEqual(restored.state_dict(), uninterrupted.state_dict())
+
+    def test_ordered_prefetch_matches_synchronous_batch_and_parameter_trajectory(
+        self,
+    ) -> None:
+        class DropoutModel(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.config = SimpleNamespace(vocab_size=19)
+                self.dropout = torch.nn.Dropout(p=0.35)
+                self.projection = torch.nn.Linear(1, 2)
+
+            def forward(self, *, values, labels, use_cache, return_dict):
+                del use_cache, return_dict
+                logits = self.projection(self.dropout(values)).unsqueeze(1)
+                loss = torch.nn.functional.cross_entropy(
+                    logits.reshape(-1, 2), labels.reshape(-1)
+                )
+                return SimpleNamespace(loss=loss, logits=logits)
+
+        protocol = PF1OptimizationProtocol(
+            total_updates=6,
+            warmup_updates=1,
+            micro_batch_size=2,
+            gradient_accumulation_steps=2,
+        )
+
+        def run_trajectory(prefetch_depth: int):
+            reader = FakeReader()
+            collate_trace: list[tuple[int, tuple[int, ...]]] = []
+
+            def collate(records, *, condition_id, tokenizer_runtime, seed, epoch):
+                del condition_id, tokenizer_runtime, seed
+                values = tuple(int(value) for value in records)
+                collate_trace.append((epoch, values))
+                return FakeConditionBatch(
+                    condition_id="A0",
+                    ce_batch=FakeCEBatch(
+                        record_ids=tuple(str(value) for value in values),
+                        input_lengths=(1,) * len(values),
+                        target_lengths=(1,) * len(values),
+                        values=values,
+                    ),
+                )
+
+            def encode(batch, *, device):
+                return {
+                    "values": torch.tensor(
+                        [[float(value % 3)] for value in batch.ce_batch.values],
+                        dtype=torch.float32,
+                        device=device,
+                    ),
+                    "labels": torch.tensor(
+                        [[value % 2] for value in batch.ce_batch.values],
+                        dtype=torch.long,
+                        device=device,
+                    ),
+                }
+
+            torch.manual_seed(7183)
+            model = DropoutModel()
+            with ExitStack() as stack:
+                stack.enter_context(
+                    patch.object(subject, "collate_pf1_condition", side_effect=collate)
+                )
+                stack.enter_context(
+                    patch.object(
+                        subject, "to_four_grid_batch_encoding", side_effect=encode
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        subject,
+                        "select_four_grid_forward_inputs",
+                        side_effect=lambda encoded: encoded,
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        subject,
+                        "evaluate_pf1_condition",
+                        return_value={"members": reader.dev_member_count},
+                    )
+                )
+                stack.enter_context(patch.object(subject, "EVALUATION_UPDATES", ()))
+                stack.enter_context(patch.object(subject, "CHECKPOINT_UPDATES", ()))
+                report = subject._train_one_condition(
+                    condition_id="A0",
+                    reader=reader,
+                    tokenizer_runtime=object(),
+                    model=model,
+                    device=torch.device("cpu"),
+                    use_bf16=False,
+                    output_dir=Path("unused"),
+                    protocol=protocol,
+                    torch_module=torch,
+                    checkpoint_writer=lambda **_kwargs: "unused",
+                    train_prefetch_depth=prefetch_depth,
+                )
+            return (
+                collate_trace,
+                {
+                    name: value.detach().clone()
+                    for name, value in model.state_dict().items()
+                },
+                torch.random.get_rng_state().clone(),
+                report["final_data_cursor"],
+                report["train_token_weighted_nll"],
+            )
+
+        synchronous = run_trajectory(0)
+        prefetched = run_trajectory(2)
+        self.assertEqual(prefetched[0], synchronous[0])
+        self.assertEqual(prefetched[3:], synchronous[3:])
+        self.assertTrue(torch.equal(prefetched[2], synchronous[2]))
+        self.assertEqual(set(prefetched[1]), set(synchronous[1]))
+        for name, expected in synchronous[1].items():
+            self.assertTrue(torch.equal(prefetched[1][name], expected), name)
+
+    def test_step_500_uses_committed_prefetch_cursor_for_exact_resume(self) -> None:
+        reader = FakeReader()
+        producer_cursor = subject._TrainCursor(reader, 2)
+
+        def collate(records, **_kwargs):
+            return tuple(records)
+
+        with patch.object(subject, "collate_pf1_condition", side_effect=collate):
+            with subject._OrderedTrainPrefetch(
+                cursor=producer_cursor,
+                total_updates=502,
+                depth=2,
+                gradient_accumulation_steps=1,
+                condition_id="A0",
+                tokenizer_runtime=object(),
+                data_lock=threading.Lock(),
+            ) as prefetched:
+                prepared = None
+                for _ in range(500):
+                    prepared = next(prefetched)
+                self.assertIsNotNone(prepared)
+                committed_step_500 = dict(prepared.committed_cursor_state)
+
+        reference = subject._TrainCursor(reader, 2)
+        for _ in range(500):
+            reference.next()
+        restored = subject._TrainCursor(reader, 2)
+        restored.load_state_dict(committed_step_500)
+        self.assertEqual(restored.state_dict(), reference.state_dict())
+        self.assertEqual(restored.next(), reference.next())
+
+    def test_prefetch_propagates_producer_error_and_joins_thread(self) -> None:
+        def fail_collate(_records, **_kwargs):
+            raise RuntimeError("expected producer failure")
+
+        cursor = subject._TrainCursor(FakeReader(), 2)
+        with patch.object(
+            subject, "collate_pf1_condition", side_effect=fail_collate
+        ):
+            prefetch = subject._OrderedTrainPrefetch(
+                cursor=cursor,
+                total_updates=3,
+                depth=2,
+                gradient_accumulation_steps=1,
+                condition_id="A0",
+                tokenizer_runtime=object(),
+                data_lock=threading.Lock(),
+            )
+            with self.assertRaisesRegex(RuntimeError, "expected producer failure"):
+                with prefetch:
+                    next(prefetch)
+        self.assertTrue(prefetch.closed)
+        self.assertFalse(
+            any(
+                thread.name.startswith("pf1-ordered-prefetch")
+                for thread in threading.enumerate()
+            )
+        )
 
     def test_step_500_checkpoint_restores_the_exact_next_update(self) -> None:
         protocol = PF1OptimizationProtocol(
