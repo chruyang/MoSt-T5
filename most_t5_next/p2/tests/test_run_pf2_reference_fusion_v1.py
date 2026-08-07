@@ -69,9 +69,10 @@ class PF2ReferenceFusionRunnerTest(unittest.TestCase):
                     fromlist=["load_verified_reference_four_grid_wrapper"],
                 ).load_verified_reference_four_grid_wrapper,
             )
-            self.assertEqual(PF2_PROTOCOL.micro_batch_size, 64)
+            self.assertEqual(PF2_PROTOCOL.micro_batch_size, 63)
             self.assertEqual(PF2_PROTOCOL.gradient_accumulation_steps, 2)
-            self.assertEqual(PF2_PROTOCOL.effective_batch_size, 128)
+            self.assertEqual(PF2_PROTOCOL.effective_batch_size, 126)
+            self.assertEqual(30240 % PF2_PROTOCOL.micro_batch_size, 0)
             self.assertIs(captured["protocol"], PF2_PROTOCOL)
             self.assertIs(captured["checkpoint_writer"], write_pf2_checkpoint)
             saved = json.loads(

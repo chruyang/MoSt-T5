@@ -108,14 +108,14 @@ PF-2A 只运行 motif 两格：
 | M0-R | 无 | reference wrapper 中几何支路不执行 | 原 15% motif identity CE |
 | M1-F | inherited E3FP | 上述 F-Ref | 与 M0-R 完全相同的 CE |
 
-重新运行 M0-R，而不是仅拿旧 M0 作主对照，原因是 PF-2A 将统一采用资源探针已通过的 `microbatch 64 × accumulation 2`。effective batch 仍为 128，数据、mask、更新数和 LR schedule 不变；但 dropout 的 forward 分组不同，因此旧 `32×4` M0 只作支持性历史基线。
+重新运行 M0-R，而不是仅拿旧 M0 作主对照。batch-64 资源探针已经通过，但 `30,240` 个 train members 不能被 64 整除，正式 preflight 在任何 optimizer update 前按合同拒绝。为避免引入跨 epoch 拼 batch 或丢弃尾批的补丁，PF-2A 统一采用 `microbatch 63 × accumulation 2 = effective batch 126`：63 低于已通过的显存上限，并且 `30,240/63=480` 恰好整除。数据、mask、更新数和 LR schedule 不变；但 effective batch 与 dropout forward 分组均不同于旧 `32×4` PF-1，因此旧 M0 只作支持性历史基线。
 
 冻结合同：
 
 - run3 同一 33,600-member release，train/dev `30,240/3,360`；
 - 同一 tokenizer、union-init、model/fusion seed；
 - 同一成员顺序、corruption、1,000 updates、AdamWScale、warmup/cosine、clip 1.0；
-- M0-R/M1-F 均使用 `64×2=128`；
+- M0-R/M1-F 均使用 `63×2=126`；
 - 同一 step 0/250/500/750/1,000 dev；
 - M1-F 的 matched-vs-same-atom-count shuffled E3FP 仍覆盖预注册的 `3,359/3,360` dev 子域；
 - 不加入 gate、adapter、MSE、teacher 或第二个任务。
@@ -192,7 +192,7 @@ PF-2A 使用独立 `most_t5_next/p2` 模块，PF-1 legacy fusion 和旧 checkpoi
 - PF-2A 单格 runner，强制只接受 M0 或 M1；
 - step 500/1,000 checkpoint 额外绑定完整 PF-2 fusion 与 optimization contract；
 - 配对 merger 先核对 M0/M1 数据、初始化、训练曝光与 final-dev 合同，再自动应用三项 practical gate；单格 `status=pass` 只表示训练完成；
-- M0/M1 统一 `64×2`；
+- M0/M1 统一 `63×2`，并在启动前证明 train membership 可整除；
 - nmb1 完整 P1+P2 CPU 回归 `134/134 PASS`；
 - 真实 run3 首批 32 条 M1 BF16 forward/backward/AdamWScale step PASS；
 - smoke loss `70.8554`，preclip norm `7,670.93`，fusion gradient finite/nonzero；

@@ -4,8 +4,9 @@
 This is intentionally a thin specialization of the frozen PF-1 training
 engine.  Data order, corruption, optimizer, effective batch, update budget,
 evaluation, resume, and checkpoint behavior remain unchanged.  Both matched
-motif cells use the previously probed 64 x 2 realization of effective batch
-128; their only architectural difference is the geometry path.
+motif cells use a 63 x 2 realization that both stays below the probed batch-64
+ceiling and exactly divides 30,240 train members; their only architectural
+difference is the geometry path.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ PF2_MANIFEST_NAME = "pf2_reference_fusion_manifest.json"
 PF2_CHECKPOINT_CONTRACT_NAME = "pf2_reference_fusion_contract.json"
 PF2_PROTOCOL = replace(
     FROZEN_PF1_PROTOCOL,
-    micro_batch_size=64,
+    micro_batch_size=63,
     gradient_accumulation_steps=2,
 )
 FUSION_CONTRACT = {

@@ -19,7 +19,7 @@ def _manifest(condition: str, *, nll: float, accuracy: float, delta=None):
         "status": "pass",
         "fusion_contract": FUSION_CONTRACT,
         "data": {"members": 10},
-        "optimization": {"micro_batch_size": 64, "accumulation": 2},
+        "optimization": {"micro_batch_size": 63, "accumulation": 2},
         "precision": "bf16_autocast",
         "evaluation_updates": [0, 1000],
         "checkpoint_updates": [500, 1000],
