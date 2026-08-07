@@ -1,8 +1,25 @@
-# P1 hybrid codec / BoundRecord candidate
+# P1 paired molecular training boundary
 
-This directory is isolated from the historical training tree.  The current
-implementation supports only deterministic synthetic fixtures.  It proves the
-indexing skeleton needed before a tokenizer-bound release:
+## Current production status (2026-08-07)
+
+This directory remains isolated from the historical training tree, but it is
+no longer limited to synthetic fixtures.  The production AtomSELFIES and
+GraphPorts codecs now feed one paired A/M wire record, a frozen union
+tokenizer, the shared A0/A1/M0/M1 wrapper, and the PF-1 reader/training loop.
+The frozen 33,600-member PF-1 run3 release completed strict codec generation,
+full LMDB replay, and a four-condition full-collator gate with zero rejects.
+It is admitted only to the sample-bound PF-1 failure screen; it is not the
+final full-pretraining vocabulary or evidence of model superiority.
+
+The authoritative current protocol and evidence are recorded in
+`docs/remote_project_analysis/47_PF1_frozen_subset_training_protocol_and_resource_gate_20260807.md`.
+The sections below retain the contract's development history and model
+boundaries that remain relevant.
+
+## Historical contract skeleton
+
+The first implementation supported deterministic synthetic fixtures and
+proved the indexing skeleton needed before a tokenizer-bound release:
 
 - macro and forced-fallback surfaces decode to one logical identity digest;
 - attachment slot positions remain in identity while molecule-local edge IDs
@@ -12,15 +29,16 @@ indexing skeleton needed before a tokenizer-bound release:
 - connection, atom partition, E3FP shape, token table and digest mismatches fail
   closed.
 
-It does **not** implement a chemistry-aware fallback grammar, production token
-IDs, C1-R, C3, or P1 training admission.  Full chemical graph round-trip and
-release binding remain later gates.
+At that stage it did **not** implement a chemistry-aware fallback grammar,
+production token IDs, C1-R, C3, or P1 training admission.  The chemistry-aware
+GraphPorts fallback, strict graph round-trip and PF-1 release binding have
+since closed the relevant PF-1 gates; C1-R and C3 remain outside this screen.
 
 The production-side boundary is now separate from that synthetic fixture.
 `experiment_grid.py` freezes the A0/A1/M0/M1 two-factor configuration and one
 shared model-facing contract: standard T5 receives only `input_ids`,
 `attention_mask`, and `labels`; geometry-enabled cells receive an additional
-explicit atom-E3FP-to-carrier sidecar through a future wrapper.  A1 uses one
+explicit atom-E3FP-to-carrier sidecar through the shared wrapper.  A1 uses one
 atom per atom/SELFIES carrier, while M1 maps all atoms of a logical motif to
 the same carrier so the wrapper can apply one invariant scatter mean.
 
@@ -31,13 +49,13 @@ hash-bound to the tokenizer contract/snapshot named by each record.  It
 supports M0 and M1, preserves arbitrary explicit
 connection-token index sets during whole-motif corruption, and guarantees that
 M0/M1 share the exact same CE batch while only M1 exposes E3FP.  It does not
-pretend that the synthetic fallback codec is chemistry-aware.  The remaining
-producer gate is production geometry/topology -> frozen hybrid tokenizer ->
-that vNext record.  A logical-motif record is rejected rather than silently
-reinterpreted as an atom baseline.
+reinterpret the historical synthetic fallback as chemistry-aware.  The
+production geometry/topology -> frozen union tokenizer -> vNext record gate is
+now closed by the paired release builder.  A logical-motif record is rejected
+rather than silently reinterpreted as an atom baseline.
 
 `atom_production_bridge.py` closes the corresponding **runtime contract** for
-A0/A1 without fabricating the missing chemistry producer.  Its immutable
+A0/A1.  Its immutable
 `ProductionAtomSelfiesRecord` binds the raw SELFIES audit string and token IDs
 to the same frozen union-tokenizer contract/snapshot used by the comparison,
 declares one complete identity span and one unique carrier token per atom, and
@@ -51,10 +69,11 @@ active atom per carrier.
 This atom carrier design is the narrow baseline motivated by 3D-MolT5's
 SELFIES/E3FP alignment, but the implementation is deliberately more explicit:
 it never infers atom alignment from token position, and A1 uses the same
-`SharedE3FPCarrierFusion` module and parameters as M1.  The actual
-topology -> SELFIES -> frozen union-tokenizer producer is still a required
-pre-training gate.  Until it proves the text/ID/span/carrier mapping, these
-strict dataclasses and CPU fixtures are interface evidence, not data admission.
+`SharedE3FPCarrierFusion` module and parameters as M1.  The production
+topology -> SELFIES -> frozen union-tokenizer producer and its
+text/ID/span/carrier mapping are now exercised by the run3 release and full
+collator gate.  That admission remains limited to PF-1 rather than the final
+full pretraining corpus.
 
 The common geometry row axis is not inferred from a generic "heavy atom"
 heuristic.  The frozen PCQM geometry policy

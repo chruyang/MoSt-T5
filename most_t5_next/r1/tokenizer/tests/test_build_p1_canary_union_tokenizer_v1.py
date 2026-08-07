@@ -16,6 +16,7 @@ from most_t5_next.r1.tokenizer.build_p1_canary_union_tokenizer_v1 import (
     load_verified_canary_union_tokenizer,
 )
 from most_t5_next.r1.tokenizer.production_atom_selfies_codec_v1 import (
+    SELFIES_DISTRIBUTION_VERSION,
     SELFIES_SEPARATOR_TOKEN,
 )
 
@@ -199,7 +200,7 @@ def test_build_and_verified_reload_bind_macro_semantics_and_opaque_dot(
     built = build_canary_union_tokenizer(
         base_snapshot=base_snapshot,
         output_dir=output,
-        selfies_distribution_version="2.1.1",
+        selfies_distribution_version=SELFIES_DISTRIBUTION_VERSION,
         robust_selfies_symbols={"[O]", "[C]"},
         observed_selfies_symbols={".", "[C]"},
         motif_macro_registry=macro_registry(),
@@ -239,7 +240,7 @@ def test_macro_token_must_follow_deterministic_rank(
         build_canary_union_tokenizer(
             base_snapshot=base_snapshot,
             output_dir=tmp_path / "bad-rank",
-            selfies_distribution_version="2.1.1",
+            selfies_distribution_version=SELFIES_DISTRIBUTION_VERSION,
             robust_selfies_symbols={"[C]"},
             observed_selfies_symbols=set(),
             motif_macro_registry=[
@@ -257,7 +258,7 @@ def test_macro_identity_changes_contract_even_when_snapshot_tokens_match(
 ):
     common = {
         "base_snapshot": base_snapshot,
-        "selfies_distribution_version": "2.1.1",
+        "selfies_distribution_version": SELFIES_DISTRIBUTION_VERSION,
         "robust_selfies_symbols": {"[C]"},
         "observed_selfies_symbols": set(),
     }
@@ -291,7 +292,7 @@ def test_verified_loader_rejects_changed_snapshot(
     built = build_canary_union_tokenizer(
         base_snapshot=base_snapshot,
         output_dir=output,
-        selfies_distribution_version="2.1.1",
+        selfies_distribution_version=SELFIES_DISTRIBUTION_VERSION,
         robust_selfies_symbols={"[C]"},
         observed_selfies_symbols=set(),
         motif_macro_registry=[],
@@ -315,7 +316,7 @@ def test_failed_save_leaves_only_explicit_staging_path(
             build_canary_union_tokenizer(
                 base_snapshot=base_snapshot,
                 output_dir=output,
-                selfies_distribution_version="2.1.1",
+                selfies_distribution_version=SELFIES_DISTRIBUTION_VERSION,
                 robust_selfies_symbols={"[C]"},
                 observed_selfies_symbols=set(),
                 motif_macro_registry=[],

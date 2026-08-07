@@ -1,9 +1,11 @@
-"""Isolated P1 candidate interfaces.
+"""Production paired A/M contracts and the sample-bound PF-1 training path.
 
-The modules in this package are deliberately independent of the historical
-``dataset/``, ``model/`` and ``tokenization/`` trees.  The first candidate is
-only a synthetic, pre-training-inadmissible contract for a hybrid motif codec,
-a three-domain :class:`BoundRecord`, and CE-first whole-identity corruption.
+The modules remain independent of the historical ``dataset/``, ``model/`` and
+``tokenization/`` trees.  The package retains its synthetic contract fixtures
+and now also provides the production AtomSELFIES/GraphPorts, union-tokenizer,
+four-grid and PF-1 release boundaries.  Only an explicitly published release
+may enter its corresponding screen; this package alone does not admit the
+final full-pretraining corpus.
 """
 
 from .hybrid_codec import (

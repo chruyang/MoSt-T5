@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from importlib import metadata as importlib_metadata
 
 import pytest
 from rdkit import Chem
@@ -15,6 +16,8 @@ from most_t5_next.r1.tokenizer.production_atom_selfies_codec_v1 import (
     RING_ROLE,
     SEPARATOR_ROLE,
     SELFIES_SEPARATOR_TOKEN,
+    SELFIES_DISTRIBUTION_VERSION,
+    DEFAULT_SELFIES_220_CONSTRAINTS,
     AtomSelfiesAlignmentError,
     bind_atom_selfies_surface,
     discover_atom_selfies_surface,
@@ -24,6 +27,11 @@ from most_t5_next.r1.tokenizer.production_atom_selfies_codec_v1 import (
 
 
 SOURCE_TAG = "_test_source_atom_index"
+
+
+def test_pinned_selfies_220_runtime_and_default_constraints_are_exact() -> None:
+    assert importlib_metadata.version("selfies") == SELFIES_DISTRIBUTION_VERSION
+    assert dict(sf.get_semantic_constraints()) == DEFAULT_SELFIES_220_CONSTRAINTS
 
 
 class ExactUnionTokenizer:
@@ -189,6 +197,37 @@ def test_branch_and_ring_argument_symbols_remain_structure_not_atoms() -> None:
     assert ring.symbol_to_model_atom[ring_index : ring_index + 2] == (-1, -1)
 
 
+@pytest.mark.parametrize(
+    "smiles",
+    [
+        # PF-1 frozen-cohort ordinals 472552, 1693731 and 3263912.  SELFIES
+        # 2.2.0 represents the stereogenic ring closure with ``[-/Ring1]``;
+        # its following symbol is the ring-distance argument, not an atom.
+        "C1=C/NCCNCCNCCN/1",
+        "C1=C\\CCOCCCCCC/1",
+        "O=C1CCCCCCCCCCC/C(O)=N/1",
+    ],
+)
+def test_real_directional_ring_closure_is_structure_and_preserves_ez(
+    smiles: str,
+) -> None:
+    mol = _mol(smiles)
+    surface = discover_atom_selfies_surface(Chem, sf, mol)
+
+    ring_index = surface.selfies_symbols.index("[-/Ring1]")
+    assert surface.symbol_role[ring_index : ring_index + 2] == (
+        RING_ROLE,
+        RING_ROLE,
+    )
+    assert surface.symbol_to_model_atom[ring_index : ring_index + 2] == (-1, -1)
+    assert surface.canonical_isomeric_smiles == Chem.MolToSmiles(
+        mol,
+        canonical=True,
+        isomericSmiles=True,
+        kekuleSmiles=False,
+    )
+
+
 def test_atom_renumbering_maps_canonical_carriers_back_to_stable_source_atoms() -> None:
     original = _mol("F[C@H](Cl)Br")
     for source_index, atom in enumerate(original.GetAtoms()):
@@ -217,6 +256,84 @@ def test_atom_renumbering_maps_canonical_carriers_back_to_stable_source_atoms() 
     assert tuple(atom.GetIntProp(SOURCE_TAG) for atom in original.GetAtoms()) == tuple(
         range(original.GetNumAtoms())
     )
+
+
+def test_real_bridged_stereo_canonical_parse_boundary_is_idempotent_and_renumber_safe() -> None:
+    # Frozen PF-1 ordinal 2,250,716.  RDKit's first canonical serialization of
+    # this SDF-derived bridged stereoisomer is chemically exact but not textual
+    # fixed point: parsing it once selects an equivalent ring traversal with
+    # different local @/@@ marks.  The production boundary must normalize that
+    # parse transition and compose its atom permutation back to model rows.
+    mol_block = """
+     RDKit          3D
+
+ 14 15  0  0  0  0  0  0  0  0999 V2000
+    1.7493   -0.1646    0.7862 C   0  0  0  0  0  0  0  0  0  0  0  0
+    5.6806   -0.8255    2.4577 C   0  0  0  0  0  0  0  0  0  0  0  0
+    2.6020   -0.1935   -0.2391 C   0  0  0  0  0  0  0  0  0  0  0  0
+    5.1184    0.4076   -3.1249 C   0  0  0  0  0  0  0  0  0  0  0  0
+    5.2248    1.9528   -2.9029 C   0  0  0  0  0  0  0  0  0  0  0  0
+    7.0315    0.0685   -1.5593 C   0  0  0  0  0  0  0  0  0  0  0  0
+    7.1201    1.6116   -1.3121 C   0  0  0  0  0  0  0  0  0  0  0  0
+    3.3421    1.0053   -0.7727 C   0  0  0  0  0  0  0  0  0  0  0  0
+    5.5123   -0.1744   -1.7457 C   0  0  1  0  0  0  0  0  0  0  0  0
+    5.6459    2.0682   -1.4180 C   0  0  2  0  0  0  0  0  0  0  0  0
+    5.2714    0.6986    0.7074 C   0  0  0  0  0  0  0  0  0  0  0  0
+    4.8941    0.8670   -0.7625 C   0  0  1  0  0  0  0  0  0  0  0  0
+    5.3356    1.6129    1.5031 O   0  0  0  0  0  0  0  0  0  0  0  0
+    5.4568   -0.5950    1.0570 O   0  0  0  0  0  0  0  0  0  0  0  0
+  3  1  2  0
+  4  5  1  0
+  9  4  1  6
+ 10  5  1  6
+  6  7  1  0
+ 12  8  1  1
+  8  3  1  0
+  9  6  1  0
+  9 12  1  0
+ 10  7  1  0
+ 10 12  1  0
+ 11 14  1  0
+ 11 13  2  0
+ 12 11  1  0
+ 14  2  1  0
+M  END
+"""
+    original = Chem.MolFromMolBlock(mol_block, sanitize=True, removeHs=False)
+    assert original is not None
+    for source_index, atom in enumerate(original.GetAtoms()):
+        atom.SetIntProp(SOURCE_TAG, source_index)
+
+    first_text = Chem.MolToSmiles(
+        original, canonical=True, isomericSmiles=True, kekuleSmiles=False
+    )
+    reparsed = Chem.MolFromSmiles(first_text)
+    assert reparsed is not None
+    fixed_text = Chem.MolToSmiles(
+        reparsed, canonical=True, isomericSmiles=True, kekuleSmiles=False
+    )
+    assert first_text != fixed_text
+
+    first = discover_atom_selfies_surface(Chem, sf, original)
+    assert first.canonical_isomeric_smiles == fixed_text
+    assert sorted(first.canonical_position_to_model_atom) == list(
+        range(original.GetNumAtoms())
+    )
+
+    permutation = tuple(reversed(range(original.GetNumAtoms())))
+    renumbered = Chem.RenumberAtoms(original, permutation)
+    second = discover_atom_selfies_surface(Chem, sf, renumbered)
+
+    def source_sequence(mol: Chem.Mol, surface) -> tuple[int, ...]:
+        return tuple(
+            mol.GetAtomWithIdx(atom_id).GetIntProp(SOURCE_TAG)
+            for atom_id in surface.symbol_to_model_atom
+            if atom_id >= 0
+        )
+
+    assert second.canonical_isomeric_smiles == fixed_text
+    assert second.selfies == first.selfies
+    assert source_sequence(original, first) == source_sequence(renumbered, second)
 
 
 @pytest.mark.parametrize(
@@ -267,11 +384,29 @@ def test_rdkit_no_implicit_parser_state_is_not_treated_as_chemical_identity(
     )
 
 
+def test_explicit_h_parser_storage_is_not_treated_as_atom_identity() -> None:
+    # PCQM4Mv2 ordinal 1,874,895.  The source SDF silicon atom and the
+    # SELFIES-decoded ``[SiH2]`` atom both carry two total hydrogens, although
+    # RDKit stores them as implicit versus explicit parser metadata.
+    mol = _mol("ClC(Cl)[SiH2]c1ccccc1")
+    silicon = next(atom for atom in mol.GetAtoms() if atom.GetAtomicNum() == 14)
+    silicon.SetNumExplicitHs(0)
+    silicon.SetNoImplicit(False)
+    Chem.SanitizeMol(mol)
+
+    surface = discover_atom_selfies_surface(Chem, sf, mol)
+
+    assert surface.canonical_isomeric_smiles == "ClC(Cl)[SiH2]c1ccccc1"
+    assert len([atom for atom in surface.symbol_to_model_atom if atom >= 0]) == (
+        mol.GetNumAtoms()
+    )
+
+
 @pytest.mark.parametrize(
     "smiles",
     [
         # Real PCQM4Mv2 cases exercising nested-branch offsets and duplicate
-        # AttributionMap rows in SELFIES 2.1.1.
+        # AttributionMap rows in SELFIES 2.2.0.
         "O=C1N=C2C(=CC(F)=C[C@@H]2F)OC1=O",
         "COC(=O)[C@@H]1CS/C(=C/[C](C)C)[N]1",
         "Cc1cc(C)cc(O[P@](C)(=O)Cl)c1",
@@ -289,7 +424,7 @@ def test_decoder_attribution_selects_unique_atom_symbol_in_nested_branches(
 
 
 class AmbiguousDecoderSelfies:
-    """Delegate 2.1.1 except for one deliberately ambiguous branch atom."""
+    """Delegate 2.2.0 except for one deliberately ambiguous branch atom."""
 
     def __getattr__(self, name: str):
         return getattr(sf, name)

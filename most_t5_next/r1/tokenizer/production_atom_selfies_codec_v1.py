@@ -30,7 +30,7 @@ from typing import Any, Iterable
 from most_t5_next.p1.bound_record import Span
 
 
-SELFIES_DISTRIBUTION_VERSION = "2.1.1"
+SELFIES_DISTRIBUTION_VERSION = "2.2.0"
 MOLECULE_BEGIN = "<bom>"
 MOLECULE_END = "<eom>"
 SELFIES_SEPARATOR_TOKEN = "<MOST:A:DOT>"
@@ -44,9 +44,9 @@ ALLOWED_SYMBOL_ROLES = frozenset(
 )
 ALLOWED_TOKEN_ROLES = frozenset((*ALLOWED_SYMBOL_ROLES, BOUNDARY_ROLE))
 
-# ``selfies==2.1.1`` exposes ``__version__ == '2.1.0'`` in its wheel.  The
+# ``selfies==2.2.0`` exposes a stale module ``__version__`` in its wheel.  The
 # distribution metadata is therefore the authoritative version boundary.
-DEFAULT_SELFIES_211_CONSTRAINTS = {
+DEFAULT_SELFIES_220_CONSTRAINTS = {
     "H": 1,
     "F": 1,
     "Cl": 1,
@@ -62,19 +62,26 @@ DEFAULT_SELFIES_211_CONSTRAINTS = {
     "N+1": 4,
     "N-1": 2,
     "C": 4,
-    "C+1": 5,
+    "C+1": 3,
     "C-1": 3,
     "P": 5,
-    "P+1": 6,
-    "P-1": 4,
+    "P+1": 4,
+    "P-1": 6,
     "S": 6,
-    "S+1": 7,
+    "S+1": 5,
     "S-1": 5,
     "?": 8,
 }
 
-_BRANCH_SYMBOL_RE = re.compile(r"^\[(?:[-=#/\\])?Branch([123])\]$")
-_RING_SYMBOL_RE = re.compile(r"^\[(?:[-=#/\\])?Ring([123])\]$")
+# Match the pinned SELFIES 2.2.0 structure-symbol grammar, after the strict
+# decoder has already accepted the complete surface.  Branches use no bond
+# prefix or one of ``=``/``#``.  A stereogenic ring closure instead carries
+# the directional marks of both ring ends (for example ``[-/Ring1]``), so a
+# one-character bond-prefix pattern is not sufficient.
+_BRANCH_SYMBOL_RE = re.compile(r"^\[(?:[=#])?Branch([123])\]$")
+_RING_SYMBOL_RE = re.compile(
+    r"^\[(?:(?:[=#])|(?:-(?:[/\\])|[/\\](?:[-/\\])))?Ring([123])\]$"
+)
 _BRACKET_ATOM_RE = re.compile(r"^\[[^\[\]]+\]$")
 _ORGANIC_ATOM_TOKENS = frozenset(
     {"B", "C", "N", "O", "P", "S", "F", "Cl", "Br", "I", "b", "c", "n", "o", "p", "s"}
@@ -247,8 +254,23 @@ def _require_selfies_runtime(sf: Any) -> None:
         raise AtomSelfiesAlignmentError(
             "SELFIES_CONSTRAINTS_UNAVAILABLE", "selfies_runtime"
         ) from exc
-    if constraints != DEFAULT_SELFIES_211_CONSTRAINTS:
+    if constraints != DEFAULT_SELFIES_220_CONSTRAINTS:
         _reject("SELFIES_CONSTRAINTS_MISMATCH", "selfies_runtime")
+
+
+def _smiles_output_order(probe: Any, atom_count: int) -> tuple[int, ...]:
+    if not probe.HasProp("_smilesAtomOutputOrder"):
+        _reject("SMILES_OUTPUT_ORDER_MISSING", "canonical_smiles")
+    try:
+        raw_order = ast.literal_eval(probe.GetProp("_smilesAtomOutputOrder"))
+        order = tuple(int(value) for value in raw_order)
+    except (SyntaxError, ValueError, TypeError) as exc:
+        raise AtomSelfiesAlignmentError(
+            "SMILES_OUTPUT_ORDER_INVALID", "canonical_smiles"
+        ) from exc
+    if len(order) != atom_count or sorted(order) != list(range(atom_count)):
+        _reject("SMILES_OUTPUT_ORDER_INVALID", "canonical_smiles")
+    return order
 
 
 def _canonical_smiles_and_order(Chem: Any, projected_mol: Any) -> tuple[Any, str, tuple[int, ...]]:
@@ -279,16 +301,49 @@ def _canonical_smiles_and_order(Chem: Any, projected_mol: Any) -> tuple[Any, str
         raise AtomSelfiesAlignmentError("CANONICAL_SMILES_FAILED", "canonical_smiles") from exc
     if not isinstance(canonical, str) or not canonical:
         _reject("CANONICAL_SMILES_FAILED", "canonical_smiles")
-    if not probe.HasProp("_smilesAtomOutputOrder"):
-        _reject("SMILES_OUTPUT_ORDER_MISSING", "canonical_smiles")
+    first_order = _smiles_output_order(probe, atom_count)
+
+    # RDKit canonical SMILES is normally idempotent, but symmetric bridged
+    # stereocentres can select an equivalent traversal when an SDF-derived Mol
+    # is first serialized and then reparsed.  SELFIES necessarily crosses that
+    # parse boundary.  Normalize the text at the same boundary before encoding
+    # and compose both RDKit output permutations so atom carriers still point
+    # to the immutable projected-molecule row axis.
     try:
-        raw_order = ast.literal_eval(probe.GetProp("_smilesAtomOutputOrder"))
-        order = tuple(int(value) for value in raw_order)
-    except (SyntaxError, ValueError, TypeError) as exc:
-        raise AtomSelfiesAlignmentError("SMILES_OUTPUT_ORDER_INVALID", "canonical_smiles") from exc
-    if len(order) != atom_count or sorted(order) != list(range(atom_count)):
-        _reject("SMILES_OUTPUT_ORDER_INVALID", "canonical_smiles")
-    return probe, canonical, order
+        normalized_probe = Chem.MolFromSmiles(canonical)
+        if normalized_probe is None or int(normalized_probe.GetNumAtoms()) != atom_count:
+            _reject("CANONICAL_SMILES_REPARSE_FAILED", "canonical_smiles")
+        Chem.AssignStereochemistry(normalized_probe, cleanIt=True, force=True)
+        normalized_canonical = Chem.MolToSmiles(
+            normalized_probe,
+            canonical=True,
+            isomericSmiles=True,
+            kekuleSmiles=False,
+        )
+        normalized_order = _smiles_output_order(normalized_probe, atom_count)
+        canonical_order = tuple(first_order[index] for index in normalized_order)
+
+        fixed_point_probe = Chem.MolFromSmiles(normalized_canonical)
+        if fixed_point_probe is None:
+            _reject("CANONICAL_SMILES_REPARSE_FAILED", "canonical_smiles")
+        Chem.AssignStereochemistry(fixed_point_probe, cleanIt=True, force=True)
+        fixed_point = Chem.MolToSmiles(
+            fixed_point_probe,
+            canonical=True,
+            isomericSmiles=True,
+            kekuleSmiles=False,
+        )
+    except AtomSelfiesAlignmentError:
+        raise
+    except Exception as exc:
+        raise AtomSelfiesAlignmentError(
+            "CANONICAL_SMILES_REPARSE_FAILED", "canonical_smiles"
+        ) from exc
+    if not isinstance(normalized_canonical, str) or not normalized_canonical:
+        _reject("CANONICAL_SMILES_REPARSE_FAILED", "canonical_smiles")
+    if fixed_point != normalized_canonical:
+        _reject("CANONICAL_SMILES_NOT_IDEMPOTENT", "canonical_smiles")
+    return probe, normalized_canonical, canonical_order
 
 
 def _call_selfies(
@@ -364,7 +419,7 @@ def _attribution_atom_symbol_indices(
     decoded_smiles: str,
     decoder_attribution: tuple[Any, ...],
 ) -> tuple[int, ...]:
-    # SELFIES 2.1.1 decoder attribution indexes omit ``.`` separators and can
+    # SELFIES 2.2.0 decoder attribution indexes omit ``.`` separators and can
     # attribute branch/ring structure together with the atom-producing symbol.
     # Map that compressed domain back to the literal SELFIES surface, then
     # require exactly one chemically atom-producing symbol per decoded atom.
@@ -386,7 +441,7 @@ def _attribution_atom_symbol_indices(
         output_token = getattr(item, "token", None)
         if not _is_plain_int(output_index) or output_index < 0 or not isinstance(output_token, str) or not output_token:
             _reject("SELFIES_DECODER_ATTRIBUTION_MALFORMED", "attribution")
-        # Decoder attribution offsets omit inter-component dots in 2.1.1.
+        # Decoder attribution offsets omit inter-component dots in 2.2.0.
         # Locate output tokens monotonically in the actual decoded surface and
         # accept only the literal or dot-compressed end offset.
         actual_start = decoded_smiles.find(output_token, decoded_search_start)
@@ -492,7 +547,11 @@ def _atom_signature(atom: Any) -> tuple[Any, ...]:
         int(atom.GetFormalCharge()),
         int(atom.GetNumRadicalElectrons()),
         bool(atom.GetIsAromatic()),
-        int(atom.GetNumExplicitHs()),
+        # Explicit-vs-implicit H storage is an RDKit parser representation,
+        # not a chemical identity field.  For example, the source SDF form of
+        # silicon in ``ClC(Cl)[SiH2]c1ccccc1`` has zero explicit-H metadata,
+        # whereas parsing the strict SELFIES round-trip writes two explicit
+        # hydrogens; both have the same total hydrogen count and graph.
         int(atom.GetTotalNumHs(includeNeighbors=True)),
         cip,
     )

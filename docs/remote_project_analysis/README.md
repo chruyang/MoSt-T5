@@ -64,6 +64,7 @@
 | [44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md](44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md) | 统一化学入口、QM9/HIV v2、final-v4 保护集、motif parseability、E3FP duplicate-shell 与模型 I/O 的上卡前审计 | 历史 CPU→GPU 交接检查点 |
 | [45_P0_paired_records_union_init_and_gpu_canary_closure_20260807.md](45_P0_paired_records_union_init_and_gpu_canary_closure_20260807.md) | 官方参考代码裁决、同源 paired-128、graph+ports/SELFIES codec、union-init 与真实 RTX 4090 四格前后向 | 当前 P0 最终状态；GPU canary PASS |
 | [46_P1_paired128_learnability_and_PF1_optimizer_decision_20260807.md](46_P1_paired128_learnability_and_PF1_optimizer_decision_20260807.md) | paired-128 四格真实 AdamW 短程学习、两档 LR 稳定性事实与 PF-1 优化协议裁决 | learnability PASS；进入 PF-1 数据/训练准备 |
+| [47_PF1_frozen_subset_training_protocol_and_resource_gate_20260807.md](47_PF1_frozen_subset_training_protocol_and_resource_gate_20260807.md) | 33,600-member PF-1、codec 边界修复、SELFIES 2.2.0、run3 paired release、完整 collator gate 与共享训练协议 | 数据/collator PASS；待 34,666-token union-init 与 GPU PF-1 |
 
 ## 当前结论摘要
 
@@ -82,6 +83,8 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 2026-08-07 P0 收口更新：同一冻结样本上的 inherited-E3FP overlay、128 条 A/M paired records、32,499-token union tokenizer 与统一 T5/wrapper 初始化均已完成；真实 RTX 4090 上 A0/A1/M0/M1 的 BF16 forward/backward 全部通过，loss 与梯度 finite，峰值显存约 2.26–2.34 GB。该结果只证明数据流和可运行性，不构成 motif/3D 效果证据；下一步见文档 45。
 
 2026-08-07 learnability 更新：四格在同一冻结 8 条 minibatch 上分别完成 20 次真实 AdamW 更新，两档固定 LR 下均能降低自身 loss；`5e-4` 时 M1 较早达到最小值后反弹，故 PF-1 将改用四格共享的 AdamWScale、warmup、cosine 与 gradient clipping，而不是为 M1 单独调参。详见文档 46。
+
+2026-08-07 PF-1 数据门更新：修复 AtomSELFIES/GraphPorts 的真实边界案例并正式固定 SELFIES 2.2.0 后，原冻结 cohort 的严格 codec 扫描为 33,600/33,600 PASS；run3 paired release 为 train/dev 30,240/3,360、零拒绝、完整 LMDB replay 通过，union tokenizer 为 34,666 tokens。A0/A1/M0/M1 的 full-collator gate 各遍历 4,200 batches，配对 CE 与 A1/M1 geometry mapping 全部一致。当前进入新 union-init 与 GPU PF-1；这些结果仍是 sample-bound 数据流证据，不是完整预训练或架构效果结论。详见文档 47。
 
 ## 维护约定
 

@@ -223,15 +223,16 @@ class _BuiltMotif:
 class _InternalBondStereo:
     """Stereo carried by a motif bond whose support may be a cut port.
 
-    RDKit can serialize the correct E/Z state against a dummy port in a motif
-    payload, but ``molzip`` removes that dummy and may choose the other
-    substituent without changing the stored E/Z enum.  Keep the payload's
-    actual support references until the port can be resolved to the real atom
-    on the opposite motif.
+    E/Z is priority-dependent: replacing a dummy port with its real atom can
+    change which substituent has highest priority.  The invariant carried
+    across that replacement is therefore the cis/trans relation between the
+    payload's two explicit support atoms, not its transient E/Z label.  Keep
+    those support references until each port resolves to the real atom on the
+    opposite motif.
     """
 
     bond_atoms: tuple[AtomRef, AtomRef]
-    bond_stereo: str
+    support_relation: str
     stereo_atoms: tuple[AtomRef | PortRef, AtomRef | PortRef]
 
 
@@ -251,6 +252,45 @@ def _strict_isomeric_smiles(mol: Chem.Mol, *, clean_stereo: bool) -> str:
         atom.SetAtomMapNum(0)
     Chem.AssignStereochemistry(probe, cleanIt=clean_stereo, force=True)
     return Chem.MolToSmiles(probe, canonical=True, isomericSmiles=True)
+
+
+def _close_isomeric_identity(mol: Chem.Mol) -> tuple[Chem.Mol, str]:
+    """Return the molecule and strict identity at an independent SMILES boundary.
+
+    RDKit can retain traversal-relative tetrahedral state on an in-memory
+    molecule assembled from mapped fragments.  The first isomeric rendering is
+    chemically valid, but for symmetric polycycles it is not always the same
+    canonical spelling produced when that SMILES is loaded independently.  A
+    graph-codec identity is a standalone SMILES surface, so close it through
+    one parse boundary before either storing or validating it.
+
+    ``removeHs=False`` keeps the operation graph preserving for callers whose
+    sanitized input contains explicit hydrogen atoms.
+    """
+
+    first_render = _strict_isomeric_smiles(mol, clean_stereo=True)
+    parser = Chem.SmilesParserParams()
+    parser.removeHs = False
+    closed = Chem.MolFromSmiles(first_render, parser)
+    if closed is None:
+        raise GraphPortsContractError(
+            "strict isomeric identity is not independently parseable"
+        )
+    return closed, _strict_isomeric_smiles(closed, clean_stereo=True)
+
+
+def _canonical_motif_identity_smiles(mol: Chem.Mol) -> str:
+    """Close an atom-map-free motif identity under RDKit SMILES parsing.
+
+    On RDKit 2024.03, a fragment produced in memory from a mapped polycycle can
+    retain traversal-relative tetrahedral state after the maps are removed.
+    Its first canonical rendering is chemically correct but need not be the
+    canonical rendering obtained when that identity is loaded independently.
+    Motif identities are model-facing standalone surfaces, so normalize them
+    through exactly that independent parse boundary once.
+    """
+
+    return _close_isomeric_identity(mol)[1]
 
 
 def _canonical_atom_positions(mol: Chem.Mol) -> tuple[int, ...]:
@@ -795,7 +835,7 @@ class ProductionGraphPortsCodecV1:
             for atom in identity.GetAtoms():
                 if atom.GetAtomicNum() != 0:
                     atom.SetAtomMapNum(0)
-            identity_smiles = Chem.MolToSmiles(identity, canonical=True, isomericSmiles=True)
+            identity_smiles = _canonical_motif_identity_smiles(identity)
             reconstruction_smiles = Chem.MolToSmiles(payload, canonical=True, isomericSmiles=True)
 
             records: list[PortRecord] = []
@@ -886,7 +926,7 @@ class ProductionGraphPortsCodecV1:
         )
         encoding = GraphPortsEncoding(
             format_version=FORMAT_VERSION,
-            strict_isomeric_identity=_strict_isomeric_smiles(work, clean_stereo=True),
+            strict_isomeric_identity=_close_isomeric_identity(work)[1],
             motifs=motifs,
             connections=connections,
             component_motif_ids=components,
@@ -1058,11 +1098,7 @@ class ProductionGraphPortsCodecV1:
             for atom in identity_probe.GetAtoms():
                 if atom.GetAtomicNum() != 0:
                     atom.SetAtomMapNum(0)
-            observed_identity = Chem.MolToSmiles(
-                identity_probe,
-                canonical=True,
-                isomericSmiles=True,
-            )
+            observed_identity = _canonical_motif_identity_smiles(identity_probe)
             if observed_identity != motif.identity_smiles:
                 raise GraphPortsContractError(
                     f"motif {motif.motif_id} identity_smiles does not match its payload"
@@ -1111,6 +1147,11 @@ class ProductionGraphPortsCodecV1:
                     raise GraphPortsContractError(
                         f"motif {motif.motif_id} has unsupported internal bond stereo {bond_stereo!r}"
                     )
+                support_relation = (
+                    "STEREOCIS"
+                    if bond_stereo in {"STEREOZ", "STEREOCIS"}
+                    else "STEREOTRANS"
+                )
                 support_refs: list[AtomRef | PortRef] = []
                 for atom_index in raw_stereo_atoms:
                     support_atom = payload.GetAtomWithIdx(atom_index)
@@ -1134,10 +1175,18 @@ class ProductionGraphPortsCodecV1:
                             AtomRef(motif.motif_id, begin_local),
                             AtomRef(motif.motif_id, end_local),
                         ),
-                        bond_stereo=bond_stereo,
+                        support_relation=support_relation,
                         stereo_atoms=(support_refs[0], support_refs[1]),
                     )
                 )
+
+            # Direction flags are a SMILES serialization device, not an
+            # independent chemical field.  The support-relative relation has
+            # now been captured explicitly; retaining fragment-side flags can
+            # make molzip merge two valid neighbouring C=N states as a single
+            # inconsistent directional system.
+            for payload_bond in payload.GetBonds():
+                payload_bond.SetBondDir(Chem.BondDir.NONE)
 
             for atom in payload.GetAtoms():
                 if atom.GetAtomicNum() == 0:
@@ -1256,6 +1305,22 @@ class ProductionGraphPortsCodecV1:
                 AtomRef(remote_ref.motif_id, remote_port.local_atom_id)
             ]
 
+        try:
+            Chem.SanitizeMol(rebuilt)
+        except Exception as exc:
+            raise GraphPortsContractError("reconnected full molecule cannot be sanitized") from exc
+        for atom in rebuilt.GetAtoms():
+            atom.SetAtomMapNum(0)
+        # ``molzip`` preserves the tetrahedral tags carried by the motif
+        # payloads, but reconnecting ports changes atom neighbourhoods and can
+        # leave fragment-era CIP ranking properties behind.  Those stale
+        # properties can make RDKit render a different (though isomorphic)
+        # traversal for the same stereoisomer.  Recompute that derived state
+        # after every port has been resolved, then restore explicit internal
+        # double-bond relations: a clean assignment performed afterwards would
+        # discard those support-bound relations and derive only from the now
+        # intentionally cleared SMILES direction flags.
+        Chem.AssignStereochemistry(rebuilt, cleanIt=True, force=True)
         for internal_stereo in internal_bond_stereo:
             left_index, right_index = (
                 atom_index_by_ref[internal_stereo.bond_atoms[0]],
@@ -1284,16 +1349,20 @@ class ProductionGraphPortsCodecV1:
                     "internal stereo references are not adjacent to their double bond"
                 )
             bond.SetStereoAtoms(begin_reference, end_reference)
-            bond.SetStereo(getattr(Chem.BondStereo, internal_stereo.bond_stereo))
-
-        try:
-            Chem.SanitizeMol(rebuilt)
-        except Exception as exc:
-            raise GraphPortsContractError("reconnected full molecule cannot be sanitized") from exc
-        for atom in rebuilt.GetAtoms():
-            atom.SetAtomMapNum(0)
-        Chem.AssignStereochemistry(rebuilt, cleanIt=False, force=True)
-        rebuilt_identity = _strict_isomeric_smiles(rebuilt, clean_stereo=False)
+            bond.SetStereo(
+                getattr(Chem.BondStereo, internal_stereo.support_relation)
+            )
+        # Convert the support-relative relations back into RDKit's full-graph
+        # E/Z state.  Doing this only after every relation is present lets
+        # RDKit choose one globally consistent set of neighbour directions,
+        # including adjacent double bonds that share a single-bond support.
+        Chem.SetDoubleBondNeighborDirections(rebuilt)
+        Chem.AssignStereochemistry(rebuilt, cleanIt=True, force=True)
+        # Close the fully reconnected graph at the same independent SMILES
+        # boundary used by encoding.  Besides making strict comparison
+        # symmetric, returning this closed molecule prevents a caller's first
+        # MolToSmiles() from observing RDKit's mapped-fragment traversal cache.
+        rebuilt, rebuilt_identity = _close_isomeric_identity(rebuilt)
         if verify_identity and rebuilt_identity != encoding.strict_isomeric_identity:
             raise GraphPortsContractError(
                 "strict-isomeric round-trip mismatch: "

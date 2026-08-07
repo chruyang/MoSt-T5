@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import random
 from dataclasses import replace
 
@@ -25,6 +26,86 @@ def _mol(smiles: str) -> Chem.Mol:
     mol = Chem.MolFromSmiles(smiles)
     assert mol is not None
     return mol
+
+
+def _molblock_fixture(encoded: str) -> Chem.Mol:
+    mol = Chem.MolFromMolBlock(
+        base64.b64decode(encoded).decode("ascii"),
+        sanitize=True,
+        removeHs=False,
+        strictParsing=True,
+    )
+    assert mol is not None
+    return mol
+
+
+def _strict_chemical_projection(mol: Chem.Mol) -> tuple[object, ...]:
+    """Expose graph, bond, radical, and assigned stereo invariants separately."""
+
+    probe = Chem.Mol(mol)
+    for atom in probe.GetAtoms():
+        atom.SetAtomMapNum(0)
+    Chem.AssignStereochemistry(probe, cleanIt=True, force=True)
+    return (
+        Chem.MolToSmiles(probe, canonical=True, isomericSmiles=False),
+        tuple(
+            sorted(
+                (
+                    atom.GetAtomicNum(),
+                    atom.GetIsotope(),
+                    atom.GetFormalCharge(),
+                    atom.GetNumRadicalElectrons(),
+                )
+                for atom in probe.GetAtoms()
+            )
+        ),
+        tuple(
+            sorted(
+                (str(bond.GetBondType()), str(bond.GetStereo()))
+                for bond in probe.GetBonds()
+            )
+        ),
+        tuple(
+            sorted(
+                label
+                for _atom_index, label in Chem.FindMolChiralCenters(
+                    probe,
+                    includeUnassigned=True,
+                    includeCIP=True,
+                    useLegacyImplementation=False,
+                )
+                # RDKit reports traversal-relative ``Tet_CW``/``Tet_CCW`` for
+                # a symmetric centre without an absolute CIP descriptor.  The
+                # local winding legitimately changes after canonical atom
+                # order changes; only assigned R/S and pseudoasymmetric r/s
+                # labels are chemical invariants.
+                if label in {"R", "S", "r", "s"}
+            )
+        ),
+    )
+
+
+# Exact hydrogen-projected PCQM4Mv2 SDF records from the frozen PF-1 rejects.
+_PF1_GRAPH_PORT_FIXTURES = (
+    (
+        63194,
+        "CiAgICAgUkRLaXQgICAgICAgICAgM0QKCiAxNCAxNCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMDk5OSBWMjAwMAogICAgMS4zNDI5ICAgIDEuMTQ0MyAgICAwLjYwNzcgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDQuNjg4OSAgICAwLjI5MzUgICAgNS44MTczIEMgICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAzLjQ3NzYgICAtMi41NzMxICAgIDIuNTc4NSBDICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgMi42NDUzICAgLTEuOTQ4MiAgICAxLjQ1NjkgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDMuNTEzNiAgIC0xLjY0MDcgICAgMy43OTY0IEMgICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAyLjMyNTMgICAgMC4xMzQ3ICAgIDAuMDc3OCBDICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgNC40MTg5ICAgIDAuNjUyMyAgICA0LjM4MTggQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDMuMjU5NCAgIC0wLjYwNDYgICAgMS4wMjU3IEMgICAwICAwICAxICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAzLjg2MTMgICAtMC4yMTQ0ICAgIDMuNDQwOSBDICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgMy41NjY5ICAgIDAuMjIwOSAgICAyLjE5MzEgTiAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDIuMjg1MSAgIC0wLjA5MDMgICAtMS4xODQzIE4gICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICA0LjcwOTYgICAgMS45MDYwICAgIDMuODc4NCBOICAgMCAgMCAgMCAgMCAgMCAgMiAgMCAgMCAgMCAgMCAgMCAgMAogICAgMy4yMTU0ICAgLTEuMDc5MiAgIC0xLjU3OTEgTyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDUuMTk2OSAgICAyLjc0NTIgICAgNC42NTY5IE8gICAwICAwICAwICAwICAwICAxICAwICAwICAwICAwICAwICAwCiAgMyAgNSAgMSAgMAogIDQgIDMgIDEgIDAKICA2ICAxICAxICAwCiAgOCAgNiAgMSAgNgogIDcgIDIgIDEgIDAKICA4ICA0ICAxICAwCiAgOCAxMCAgMSAgMAogIDkgIDUgIDEgIDAKICA5ICA3ICAyICAwCiAxMCAgOSAgMSAgMAogMTEgIDYgIDIgIDAKIDEyICA3ICAxICAwCiAxMiAxNCAgMSAgMAogMTMgMTEgIDEgIDAKTSAgUkFEICAyICAxMiAgIDIgIDE0ICAgMgpNICBFTkQK",
+        ((2, 3, 4, 6, 7, 8, 9), (1,), (5, 10), (0,), (12,), (11,), (13,)),
+        r"C/C(=N/O)[C@@H]1CCC/C(=C(\C)[N][O])N1",
+    ),
+    (
+        2447063,
+        "CiAgICAgUkRLaXQgICAgICAgICAgM0QKCiAxNSAxNyAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMDk5OSBWMjAwMAogICAgNS43NjA5ICAgIDMuNjQ2MiAgICA0LjAzNzAgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDQuNDc0MiAgICAyLjg1NzYgICAgNC4yOTY2IEMgICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAwLjUwNTcgICAtMC41NTE3ICAgIDUuNzA4MCBDICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgMC42MTUyICAgIDAuNDM0OCAgICAzLjM5MDEgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDIuMDUyNSAgIC0xLjU0ODggICAgNC4wMDIwIEMgICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAxLjUzMjQgICAgMS43MTI4ICAgIDUuMzM0NyBDICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgMy4wMDAyICAgLTAuMjM3OSAgICA1LjkzMDIgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDAuNjgxMyAgIC0wLjg3MzUgICAgNC4yMDkxIEMgICAwICAwICAxICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAxLjYyMDMgICAgMC40MTQwICAgIDYuMTYwOCBDICAgMCAgMCAgMiAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgMS43NDI2ICAgIDEuMzk4NSAgICAzLjgzNTIgQyAgIDAgIDAgIDEgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgMAogICAgMy4xODAyICAgLTAuNTg5MCAgICA0LjQzODQgQyAgIDAgIDAgIDIgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgMAogICAgNC4zNjkyICAgIDEuNTI2NCAgICAzLjU3NjQgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDMuMDk1MSAgICAwLjY4OTkgICAgMy41NDUyIEMgICAwICAwICAyICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICA1LjQzODYgICAgMS4xNjU3ICAgIDIuOTYxMSBOICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgNS4yOTI1ICAgLTAuMDc1OCAgICAyLjI5NDYgTyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAxICAyICAxICAwCiAgOSAgMyAgMSAgNgogMTAgIDQgIDEgIDEKICA4ICA0ICAxICA2CiAgNSA4ICAxICAwCiAxMSAgNSAgMSAgNgogIDYgIDkgIDEgIDAKICA3ICA5ICAxICAwCiAgOCAgMyAgMSAgMAogMTAgIDYgIDEgIDAKIDExICA3ICAxICAwCiAxMiAgMiAgMSAgMAogMTMgMTIgIDEgIDEKIDEzIDEwICAxICAwCiAxMyAxMSAgMSAgMAogMTQgMTIgIDIgIDAKIDE1IDE0ICAxICAwCk0gIEVORAo=",
+        ((11, 13), (1,), (0,), (2, 3, 4, 5, 6, 7, 8, 9, 10, 12), (14,)),
+        r"CC/C(=N/O)[C@H]1[C@@H]2C[C@H]3C[C@@H](C2)C[C@@H]1C3",
+    ),
+    (
+        3140645,
+        "CiAgICAgUkRLaXQgICAgICAgICAgM0QKCiAgOSAxMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMDk5OSBWMjAwMAogICAgMS4yNDY2ICAgLTAuNjE2NSAgICAwLjY2MzcgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDEuMjE2MCAgICAwLjcxNTMgICAgMC41NzAwIEMgICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgIC0xLjIzMzAgICAtMC42ODUyICAgIDAuNDkyNCBDICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAtMS4yNjQwICAgIDAuNjQ1OCAgICAwLjM5OTAgQyAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDEuMzAyNCAgIC0wLjE1MDYgICAtMi4yNzYxIEMgICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAwLjA3NDIgICAtMS4xNTk5ICAgLTAuMTgwOCBDICAgMCAgMCAgMSAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogICAgMC4wMjI3ICAgIDEuMDgxMyAgIC0wLjMzODAgQyAgIDAgIDAgIDIgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAgIDAKICAgIDAuMDk5OCAgIC0wLjExNTIgICAtMS4zNTcwIEMgICAwICAwICAxICAwICAwICAwICAwICAwICAwICAwICAwICAwCiAgICAxLjE5ODUgICAtMC4yMzQxICAgLTMuNDgzMSBPICAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMCAgMAogIDIgIDEgIDIgIDAKICA0ICAzICAyICAwCiAgOCAgNSAgMSAgMQogIDYgIDMgIDEgIDEKICA2ICAxICAxICAwCiAgNyAgNCAgMSAgMQogIDcgIDIgIDEgIDAKICA4ICA3ICAxICAwCiAgOCAgNiAgMSAgMAogIDkgIDUgIDIgIDAKTSAgRU5ECg==",
+        ((0, 1, 2, 3, 5, 6, 7), (4, 8)),
+        r"O=C[C@H]1[C@H]2C=C[C@@H]1C=C2",
+    ),
+)
 
 
 def _cross_edges(
@@ -200,6 +281,73 @@ def test_opposite_tetrahedral_isomers_have_different_strict_identities() -> None
     assert identities[0] != identities[1]
 
 
+def test_port_reconnection_refreshes_stereo_ranks_and_keeps_relative_isomers_distinct() -> None:
+    """A molzip neighbourhood change must not reuse fragment-era CIP ranks."""
+
+    codec = ProductionGraphPortsCodecV1()
+    groups = (
+        (1, 11, 12, 13),
+        (0,),
+        (2,),
+        (3,),
+        (4, 5, 6, 7, 9, 10),
+        (8,),
+    )
+    relative_isomers = (
+        "CC1(CN[C@H]2CC[C@H](C)CC2)COC1",
+        "CC1(CN[C@H]2CC[C@@H](C)CC2)COC1",
+    )
+    references = []
+    for isomer_offset, smiles in enumerate(relative_isomers):
+        mol = _mol(smiles)
+        reference = codec.encode(mol, groups, _cross_edges(mol, groups))
+        references.append(reference)
+        rebuilt = codec.reconstruct(reference)
+
+        assert (
+            Chem.MolToSmiles(rebuilt, canonical=True, isomericSmiles=True)
+            == reference.strict_isomeric_identity
+        )
+        assert sorted(
+            label
+            for _atom_index, label in Chem.FindMolChiralCenters(
+                rebuilt,
+                includeUnassigned=True,
+                includeCIP=True,
+                useLegacyImplementation=False,
+            )
+        ) == sorted(
+            label
+            for _atom_index, label in Chem.FindMolChiralCenters(
+                mol,
+                includeUnassigned=True,
+                includeCIP=True,
+                useLegacyImplementation=False,
+            )
+        )
+
+        rng = random.Random(20260807 + isomer_offset)
+        for _ in range(40):
+            order = list(range(mol.GetNumAtoms()))
+            rng.shuffle(order)
+            renumbered = Chem.RenumberAtoms(mol, order)
+            old_to_new = {
+                old_index: new_index for new_index, old_index in enumerate(order)
+            }
+            renumbered_groups = tuple(
+                tuple(old_to_new[atom_index] for atom_index in group)
+                for group in groups
+            )
+            candidate = codec.encode(
+                renumbered,
+                renumbered_groups,
+                _cross_edges(renumbered, renumbered_groups),
+            )
+            assert _scientific_projection(candidate) == _scientific_projection(reference)
+
+    assert references[0].strict_isomeric_identity != references[1].strict_isomeric_identity
+
+
 def test_four_distinguishable_ports_on_one_chiral_atom() -> None:
     codec = ProductionGraphPortsCodecV1()
     mol = _mol("F[C@](Cl)(Br)I")
@@ -309,6 +457,117 @@ def test_internal_c_n_opposite_geometries_remain_distinguishable() -> None:
         Chem.MolToSmiles(codec.reconstruct(encoding), canonical=True, isomericSmiles=True)
         for encoding in encodings
     ) == smiles_pair
+
+
+def test_adjacent_c_n_stereo_states_share_a_cut_support_without_collapsing() -> None:
+    """Dummy priority must not replace the support-relative stereo relation."""
+
+    codec = ProductionGraphPortsCodecV1()
+    groups = (
+        (5, 6),
+        (4,),
+        (3,),
+        (2,),
+        (1,),
+        (0,),
+        (7,),
+        (8, 9, 10, 11, 12, 13),
+    )
+    smiles_grid = (
+        r"COCCC/N=C(S)\N=c1\cco[nH]1",
+        r"COCCC/N=C(S)\N=c1/cco[nH]1",
+        r"COCCC/N=C(S)/N=c1/cco[nH]1",
+        r"COCCC/N=C(S)/N=c1\cco[nH]1",
+    )
+    references = []
+    for grid_index, smiles in enumerate(smiles_grid):
+        mol = _mol(smiles)
+        reference = codec.encode(mol, groups, _cross_edges(mol, groups))
+        references.append(reference)
+        assert (
+            Chem.MolToSmiles(
+                codec.reconstruct(reference),
+                canonical=True,
+                isomericSmiles=True,
+            )
+            == reference.strict_isomeric_identity
+        )
+
+        rng = random.Random(20260807 + grid_index)
+        for _ in range(24):
+            order = list(range(mol.GetNumAtoms()))
+            rng.shuffle(order)
+            renumbered = Chem.RenumberAtoms(mol, order)
+            old_to_new = {
+                old_index: new_index for new_index, old_index in enumerate(order)
+            }
+            renumbered_groups = tuple(
+                tuple(old_to_new[atom_index] for atom_index in group)
+                for group in groups
+            )
+            candidate = codec.encode(
+                renumbered,
+                renumbered_groups,
+                _cross_edges(renumbered, renumbered_groups),
+            )
+            assert _scientific_projection(candidate) == _scientific_projection(reference)
+
+    assert len({reference.strict_isomeric_identity for reference in references}) == 4
+
+
+@pytest.mark.parametrize(
+    ("ordinal", "molblock", "groups", "strict_identity"),
+    _PF1_GRAPH_PORT_FIXTURES,
+)
+def test_pf1_real_stereo_and_polycycle_rejects_are_closed_and_renumber_stable(
+    ordinal: int,
+    molblock: str,
+    groups: tuple[tuple[int, ...], ...],
+    strict_identity: str,
+) -> None:
+    codec = ProductionGraphPortsCodecV1()
+    mol = _molblock_fixture(molblock)
+    reference = codec.encode(mol, groups, _cross_edges(mol, groups))
+    rebuilt = codec.reconstruct(reference)
+
+    assert reference.strict_isomeric_identity == strict_identity
+    assert (
+        Chem.MolToSmiles(rebuilt, canonical=True, isomericSmiles=True)
+        == strict_identity
+    )
+    assert _strict_chemical_projection(rebuilt) == _strict_chemical_projection(mol)
+    assert sorted(atom.GetNumRadicalElectrons() for atom in rebuilt.GetAtoms() if atom.GetNumRadicalElectrons()) == (
+        [1, 1] if ordinal == 63194 else []
+    )
+    for motif in reference.motifs:
+        independently_loaded = _mol(motif.identity_smiles)
+        assert (
+            Chem.MolToSmiles(
+                independently_loaded,
+                canonical=True,
+                isomericSmiles=True,
+            )
+            == motif.identity_smiles
+        )
+
+    rng = random.Random(ordinal)
+    for _ in range(32):
+        order = list(range(mol.GetNumAtoms()))
+        rng.shuffle(order)
+        renumbered = Chem.RenumberAtoms(mol, order)
+        old_to_new = {
+            old_index: new_index for new_index, old_index in enumerate(order)
+        }
+        renumbered_groups = tuple(
+            tuple(old_to_new[atom_index] for atom_index in group)
+            for group in groups
+        )
+        candidate = codec.encode(
+            renumbered,
+            renumbered_groups,
+            _cross_edges(renumbered, renumbered_groups),
+        )
+        assert _scientific_projection(candidate) == _scientific_projection(reference)
 
 
 def test_disconnected_components_survive_round_trip() -> None:
