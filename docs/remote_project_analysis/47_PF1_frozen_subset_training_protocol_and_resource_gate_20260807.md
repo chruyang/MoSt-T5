@@ -1,6 +1,6 @@
 # PF-1 子集、训练协议与资源切换门槛（2026-08-07）
 
-状态：**PF-1 的 33,600 条 paired release 与全量 collator 门禁均已通过；当前尚未产生 PF-1 训练结果。训练侧下一步是基于 34,666-token run3 tokenizer 重建 PF-1 union-init，然后切换到 GPU 运行 A0/A1/M0/M1。**
+状态：**PF-1 的 33,600 条 paired release、全量 collator 门禁与 34,666-token union-init 均已通过；当前尚未产生 PF-1 optimizer update 或训练结果。RTX 4090 最长序列资源探针已将单卡实现冻结为 microbatch 32 × accumulation 4，下一步直接运行 A0/A1/M0/M1。**
 
 ## 1. PF-1 的角色
 
@@ -135,9 +135,11 @@ AtomSELFIES 的 19 条 SELFIES 2.1.1 边界样本跨 18 个 connectivity groups�
 | global gradient clip | L2 norm 1.0 |
 | precision | BF16 autocast |
 | effective batch | 128 members |
-| 单卡实现 | microbatch 8 × gradient accumulation 16 |
+| 单卡实现 | microbatch 32 × gradient accumulation 4 |
 
-若使用 8 卡，每卡 microbatch 8 × accumulation 2，总 effective batch 仍为 128；多卡不能改变优化问题。
+该调整不改变 effective batch、成员顺序、更新次数或四格公平性。它是在任何 optimizer update 或训练结果产生前，由同一 RTX 4090 上的最长 M1 序列资源探针确定；当前 runner 仍是单卡顺序执行，增加可见 GPU 数量不会自动并行。
+
+最长 M1 输入上的实测资源为：microbatch 8/16/32 的峰值显存分别约 6.15/8.62/13.40 GB，对应每个 effective-batch update 的纯前后向投影约 1.285/0.709/0.507 秒。microbatch 32 仍为 24GB 4090 留出约 10GB 余量，同时 train `30,240` 与 dev `3,360` 均可整除 32，因此采用 32×4，而不继续冒险扩大到更大的 microbatch。
 
 1,000 updates 对约 30,240 个 train members 相当于约 4.23 次成员曝光。PF-1 不 early-stop，也不因某格收敛较慢而延长。train corruption 随 epoch/position 确定性变化；dev corruption 使用固定独立 seed。
 
@@ -162,11 +164,11 @@ A1/M1 在最终 step 增加 aligned E3FP 与完整 dev 内、相同 model-atom-c
 
 ## 9. 当前资源结论与下一步
 
-paired-128 的 AdamW learnability 实测在 batch 8 时峰值约 5.1–5.3 GB，单步约 0.11–0.15 秒；正式 PF-1 数据与 collator 已在 CPU 端闭合。现在的阻断点不是继续增加 CPU，而是生成与 **34,666-token** run3 tokenizer 精确绑定的新 union-init。paired-128 的旧 union-init 绑定 32,499-token candidate，不能复用。
+paired-128 的 AdamW learnability 实测在 batch 8 时峰值约 5.1–5.3 GB，单步约 0.11–0.15 秒；正式 PF-1 数据与 collator 已在 CPU 端闭合。与 **34,666-token** run3 tokenizer 精确绑定的新 union-init 已在 nmb1 生成并通过验证：base/union vocab 为 `32,100/34,666`，model seed `20260807`，geometry seed `20260808`，E3FP embedding count `4,096`。paired-128 的旧 32,499-token union-init 未被复用。
 
 执行顺序冻结为：
 
-1. 从同一 `google-t5-v1_1-base` snapshot 建立 34,666-token union-init，复制原 32,100 行权重，按预注册 seed 初始化新增行，并保存 tokenizer/model 绑定合同；
+1. **已完成：**从同一 `google-t5-v1_1-base` snapshot 建立 34,666-token union-init，复制原 32,100 行权重，按预注册 seed 初始化新增行，并保存 tokenizer/model 绑定合同；
 2. 为 A1/M1 以独立冻结 seed 初始化同一 geometry fusion，先做一次 save/load 与 one-batch BF16 forward/backward；
 3. 使用当前 runner 在 1×4090 上依次运行 A0/A1/M0/M1 的共享 1,000-update 协议；本轮不临时加入尚未实现的多进程单格调度；
 4. 输出 step 0/250/500/750/1000 配对 dev 指标和 geometry perturbation 诊断，再决定 PF-10 晋级者，不在结果出现后扩展架构矩阵。

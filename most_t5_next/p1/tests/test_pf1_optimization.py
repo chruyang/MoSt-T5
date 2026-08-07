@@ -26,8 +26,8 @@ class PF1OptimizationTest(unittest.TestCase):
         self.assertEqual(protocol.final_learning_rate, 1.0e-5)
         self.assertEqual(protocol.gradient_clip_norm, 1.0)
         self.assertEqual(protocol.weight_decay, 0.0)
-        self.assertEqual(protocol.micro_batch_size, 8)
-        self.assertEqual(protocol.gradient_accumulation_steps, 16)
+        self.assertEqual(protocol.micro_batch_size, 32)
+        self.assertEqual(protocol.gradient_accumulation_steps, 4)
         self.assertEqual(protocol.effective_batch_size, 128)
 
     def test_warmup_and_cosine_endpoints(self) -> None:

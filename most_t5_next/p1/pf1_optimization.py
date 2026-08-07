@@ -24,8 +24,8 @@ class PF1OptimizationProtocol:
     warmup_start_factor: float = 0.1
     gradient_clip_norm: float = 1.0
     weight_decay: float = 0.0
-    micro_batch_size: int = 8
-    gradient_accumulation_steps: int = 16
+    micro_batch_size: int = 32
+    gradient_accumulation_steps: int = 4
     beta1: float = 0.9
     beta2: float = 0.999
     epsilon: float = 1.0e-6
