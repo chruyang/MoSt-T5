@@ -100,10 +100,11 @@ class PF1RecordReader(Protocol):
     """Reader boundary for one frozen, group-disjoint PF-1 membership.
 
     ``iter_train_epoch`` must replay the same member order for every cell at a
-    given epoch and yield full micro-batches.  ``iter_dev`` must replay one
-    fixed dev order; its final batch may be shorter.  Both methods return the
-    already-decoded paired A/M record used by the existing production
-    collators.
+    given epoch.  Like the standard PyTorch ``drop_last=False`` contract, its
+    final micro-batch may be shorter but must be non-empty.  ``iter_dev`` must
+    replay one fixed dev order and may also end in a shorter batch.  Both
+    methods return the already-decoded paired A/M record used by the existing
+    production collators.
     """
 
     train_member_count: int
@@ -173,9 +174,9 @@ class _TrainCursor:
                     )
                 )
                 continue
-            if len(rows) != self.micro_batch_size:
+            if not rows or len(rows) > self.micro_batch_size:
                 raise PF1TrainingError(
-                    "PF-1 train reader must yield full frozen micro-batches"
+                    "PF-1 train reader yielded an empty or oversized micro-batch"
                 )
             epoch = self.epoch
             self.batch_in_epoch += 1
@@ -222,9 +223,9 @@ class _TrainCursor:
                 raise PF1TrainingError(
                     "PF-1 train cursor exceeds the frozen epoch"
                 ) from exc
-            if len(skipped) != self.micro_batch_size:
+            if not skipped or len(skipped) > self.micro_batch_size:
                 raise PF1TrainingError(
-                    "PF-1 train reader must yield full frozen micro-batches"
+                    "PF-1 train reader yielded an empty or oversized micro-batch"
                 )
         self.epoch = epoch
         self.batch_in_epoch = batch_in_epoch
@@ -886,6 +887,8 @@ def _train_one_condition(
     encoder_tokens = 0
     target_tokens = 0
     members_seen = 0
+    microbatch_member_counts: list[int] = []
+    update_member_counts: list[int] = []
     elapsed_before_resume = 0.0
     completed_updates = 0
     learning_rate = float(optimizer.param_groups[0]["lr"])
@@ -918,6 +921,20 @@ def _train_one_condition(
         encoder_tokens = int(progress.get("encoder_tokens", 0))
         target_tokens = int(progress.get("target_tokens", 0))
         members_seen = int(progress.get("members_seen", 0))
+        restored_microbatch_counts = progress.get("microbatch_member_counts")
+        restored_update_counts = progress.get("update_member_counts")
+        if restored_microbatch_counts is None or restored_update_counts is None:
+            # Checkpoints predating the drop_last=False contract could only
+            # contain full micro-batches, so their exposure is reconstructible.
+            microbatch_member_counts = [protocol.micro_batch_size] * (
+                completed_updates * protocol.gradient_accumulation_steps
+            )
+            update_member_counts = [protocol.effective_batch_size] * completed_updates
+        else:
+            microbatch_member_counts = [
+                int(value) for value in restored_microbatch_counts
+            ]
+            update_member_counts = [int(value) for value in restored_update_counts]
         elapsed_before_resume = float(progress.get("wall_seconds", 0.0))
         learning_rate = float(
             progress.get("last_update_learning_rate", learning_rate)
@@ -979,6 +996,18 @@ def _train_one_condition(
             update_stream,
         ):
             batches = prepared.batches
+            current_microbatch_counts = [
+                len(batch.ce_batch.record_ids) for batch in batches
+            ]
+            if any(
+                count <= 0 or count > protocol.micro_batch_size
+                for count in current_microbatch_counts
+            ):
+                raise PF1TrainingError(
+                    "PF-1 collator produced an empty or oversized micro-batch"
+                )
+            microbatch_member_counts.extend(current_microbatch_counts)
+            update_member_counts.append(sum(current_microbatch_counts))
 
             update_target_tokens = sum(
                 sum(batch.ce_batch.target_lengths) for batch in batches
@@ -1073,6 +1102,8 @@ def _train_one_condition(
                         "encoder_tokens": encoder_tokens,
                         "target_tokens": target_tokens,
                         "members_seen": members_seen,
+                        "microbatch_member_counts": microbatch_member_counts,
+                        "update_member_counts": update_member_counts,
                         "wall_seconds": elapsed_before_resume
                         + (time.perf_counter() - started),
                         "last_update_learning_rate": learning_rate,
@@ -1086,11 +1117,23 @@ def _train_one_condition(
         if device.type == "cuda"
         else 0
     )
+    if sum(update_member_counts) != members_seen:
+        raise PF1TrainingError("PF-1 member exposure accounting is inconsistent")
     return {
         "condition": condition_id,
         "optimizer_updates": protocol.total_updates,
         "train_prefetch_depth": train_prefetch_depth,
         "members_seen": members_seen,
+        "nominal_effective_batch_size": protocol.effective_batch_size,
+        "short_microbatches": sum(
+            count < protocol.micro_batch_size for count in microbatch_member_counts
+        ),
+        "min_microbatch_members": min(microbatch_member_counts),
+        "max_microbatch_members": max(microbatch_member_counts),
+        "mean_microbatch_members": statistics.fmean(microbatch_member_counts),
+        "min_members_per_update": min(update_member_counts),
+        "max_members_per_update": max(update_member_counts),
+        "mean_members_per_update": statistics.fmean(update_member_counts),
         "train_encoder_nonpadding_tokens": encoder_tokens,
         "train_supervised_target_tokens": target_tokens,
         "train_token_weighted_nll": train_nll_sum / target_tokens,

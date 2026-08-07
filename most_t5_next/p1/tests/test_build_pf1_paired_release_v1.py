@@ -241,12 +241,12 @@ class PF1PairedReleaseTest(unittest.TestCase):
                 lmdb_module=lmdb,
                 decoder=lambda payload: record_by_index[int(payload.decode("ascii"))],
             )
-            train = list(reader.iter_train_epoch(epoch=3, batch_size=2))
+            train = list(reader.iter_train_epoch(epoch=3, batch_size=3))
             dev = list(reader.iter_dev(batch_size=2))
 
         self.assertEqual(
             [[row.schedule_index for row in batch] for batch in train],
-            [[0, 1], [2, 3]],
+            [[0, 1, 2], [3]],
         )
         self.assertEqual(
             [[row.schedule_index for row in batch] for batch in dev],

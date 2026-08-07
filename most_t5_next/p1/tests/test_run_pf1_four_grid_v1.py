@@ -711,6 +711,14 @@ class PF1RunnerTest(unittest.TestCase):
             for row in report["conditions"]:
                 self.assertEqual(row["optimizer_updates"], 2)
                 self.assertEqual(row["members_seen"], 8)
+                self.assertEqual(row["nominal_effective_batch_size"], 4)
+                self.assertEqual(row["short_microbatches"], 0)
+                self.assertEqual(row["min_microbatch_members"], 2)
+                self.assertEqual(row["max_microbatch_members"], 2)
+                self.assertEqual(row["mean_microbatch_members"], 2.0)
+                self.assertEqual(row["min_members_per_update"], 4)
+                self.assertEqual(row["max_members_per_update"], 4)
+                self.assertEqual(row["mean_members_per_update"], 4.0)
                 self.assertEqual(
                     [value["update"] for value in row["evaluations"]],
                     [0, 1, 2],
@@ -828,15 +836,46 @@ class PF1RunnerTest(unittest.TestCase):
                 )
             self.assertFalse(output_dir.exists())
 
-    def test_train_reader_rejects_partial_microbatch(self) -> None:
+    def test_train_cursor_accepts_tail_and_restores_next_epoch_exactly(self) -> None:
         class PartialReader(FakeReader):
+            train_member_count = 10
+
+            def iter_train_epoch(self, *, epoch: int, batch_size: int):
+                values = tuple((epoch, index) for index in range(self.train_member_count))
+                for start in range(0, len(values), batch_size):
+                    yield values[start : start + batch_size]
+
+        reader = PartialReader()
+        cursor = subject._TrainCursor(reader, 4)
+        self.assertEqual(len(cursor.next()[1]), 4)
+        self.assertEqual(len(cursor.next()[1]), 4)
+        tail_epoch, tail = cursor.next()
+        self.assertEqual(tail_epoch, 0)
+        self.assertEqual(tail, ((0, 8), (0, 9)))
+        saved = cursor.state_dict()
+        expected_next = cursor.next()
+
+        restored = subject._TrainCursor(reader, 4)
+        restored.load_state_dict(saved)
+        self.assertEqual(restored.next(), expected_next)
+        self.assertEqual(restored.state_dict(), cursor.state_dict())
+
+    def test_train_cursor_rejects_empty_or_oversized_microbatch(self) -> None:
+        class InvalidReader(FakeReader):
+            def __init__(self, values):
+                self.values = values
+
             def iter_train_epoch(self, *, epoch: int, batch_size: int):
                 del epoch, batch_size
-                yield (1,)
+                yield self.values
 
-        cursor = subject._TrainCursor(PartialReader(), 2)
-        with self.assertRaisesRegex(subject.PF1TrainingError, "full frozen"):
-            cursor.next()
+        for values in ((), (1, 2, 3)):
+            with self.subTest(values=values):
+                cursor = subject._TrainCursor(InvalidReader(values), 2)
+                with self.assertRaisesRegex(
+                    subject.PF1TrainingError, "empty or oversized"
+                ):
+                    cursor.next()
 
     def test_train_cursor_round_trip_restores_the_exact_next_batch(self) -> None:
         reader = FakeReader()

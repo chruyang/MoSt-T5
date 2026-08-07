@@ -1472,10 +1472,6 @@ class PF1PairedReleaseReader:
             raise PF1PairedReleaseError("epoch must be a non-negative integer")
         if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
             raise PF1PairedReleaseError("batch_size must be positive")
-        if self.train_member_count % batch_size != 0:
-            raise PF1PairedReleaseError(
-                "train member count must divide into full micro-batches"
-            )
         yield from self._iter_batches(self._train_rows, batch_size)
 
     def iter_dev(self, *, batch_size: int) -> Iterator[tuple[Any, ...]]:
