@@ -1,6 +1,8 @@
 # P0 上卡前数据、化学入口与模型 I/O 审计交接（2026-08-07）
 
-状态：**CPU 阶段已完成身份修复、final-v4 保护集和关键只读审计；motif codec、A/M producer 与 inherited-E3FP payload 尚未完成，真实 A0/A1/M0/M1 GPU canary 尚未放行。**
+> 历史状态说明：本文记录 GPU canary 前的阶段性审计。graph+ports codec、同源 A/M producer、paired-128、union-init 与真实 RTX 4090 四格前后向已于同日完成；最终状态与实测数字见文档 45。
+
+状态：**历史上卡前检查点；已由文档 45 的 P0 收口结果取代。**
 
 本文接续文档 41–43，记录本轮本地与 westb 64-vCPU 实例上的实际代码、数据和测试事实。目标不是增加工程门禁，而是保证后续四格实验只改变“atom/motif 粒度”和“是否融合 3D”两个声明变量。
 
@@ -10,12 +12,13 @@
 
 本轮已解决一个会真实改变数据的身份问题：QM9/HIV 原实现没有执行其声称共享的 PCQM 显式氢投影。修复不是元数据调整；QM9 有 3,719 条 retained records 的 strict/connectivity identity 发生变化，并且重新按 connectivity 分组后有 91,119 条记录改变 split。
 
-但目前仍不应直接启动 10% 或全量 GPU 训练，原因是四项模型输入尚未闭合：
+但目前仍不应直接启动 10% 或全量 GPU 训练，原因是三项模型输入尚未闭合：
 
 1. 删除 anchor 得到的 `pure motif` 不是可靠化学子图；
 2. A0/A1 缺少真实 SDF-atom → SELFIES token/carrier producer；
-3. M0/M1 缺少 slot-aware graph+ports codec 和正式 record producer；
-4. E3FP duplicate shell 已裁决采用显式 inherited 语义，但现有 raw payload 尚未从 SDF 重算。
+3. M0/M1 的 slot-aware graph+ports codec 尚在最终复核，正式 record producer 尚未完成。
+
+E3FP duplicate shell 已不再是语义阻塞：128 条跨范围样本已从 SDF 重放，并证明 raw payload 128/128 与 production-v2 一致；显式 inherited 结果作为独立 overlay 发布，未修改原 release。
 
 此外，geometry batch → Trainer、union vocab resize/init 和 wrapper checkpoint/resume 仍需三个薄层。它们应在同一批 128 条 paired A/M records 上完成后，才租用 1×4090 做真实 forward/backward。
 
@@ -166,7 +169,7 @@ qm9-hiv-identity-collections-final-v2
 - macro 和 rare fallback 必须 graph+ports round-trip 到同一 identity，不能使用普通 `<unk>`；
 - 修复后重跑词表规模、覆盖率、fallback 长度和完整序列长度；旧 214k pure vocab 数字不能用于选 K。
 
-上述数值绑定的是当时排除 5,386 个成员的 paper-scope-v2。最终 paper-scope-final-v4 排除 5,510 个成员；远端实例结束前已完成其 membership，但还未来得及重跑约十几秒的 final-v4 motif census。因此上述全量事实足以否定“删除 anchor 后仍是合法化学 core”的设计，却不能冒充最终词表频率；最终 K 与覆盖率只能使用恢复实例后重物化的 final-v4 census。
+上述 parseability 比率绑定的是当时排除 5,386 个成员的 paper-scope-v2，足以否定“删除 anchor 后仍是合法化学 core”的设计。最终 paper-scope-final-v4 已排除 5,510 个成员，并已完成独立 clean census：permitted 3,360,067、clean motif occurrences 24,152,754、clean exact unique motifs 441,442、clean slot unique motifs 229,337；相对全局去除 27,474 个 motif occurrences。后续正式 K、覆盖率和长度统计必须使用这份 final-v4 census，而不再使用旧 214k pure vocab。
 
 ## 6. PCQM 真实 sidecar 的输入输出检查
 
@@ -248,6 +251,8 @@ vendored E3FP 会把重复 substructure shell 保留在 `all_shells`，标记 `i
 
 裁决：正式主方案使用 `shell.duplicate.identifier` 的显式 inheritance。当前 raw 只可称为 E3FP-derived intermediate shell hash，并保留为一次小样本高影响消融；把 duplicate 置 `-1` 会影响 99.6851% molecule/74.8367% atom，只作诊断，不进入四格主比较。由于现有 matrix 没有保存 duplicate pointer，必须从 SDF 重算 payload，不能在模型端无损补映射；也不应宣称该实现与 3D-MolT5 heuristic byte-equivalent。
 
+2026-08-07 已在 nmb1 的 RDKit 2024.03.5 / E3FP 1.2.5 环境完成 128 条确定性等距样本的真实重算与独立 LMDB overlay：128/128 raw parity 通过；共 6,818 个 populated shell slots，其中 1,711 个 duplicate slots，显式 inheritance 使 1,688 个 folded tokens 改变；128 条全部编码后又从 LMDB 完整解码复核。该 artifact 明确为 `sample_scope_only=true`、`training_admission=false`，因此只放行 paired canary，不替代 PF-10 或全量 inherited payload。
+
 ## 9. 数据特殊情况及报告策略
 
 ### 9.1 MoleculeNet/KPGT
@@ -274,7 +279,7 @@ dev400 中 106 个分子净电荷非零，sealed test200 全为中性，存在 c
 ## 10. 与参考代码的合理边界
 
 - 3D-MolT5 支撑“SDF/SELFIES attribution + per-atom E3FP + T5”路线；其 canonical atom reordering 可作为 A producer 参考，但本项目应显式映射回 SDF source atom，而不是假定 token order。
-- CAMT5 支撑 ring/non-single-bond motif 与分子语言建模；它主动去除 stereo，不能证明本项目的无损 identity，也不能证明该 motif partition 对 3D 聚合最优。
+- CAMT5 支撑 ring/non-single-bond motif 与分子语言建模；官方实现会在切分前保存 R/S 与 BondStereo，并在重连后恢复，而不是永久丢弃 stereo。它仍不能证明该 motif partition 对 3D 聚合最优。
 - FineMolTex 支撑 motif 粒度在 text-guided editing 中有价值；其 BRICS/merge 路线不能替代对本项目 motif rule 的结构分层实验。
 - 当前项目的 level-specific E3FP tables、level sum 和 carrier scatter mean 是自己的候选实现，不能写成复现 3D-MolT5 的 shared-table/level-mean/0.5 融合。
 
@@ -290,8 +295,8 @@ dev400 中 106 个分子净电荷非零，sealed test200 全为中性，存在 c
 
 ### CPU-G0：先冻结输入语义
 
-1. 在同一批 128 条上先复算 raw 并与现有 stored raw matrix 做逐格 parity，再从同一次 fingerprinter shells 派生 inherited payload，验证 duplicate pointer、final-fingerprint membership 与新 artifact 写入/解码 replay；不得要求 inherited 值与旧 raw 值相等；
-2. 实现 graph+motif-local-ports identity 与 forced-fallback round-trip；
+1. **已完成**：在同一批 128 条上复算 raw 并与 stored raw matrix 做逐格 parity，从同一次 fingerprinter shells 派生 inherited payload，并完成 artifact 写入/解码 replay；
+2. **最终复核中**：实现 graph+motif-local-ports identity、logical↔canonical motif permutation、connection grammar 与 forced-fallback round-trip；
 3. 重新做 slot-aware vocab coverage 和 full sequence length；
 4. 冻结 A/M 共同 stereo 语义；
 5. 冻结 QM9 gap 或三任务口径。
@@ -316,28 +321,26 @@ canary 通过后再进入 PF-1 或 stage-1/stage-2 各 10% 的 A0/A1/M0/M1 比�
 
 ## 12. 本轮证据与迁移边界
 
-远端已存在、应迁移：
+已经完成迁移：
 
 - QM9 connectivity v2；
 - HIV final v2；
 - QM9/HIV final identity collections；
-- final paper-scope clean membership；
+- final-v4 paper-scope clean membership；
+- final-v4 clean slot motif census；
 - QM9/HIV identity projection diff ledger；
 - motif parseability 与 E3FP duplicate-shell census。
 
-待生成后再迁移：
+final-v4 与已审阅 v3 的 permitted/excluded JSONL 成员内容逐字节一致；最终目录已打入本地轻量迁移包 `dataset/p0-pre-gpu-final-delta-20260807.tar.gz`（171,361,556 bytes，238 entries），并解包到 nmb1 的 `/root/autodl-tmp/most-t5-r1-final-derived`。该包不包含 41GB PCQM payload。
 
-- final-v4 clean slot motif census；
-- 包含上述最终目录、但不包含 41GB PCQM payload 的轻量迁移包。
-
-实例结束前已经完成：
+最终 membership 目录：
 
 ```text
 /root/autodl-tmp/most-t5-r1/derived/
 p1-clean-membership-paper-scope-final-v4
 ```
 
-依据远端 builder 的完成输出，其闭合计数为：pretrain 3,365,577、excluded 5,510、permitted 3,360,067、excluded unique connectivity 2,789、同时命中多个 protected collections 的 excluded members 540。该目录已完整写入远端持久数据盘；但新 SSH 连接在随后失效，因此 manifest 独立重读、final-v4 与 v3 的逐字节比较、final-v4 motif census 和最终轻量迁移包需在实例恢复后补做。现有本地 `dataset/p1-cpu-checkpoint-20260807.tar.gz` 只包含 paper-scope-v2（excluded 5,386），不得重命名为 final。
+其闭合计数为：pretrain 3,365,577、excluded 5,510、permitted 3,360,067、excluded unique connectivity 2,789、同时命中多个 protected collections 的 excluded members 540。现有本地 `dataset/p1-cpu-checkpoint-20260807.tar.gz` 只包含 paper-scope-v2（excluded 5,386），仍不得重命名为 final；应使用上述 final-delta 包。
 
 PCQM 41GB payload 已在现有数据位置，不重复打入轻量迁移包。旧 v1/v2/v3 目录作为过程快照保留，不覆盖、不删除，也不得作为 final 路径被训练脚本默认发现。
 
@@ -351,7 +354,6 @@ PCQM 41GB payload 已在现有数据位置，不重复打入轻量迁移包。�
 
 上述报告与结构化 JSON 已另存为本地轻量证据包
 `dataset/p0-pre-gpu-audit-evidence-20260807.tar.gz`（约 64 KB，14 个条目）；
-该包不包含原始数据、checkpoint 或源码，也不替代仍待恢复实例后生成的
-final-v4 数据迁移包。
+该 evidence 包不包含原始数据、checkpoint 或源码；final-v4 数据使用独立的 final-delta 包。
 
-最终放行状态：**数据身份与 geometry sidecar 已明显收口；motif codec、A/M producer 和按已裁决 inheritance 重算 E3FP payload 仍阻断真实 GPU 科研实验。**
+最终放行状态（已更新）：**上述阻断项均已在文档 45 闭合；本文保留为上卡前审计记录。**

@@ -79,9 +79,13 @@ from .atom_production_bridge import (
     collate_production_atom_record,
 )
 from .training_adapter import (
+    FOUR_GRID_MODEL_INPUT_KEYS,
+    GEOMETRY_MODEL_INPUT_KEYS,
     MODEL_INPUT_KEYS,
     TrainingAdapterError,
+    select_four_grid_forward_inputs,
     select_t5_forward_inputs,
+    to_four_grid_batch_encoding,
     to_t5_batch_encoding,
 )
 
@@ -140,6 +144,8 @@ __all__ = [
     "LogicalMotifIdentity",
     "LABEL_PAD_ID",
     "MaskedIdentityTarget",
+    "FOUR_GRID_MODEL_INPUT_KEYS",
+    "GEOMETRY_MODEL_INPUT_KEYS",
     "MODEL_INPUT_KEYS",
     "P1ArtifactBindings",
     "P1ConditionBatch",
@@ -171,6 +177,8 @@ __all__ = [
     "materialize_training_record",
     "load_production_motif_record",
     "pad_ce_first_batch",
+    "select_four_grid_forward_inputs",
     "select_t5_forward_inputs",
+    "to_four_grid_batch_encoding",
     "to_t5_batch_encoding",
 ] + list(_GEOMETRY_FUSION_EXPORTS)

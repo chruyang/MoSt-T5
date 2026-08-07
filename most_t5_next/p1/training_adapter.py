@@ -14,6 +14,12 @@ from .runtime_bridge import LABEL_PAD_ID, PaddedCEBatch
 
 
 MODEL_INPUT_KEYS = ("input_ids", "attention_mask", "labels")
+GEOMETRY_MODEL_INPUT_KEYS = (
+    "e3fp_ids",
+    "e3fp_atom_mask",
+    "e3fp_atom_to_token",
+)
+FOUR_GRID_MODEL_INPUT_KEYS = MODEL_INPUT_KEYS + GEOMETRY_MODEL_INPUT_KEYS
 
 
 class TrainingAdapterError(ValueError):
@@ -129,3 +135,64 @@ def select_t5_forward_inputs(batch_encoding: Mapping[str, Any]) -> dict[str, Any
             "BatchEncoding is missing model inputs: {}".format(", ".join(missing))
         )
     return {key: batch_encoding[key] for key in MODEL_INPUT_KEYS}
+
+
+def to_four_grid_batch_encoding(
+    batch: Any,
+    *,
+    device: object | None = None,
+    torch_module: Any | None = None,
+    batch_encoding_cls: Any | None = None,
+) -> Any:
+    """Convert one validated A0/A1/M0/M1 batch to wrapper tensor kwargs.
+
+    CE-only cells return the ordinary three T5 tensors.  Geometry-enabled
+    cells add exactly the three fields declared by :class:`FourGridT5Wrapper`;
+    record IDs and ``model_to_source_atom_index`` remain audit provenance and
+    never cross the model boundary.
+    """
+
+    from .experiment_grid import P1ConditionBatch
+
+    if not isinstance(batch, P1ConditionBatch):
+        raise TrainingAdapterError("batch must be a P1ConditionBatch")
+    encoded = to_t5_batch_encoding(
+        batch.ce_batch,
+        device=device,
+        torch_module=torch_module,
+        batch_encoding_cls=batch_encoding_cls,
+    )
+    if batch.geometry is None:
+        return encoded
+    if torch_module is None:
+        try:
+            import torch as torch_module
+        except ImportError as exc:  # pragma: no cover - exercised remotely
+            raise TrainingAdapterError("PyTorch is required for tensor conversion") from exc
+    geometry_values = batch.geometry.model_inputs()
+    dtypes = {
+        "e3fp_ids": torch_module.long,
+        "e3fp_atom_mask": torch_module.bool,
+        "e3fp_atom_to_token": torch_module.long,
+    }
+    for key in GEOMETRY_MODEL_INPUT_KEYS:
+        encoded[key] = torch_module.as_tensor(
+            geometry_values[key], dtype=dtypes[key], device=device
+        )
+    return encoded
+
+
+def select_four_grid_forward_inputs(
+    batch_encoding: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the strict wrapper allowlist and enforce all-or-none geometry."""
+
+    selected = select_t5_forward_inputs(batch_encoding)
+    present = tuple(key in batch_encoding for key in GEOMETRY_MODEL_INPUT_KEYS)
+    if any(present) and not all(present):
+        raise TrainingAdapterError("four-grid geometry tensors are all-or-none")
+    if all(present):
+        selected.update(
+            {key: batch_encoding[key] for key in GEOMETRY_MODEL_INPUT_KEYS}
+        )
+    return selected

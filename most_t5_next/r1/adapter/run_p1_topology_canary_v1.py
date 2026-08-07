@@ -234,8 +234,19 @@ def load_bound_records(
     items: Sequence[SelectionItem],
     np,
     lmdb_module,
+    record_validator: Callable[[Mapping[str, object], Mapping[str, object], int], None]
+    = validate_bound_record,
 ) -> tuple[dict[int, dict], list[dict]]:
-    """Read only selected membership lines and LMDB values from production-v2."""
+    """Read selected production-v2 values with a caller-scoped validator.
+
+    The topology canary keeps :func:`validate_bound_record` as its default.
+    Other read-only consumers may provide a narrower validator so that an
+    unrelated topology implementation lock does not become part of their
+    scientific contract.
+    """
+
+    if not callable(record_validator):
+        raise TopologyCanaryError("record_validator must be callable")
 
     by_shard: dict[int, list[int]] = defaultdict(list)
     shard_entries: dict[int, dict] = {}
@@ -281,7 +292,7 @@ def load_bound_records(
                     record, logical_hash = sidecar_v2_codec.decode_record(np, raw)
                     if logical_hash != membership.get("record_content_sha256"):
                         raise TopologyCanaryError("selected payload logical hash differs from membership")
-                    validate_bound_record(record, membership, ordinal)
+                    record_validator(record, membership, ordinal)
                     bound[ordinal] = {
                         "record": record,
                         "membership": membership,

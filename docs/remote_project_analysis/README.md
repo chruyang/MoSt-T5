@@ -61,13 +61,14 @@
 | [41_scientific_design_comparison_dataset_and_execution_plan_20260806.md](41_scientific_design_comparison_dataset_and_execution_plan_20260806.md) | 以 atom/motif × no-3D/3D 四格收束架构比较，裁定 P1/P2 目标、motif/anchor/vocab、下游组合、数据准备与三天资源计划 | 当前科学执行总计划 |
 | [42_R1_downstream_protocol_and_four_grid_research_checkpoint_20260807.md](42_R1_downstream_protocol_and_four_grid_research_checkpoint_20260807.md) | 冻结 3D-MolT5 优先的下游来源、QM9/KPGT/HIV split 工具、level-aware 四格接口、科研 estimand 与 CPU/GPU 门禁 | 高 CPU 放行；GPU PF-CANARY 暂未放行 |
 | [43_R1_official_downstream_materialization_and_protected_scope_checkpoint_20260807.md](43_R1_official_downstream_materialization_and_protected_scope_checkpoint_20260807.md) | 正式下游成员、PCQM identity、保护并集与 paper-scope 差集的物化过程和边界 | 历史执行检查点；最终身份口径见文档 44 |
-| [44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md](44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md) | 统一化学入口、QM9/HIV v2、final-v4 保护集、motif parseability、E3FP duplicate-shell 与模型 I/O 的上卡前审计 | 当前 CPU→GPU 交接依据 |
+| [44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md](44_P0_pre_gpu_data_code_audit_and_handoff_20260807.md) | 统一化学入口、QM9/HIV v2、final-v4 保护集、motif parseability、E3FP duplicate-shell 与模型 I/O 的上卡前审计 | 历史 CPU→GPU 交接检查点 |
+| [45_P0_paired_records_union_init_and_gpu_canary_closure_20260807.md](45_P0_paired_records_union_init_and_gpu_canary_closure_20260807.md) | 官方参考代码裁决、同源 paired-128、graph+ports/SELFIES codec、union-init 与真实 RTX 4090 四格前后向 | 当前 P0 最终状态；GPU canary PASS |
 
 ## 当前结论摘要
 
 MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列、原子级多层 E3FP 三维特征和自然语言统一到 T5 编解码框架中，并拟通过局部 atom-to-motif 融合、三维掩码重建和多任务训练学习跨模态表示。
 
-早期 checkpoint 的最高优先级问题曾是 legacy tokenizer 通过 `list(set)` 注册 motif，导致 ID 不稳定；R0 已形成确定性 tokenizer 合同，因此它是已定位并有替代路径的历史问题，不再是当前首要阻断项。当前优先级依次是：按显式 duplicate inheritance 重算 E3FP、实现可逆 graph+ports motif codec、从同一 SDF Mol 生产真实 A/M records，以及闭合 Trainer 与 checkpoint/resume。完成这些输入合同前，不能把旧 checkpoint 当作“整体思路已有效”的证据，也不启动 10% 或全量训练。
+早期 checkpoint 的最高优先级问题曾是 legacy tokenizer 通过 `list(set)` 注册 motif，导致 ID 不稳定；R0 已形成确定性 tokenizer 合同，因此它是已定位并有替代路径的历史问题，不再是当前首要阻断项。显式 duplicate inheritance、可逆 graph+ports motif codec、同源 A/M records、union-init 与真实四格前后向现已在 paired-128 上闭合。当前优先级转为短程 learnability run、PF-1 四格比较和随后必要的 10% 架构裁决；旧 checkpoint 仍不能作为“整体思路已有效”的证据。
 
 2026-08-05 历史更新：R0 已形成确定性 tokenizer 合同；R1 已把 3,378,606 条 PCQM4Mv2 train-3D 记录制成 136 个不可变分片，并在 CPU 源端和 4090 区域持久化副本分别通过 v3 独立审计。该结果只放行 production release 与跨区传输，不等于 tokenizer 已绑定或 P1 可训练；当时计划的 CE+MSE 门禁已被后续四格路线取代，现行 GPU-G0 先做 CE-only，不引入 MSE/teacher。
 
@@ -76,6 +77,8 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 2026-08-06 科学路线更新：架构选择收束为 A0/A1/M0/M1（atom/motif × no-3D/3D）四格；C1-G、interface residual、legacy MSE 和多种 fusion 不再进入当前主比较。QM9 split、Motif Editing 协议、MoleculeNet 四任务版本及 P2 重线性化先于 full P1 冻结；GPU 只在 production 四格 canary 就绪后启用。
 
 2026-08-07 CPU 审计更新：QM9/HIV 已统一到与 PCQM 相同的显式氢身份投影，QM9 改为 connectivity-group split；最终 paper-scope 保护差集保留 3,360,067 / 3,365,577 个 PCQM members。paper-scope-v2 的全量 motif 审计足以否定删除 anchor 的 pure identity，但 final-v4 的词频与 K 尚待重物化；10% PCQM E3FP 审计已裁决 duplicate shell 使用显式 inheritance，但 payload 尚未重算。下一步是实现 graph+ports codec、同源 A/M producer，并先在 128 条 paired records 上生成 inherited E3FP；完成前不启动 10% 或全量 GPU 训练。
+
+2026-08-07 P0 收口更新：同一冻结样本上的 inherited-E3FP overlay、128 条 A/M paired records、32,499-token union tokenizer 与统一 T5/wrapper 初始化均已完成；真实 RTX 4090 上 A0/A1/M0/M1 的 BF16 forward/backward 全部通过，loss 与梯度 finite，峰值显存约 2.26–2.34 GB。该结果只证明数据流和可运行性，不构成 motif/3D 效果证据；下一步见文档 45。
 
 ## 维护约定
 
