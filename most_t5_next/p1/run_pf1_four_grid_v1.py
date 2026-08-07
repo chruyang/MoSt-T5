@@ -39,10 +39,14 @@ from most_t5_next.p1.build_pf1_paired_release_v1 import (
 from most_t5_next.p1.experiment_grid import P1ConditionBatch
 from most_t5_next.p1.pf1_optimization import (
     FROZEN_PF1_PROTOCOL,
+    PF1_PROTOCOLS,
+    PF1_SCREEN_PROTOCOL_ID,
     PF1LearningRateSchedule,
     PF1OptimizationProtocol,
     build_pf1_optimizer,
     clip_pf1_gradients,
+    identify_pf1_protocol,
+    resolve_pf1_protocol,
 )
 from most_t5_next.p1.production_bridge import collate_production_batch
 from most_t5_next.p1.training_adapter import (
@@ -1281,6 +1285,7 @@ def execute_pf1_four_grid(
                 torch_module.cuda.empty_cache()
 
     optimization = asdict(protocol)
+    optimization["protocol_id"] = identify_pf1_protocol(protocol)
     optimization["effective_batch_size"] = protocol.effective_batch_size
     report: dict[str, object] = {
         "schema_version": REPORT_SCHEMA,
@@ -1344,7 +1349,7 @@ def execute_pf1_four_grid(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the fixed-protocol PF-1 training CLI."""
+    """Build the named, fixed-protocol PF-1 training CLI."""
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--paired-release", required=True)
@@ -1354,6 +1359,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--geometry-fusion-seed", type=int, required=True)
     parser.add_argument("--num-e3fp-embeddings", type=int, default=4096)
+    parser.add_argument(
+        "--protocol-id",
+        choices=tuple(PF1_PROTOCOLS),
+        default=PF1_SCREEN_PROTOCOL_ID,
+        help="select one complete preregistered protocol; numeric tuning is disabled",
+    )
     parser.add_argument(
         "--condition-id",
         choices=CONDITION_ORDER,
@@ -1440,6 +1451,7 @@ def run(
         device=torch_module.device("cuda", 0),
         use_bf16=True,
         torch_module=torch_module,
+        protocol=resolve_pf1_protocol(args.protocol_id),
         resume_checkpoints=resume_checkpoints,
         condition_ids=(args.condition_id,) if args.condition_id else CONDITION_ORDER,
     )

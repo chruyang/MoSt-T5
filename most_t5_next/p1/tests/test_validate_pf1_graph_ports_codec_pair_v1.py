@@ -11,6 +11,7 @@ import unittest
 
 from most_t5_next.p1 import build_pf1_graph_ports_v2_release_v1 as derive
 from most_t5_next.p1 import validate_pf1_graph_ports_codec_pair_v1 as subject
+from most_t5_next.p1.pf1_optimization import G_CODEC_PF1_PROTOCOL
 from most_t5_next.r1.adapter import paired_record_wire_v1 as paired_wire
 from most_t5_next.r1.adapter.tests.test_production_paired_identity_records_v1 import (
     _bindings,
@@ -58,6 +59,20 @@ def _pair():
 
 
 class GraphPortsCodecPairGateTest(unittest.TestCase):
+    def test_pair_replay_uses_the_named_graphports_training_protocol(self) -> None:
+        self.assertEqual(
+            subject.DEFAULT_BATCH_SIZE,
+            G_CODEC_PF1_PROTOCOL.micro_batch_size,
+        )
+        self.assertEqual(
+            subject.TRAIN_GRADIENT_ACCUMULATION_STEPS,
+            G_CODEC_PF1_PROTOCOL.gradient_accumulation_steps,
+        )
+        self.assertEqual(
+            subject.TRAIN_OPTIMIZER_UPDATES,
+            G_CODEC_PF1_PROTOCOL.total_updates,
+        )
+
     def test_all_frozen_corruption_views_keep_exact_targets(self) -> None:
         source, target, runtime = _pair()
         subject._require_record_pair(source, target)

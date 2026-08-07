@@ -69,6 +69,7 @@
 | [49_PF2A_result_train_tail_motif_length_and_loader_decision_20260808.md](49_PF2A_result_train_tail_motif_length_and_loader_decision_20260808.md) | PF-2A 配对结果、标准尾批语义、33,600 条 motif/SELFIES 长度审计与 loader/worker 裁决 | PF-2A 未过 gate；进入 F-Gate 与 codec-v2 CPU 门 |
 | [50_GraphPorts_v2_and_validated_input_cache_decision_20260808.md](50_GraphPorts_v2_and_validated_input_cache_decision_20260808.md) | GraphPorts endpoint-pair v2 全量长度/可逆门与 4-worker 一次验证缓存 | v2 CPU 门及 33,600 条缓存门 PASS；待配对短筛和 GPU profiler |
 | [51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md](51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md) | 标准尾批、v1/v2 全量派生与 154,560-view 配对门、codec gate 阈值及 GPU 锯齿隔离方案 | CPU 配对门 PASS；下一步仅运行 M0-v1/M0-v2 GPU codec gate |
+| [52_motif_length_lower_bound_vocab_budget_and_GPU_profiler_20260808.md](52_motif_length_lower_bound_vocab_budget_and_GPU_profiler_20260808.md) | v2 图语法下界、train-only whole-motif K 曲线、lossless fallback BPE 长度探针与独立 GPU 分段 profiler | 33,600 条长度/词表门 PASS；不改 partition，下一步单卡 profiler + G-Codec Gate |
 
 ## 当前结论摘要
 
@@ -91,6 +92,8 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 2026-08-07 PF-1 数据门更新：修复 AtomSELFIES/GraphPorts 的真实边界案例并正式固定 SELFIES 2.2.0 后，原冻结 cohort 的严格 codec 扫描为 33,600/33,600 PASS；run3 paired release 为 train/dev 30,240/3,360、零拒绝、完整 LMDB replay 通过，union tokenizer 为 34,666 tokens。A0/A1/M0/M1 的 full-collator gate 各遍历 4,200 batches，配对 CE 与 A1/M1 geometry mapping 全部一致；对应 union-init 已通过。最长 M1 序列资源探针在任何 optimizer update 前将单卡实现冻结为 microbatch 32 × accumulation 4，effective batch 仍为 128。当前进入 GPU PF-1；这些结果仍是 sample-bound 数据流证据，不是完整预训练或架构效果结论。详见文档 47。
 
 2026-08-07 PF-1 训练更新：单卡已在约 67 分钟内完成四格各 1,000 updates。A1/M1 到 step 500 后 aligned-vs-shuffled E3FP ΔNLL 已接近 0，最终分别不优于 A0/M0；当前 raw E3FP sum + direct residual addition + CE-only 几何融合被 PF-1 淘汰，但该结果不否定 E3FP 或 motif 级 3D。训练后资源复测证明同一长度域的 M1 batch 64 连续 10 步可运行，下一阶段单卡候选为 64×2；ordered prefetch 实测约提速 5.7%，并已实现 4×4090 各跑一格及严格合并。详见文档 47。
+
+2026-08-08 表示效率更新：GraphPorts v2 的 33,600 条 graph stream 已逐条达到 `4+2E`，完整 M 均值为 31.215，但仍有 71.26% 长于 AtomSELFIES。当前 2,150 个 macro 覆盖 97.40% occurrence；长尾 fallback 可由 64 个 train-only lossless byte-BPE merges 将 M 均值试探性降至 29.551，却几乎不改变 M>A 比例。因此不因长度立刻重划 motif；先运行 M0-v1/M0-v2 G-Codec Gate，再按下游结构任务证据决定 partition。独立 13-update GPU profiler 已准备，用于区分 data wait、H2D、forward/backward、clip 与 AdamWScale host-sync，不改变正式 gate。详见文档 52。
 
 ## 维护约定
 

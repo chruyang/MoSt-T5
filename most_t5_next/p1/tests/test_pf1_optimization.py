@@ -10,10 +10,15 @@ import torch
 from most_t5_next.p1.pf1_optimization import (
     AdamWScale,
     FROZEN_PF1_PROTOCOL,
+    G_CODEC_PF1_PROTOCOL,
+    G_CODEC_PROTOCOL_ID,
+    PF1_SCREEN_PROTOCOL_ID,
     PF1LearningRateSchedule,
     PF1OptimizationProtocol,
     clip_pf1_gradients,
+    identify_pf1_protocol,
     learning_rate_for_update,
+    resolve_pf1_protocol,
 )
 
 
@@ -29,6 +34,27 @@ class PF1OptimizationTest(unittest.TestCase):
         self.assertEqual(protocol.micro_batch_size, 32)
         self.assertEqual(protocol.gradient_accumulation_steps, 4)
         self.assertEqual(protocol.effective_batch_size, 128)
+
+    def test_graphports_codec_protocol_is_named_and_keeps_effective_batch(self) -> None:
+        protocol = resolve_pf1_protocol(G_CODEC_PROTOCOL_ID)
+        self.assertIs(protocol, G_CODEC_PF1_PROTOCOL)
+        self.assertEqual(protocol.micro_batch_size, 64)
+        self.assertEqual(protocol.gradient_accumulation_steps, 2)
+        self.assertEqual(protocol.effective_batch_size, 128)
+        self.assertIs(
+            resolve_pf1_protocol(PF1_SCREEN_PROTOCOL_ID),
+            FROZEN_PF1_PROTOCOL,
+        )
+        self.assertEqual(
+            identify_pf1_protocol(G_CODEC_PF1_PROTOCOL),
+            G_CODEC_PROTOCOL_ID,
+        )
+        self.assertEqual(
+            identify_pf1_protocol(PF1OptimizationProtocol(total_updates=2)),
+            "custom-internal-protocol",
+        )
+        with self.assertRaisesRegex(ValueError, "unknown frozen"):
+            resolve_pf1_protocol("ad-hoc")
 
     def test_warmup_and_cosine_endpoints(self) -> None:
         protocol = FROZEN_PF1_PROTOCOL

@@ -37,6 +37,35 @@ class PF1OptimizationProtocol:
 
 FROZEN_PF1_PROTOCOL = PF1OptimizationProtocol()
 
+# Keep the completed 32x4 PF-1 screen exactly resumable while giving the
+# preregistered GraphPorts gate its independently named 64x2 protocol.  The
+# CLI selects one of these complete contracts; individual numeric
+# hyperparameters are intentionally not exposed.
+PF1_SCREEN_PROTOCOL_ID = "pf1-screen-32x4-v1"
+G_CODEC_PROTOCOL_ID = "graphports-codec-screen-64x2-v1"
+G_CODEC_PF1_PROTOCOL = PF1OptimizationProtocol(
+    micro_batch_size=64,
+    gradient_accumulation_steps=2,
+)
+PF1_PROTOCOLS = {
+    PF1_SCREEN_PROTOCOL_ID: FROZEN_PF1_PROTOCOL,
+    G_CODEC_PROTOCOL_ID: G_CODEC_PF1_PROTOCOL,
+}
+
+
+def resolve_pf1_protocol(protocol_id: str) -> PF1OptimizationProtocol:
+    try:
+        return PF1_PROTOCOLS[protocol_id]
+    except KeyError as exc:
+        raise ValueError("unknown frozen PF-1 optimization protocol") from exc
+
+
+def identify_pf1_protocol(protocol: PF1OptimizationProtocol) -> str:
+    for protocol_id, candidate in PF1_PROTOCOLS.items():
+        if protocol == candidate:
+            return protocol_id
+    return "custom-internal-protocol"
+
 
 class AdamWScale(torch.optim.Optimizer):
     """AdamW with the parameter-RMS step scaling used by the reference models."""
@@ -224,9 +253,15 @@ def clip_pf1_gradients(
 __all__ = [
     "AdamWScale",
     "FROZEN_PF1_PROTOCOL",
+    "G_CODEC_PF1_PROTOCOL",
+    "G_CODEC_PROTOCOL_ID",
+    "PF1_PROTOCOLS",
+    "PF1_SCREEN_PROTOCOL_ID",
     "PF1LearningRateSchedule",
     "PF1OptimizationProtocol",
     "build_pf1_optimizer",
     "clip_pf1_gradients",
+    "identify_pf1_protocol",
     "learning_rate_for_update",
+    "resolve_pf1_protocol",
 ]

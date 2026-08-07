@@ -24,6 +24,7 @@ from most_t5_next.p1.build_pf1_paired_release_v1 import (
     TOKENIZER_DIRECTORY,
 )
 from most_t5_next.p1.production_bridge import collate_production_motif_record
+from most_t5_next.p1.pf1_optimization import G_CODEC_PF1_PROTOCOL
 from most_t5_next.r1.tokenizer import production_graph_ports_codec_v1 as graph_v1
 from most_t5_next.r1.tokenizer import production_graph_ports_codec_v2 as graph_v2
 from most_t5_next.r1.tokenizer.build_p1_canary_union_tokenizer_v1 import (
@@ -37,9 +38,11 @@ TRAIN_CORRUPTION_EPOCHS = (0, 1, 2, 3, 4)
 DEV_CORRUPTION_SEED = 1
 DEV_CORRUPTION_EPOCH = 0
 MASK_PROBABILITY = 0.15
-DEFAULT_BATCH_SIZE = 64
-TRAIN_GRADIENT_ACCUMULATION_STEPS = 2
-TRAIN_OPTIMIZER_UPDATES = 1000
+DEFAULT_BATCH_SIZE = G_CODEC_PF1_PROTOCOL.micro_batch_size
+TRAIN_GRADIENT_ACCUMULATION_STEPS = (
+    G_CODEC_PF1_PROTOCOL.gradient_accumulation_steps
+)
+TRAIN_OPTIMIZER_UPDATES = G_CODEC_PF1_PROTOCOL.total_updates
 
 
 class PF1GraphPortsCodecPairError(RuntimeError):

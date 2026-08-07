@@ -369,6 +369,7 @@ class PF1CommandLineTest(unittest.TestCase):
 
         self.assertEqual(args.geometry_fusion_seed, 20260808)
         self.assertEqual(args.num_e3fp_embeddings, 4096)
+        self.assertEqual(args.protocol_id, subject.PF1_SCREEN_PROTOCOL_ID)
         self.assertIsNone(args.condition_id)
         self.assertIsNone(args.resume_condition)
         self.assertIsNone(args.resume_checkpoint)
@@ -430,10 +431,40 @@ class PF1CommandLineTest(unittest.TestCase):
             self.assertTrue(bound["use_bf16"])
             self.assertEqual(bound["resume_checkpoints"], {})
             self.assertEqual(bound["condition_ids"], subject.CONDITION_ORDER)
-            self.assertNotIn("protocol", bound)
+            self.assertIs(
+                bound["protocol"],
+                subject.PF1_PROTOCOLS[subject.PF1_SCREEN_PROTOCOL_ID],
+            )
             self.assertFalse(output.exists())
             self.assertEqual(os.environ["TRANSFORMERS_OFFLINE"], "1")
             self.assertEqual(os.environ["HF_HUB_OFFLINE"], "1")
+
+    def test_named_graphports_protocol_binds_64_by_2_without_numeric_cli(self) -> None:
+        captured: dict[str, object] = {}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            args = _parse_cli(
+                Path(temporary) / "output",
+                "--protocol-id",
+                "graphports-codec-screen-64x2-v1",
+                "--condition-id",
+                "M0",
+            )
+            subject.run(
+                args,
+                torch_module=_FakeTorchRuntime(),
+                reader_factory=lambda _path: object(),
+                tokenizer_loader=lambda **_kwargs: SimpleNamespace(
+                    runtime=SimpleNamespace(vocab_size=41)
+                ),
+                executor=lambda **kwargs: captured.update(kwargs)
+                or {"status": "pass"},
+            )
+
+        protocol = captured["protocol"]
+        self.assertEqual(protocol.micro_batch_size, 64)
+        self.assertEqual(protocol.gradient_accumulation_steps, 2)
+        self.assertEqual(protocol.effective_batch_size, 128)
 
     def test_cuda_and_bf16_gates_run_before_release_loading(self) -> None:
         def forbidden(*_args, **_kwargs):
