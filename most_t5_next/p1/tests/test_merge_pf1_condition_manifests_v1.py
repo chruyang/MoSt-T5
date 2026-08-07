@@ -13,13 +13,24 @@ from most_t5_next.p1.run_pf1_four_grid_v1 import CONDITION_ORDER, REPORT_SCHEMA
 
 
 def report_for(condition_id: str) -> dict[str, object]:
+    condition_index = CONDITION_ORDER.index(condition_id)
     return {
         "schema_version": REPORT_SCHEMA,
         "status": "pass",
         "scope": "pf1_one_percent_failure_screen_only",
         "interpretation": {"architecture_superiority_claim": False},
         "comparison_contract": {"same_update_budget": True},
-        "data": {"train_members": 30240, "dev_members": 3360},
+        "data": {
+            "train_members": 30240,
+            "dev_members": 3360,
+            "validated_record_cache": {
+                "enabled": True,
+                "entries": 33600,
+                "expected_entries": 33600,
+                "complete": True,
+                "warmup_workers": 4,
+            },
+        },
         "optimization": {"effective_batch_size": 128},
         "precision": "bf16_autocast",
         "evaluation_updates": [0, 250, 500, 750, 1000],
@@ -38,7 +49,18 @@ def report_for(condition_id: str) -> dict[str, object]:
             "union_tokenizer_dir": "/union",
             "union_init_dir": "/init",
         },
-        "conditions": [{"condition": condition_id, "optimizer_updates": 1000}],
+        "conditions": [
+            {
+                "condition": condition_id,
+                "optimizer_updates": 1000,
+                "input_pipeline_telemetry": {
+                    "validated_record_cache": {
+                        "hits": 100000 + condition_index,
+                        "warmup_seconds": 20.0 + condition_index,
+                    }
+                },
+            }
+        ],
     }
 
 
@@ -70,6 +92,24 @@ class MergePF1ConditionManifestsTest(unittest.TestCase):
             self.assertTrue(
                 merged["execution"]["merged_from_independent_condition_processes"]
             )
+            self.assertEqual(
+                [
+                    row["input_pipeline_telemetry"]["validated_record_cache"][
+                        "hits"
+                    ]
+                    for row in merged["conditions"]
+                ],
+                [100000 + index for index in range(len(CONDITION_ORDER))],
+            )
+            self.assertEqual(
+                [
+                    row["input_pipeline_telemetry"]["validated_record_cache"][
+                        "warmup_seconds"
+                    ]
+                    for row in merged["conditions"]
+                ],
+                [20.0 + index for index in range(len(CONDITION_ORDER))],
+            )
             self.assertTrue((root / "merged" / "pf1_training_manifest.json").is_file())
 
     def test_rejects_duplicate_condition(self) -> None:
@@ -99,4 +139,3 @@ class MergePF1ConditionManifestsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

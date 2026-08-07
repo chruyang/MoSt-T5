@@ -209,6 +209,13 @@ class PF1PairedReleaseTest(unittest.TestCase):
             )
             for row in all_rows
         }
+        decode_calls = []
+
+        def decode(payload):
+            index = int(payload.decode("ascii"))
+            decode_calls.append(index)
+            return record_by_index[index]
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "release"
             root.mkdir()
@@ -239,10 +246,14 @@ class PF1PairedReleaseTest(unittest.TestCase):
             reader = subject.PF1PairedReleaseReader(
                 root,
                 lmdb_module=lmdb,
-                decoder=lambda payload: record_by_index[int(payload.decode("ascii"))],
+                decoder=decode,
             )
+            reader.enable_decoded_record_cache()
             train = list(reader.iter_train_epoch(epoch=3, batch_size=3))
             dev = list(reader.iter_dev(batch_size=2))
+            cached_train = list(reader.iter_train_epoch(epoch=4, batch_size=3))
+            cached_dev = list(reader.iter_dev(batch_size=2))
+            cache_stats = reader.decoded_record_cache_stats()
 
         self.assertEqual(
             [[row.schedule_index for row in batch] for batch in train],
@@ -253,6 +264,19 @@ class PF1PairedReleaseTest(unittest.TestCase):
             [[4, 5], [6]],
         )
         self.assertTrue(all(environment.closed for environment in lmdb.environments))
+        self.assertEqual(
+            [[row.schedule_index for row in batch] for batch in cached_train],
+            [[0, 1, 2], [3]],
+        )
+        self.assertEqual(
+            [[row.schedule_index for row in batch] for batch in cached_dev],
+            [[4, 5], [6]],
+        )
+        self.assertEqual(decode_calls, list(range(7)))
+        self.assertEqual(cache_stats["entries"], 7)
+        self.assertEqual(cache_stats["strict_decode_misses"], 7)
+        self.assertEqual(cache_stats["hits"], 7)
+        self.assertTrue(cache_stats["complete"])
 
 
 if __name__ == "__main__":

@@ -73,6 +73,8 @@ GEOMETRY_PERTURBATION_UPDATE = 1000
 GEOMETRY_DERANGEMENT_SEED = 20260809
 GEOMETRY_PAIRED_FORWARD_SEED = 20260810
 TRAIN_PREFETCH_DEPTH = 2
+TRAIN_DECODE_CACHE_WORKERS = 4
+TRAIN_DECODE_CACHE_MAX_PENDING = 16
 
 
 class PF1TrainingError(RuntimeError):
@@ -358,6 +360,37 @@ def _finite_loss(torch_module: Any, value: Any, condition_id: str) -> float:
     if value is None or value.ndim != 0 or not bool(torch_module.isfinite(value).item()):
         raise PF1TrainingError(condition_id + " produced a non-finite CE loss")
     return float(value.detach().float().cpu().item())
+
+
+def _validated_record_cache_views(
+    reader: PF1RecordReader,
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Split merge-stable cache semantics from process-local telemetry."""
+
+    if not isinstance(reader, PF1PairedReleaseReader):
+        return {"enabled": False, "reader_did_not_expose_cache": True}, None
+    stats = reader.decoded_record_cache_stats()
+    warmup = stats.get("warmup")
+    warmup_mapping = warmup if isinstance(warmup, Mapping) else {}
+    shared_contract = {
+        "enabled": stats["enabled"],
+        "entries": stats["entries"],
+        "expected_entries": stats["expected_entries"],
+        "complete": stats["complete"],
+        "process_local_only": stats["process_local_only"],
+        "persistent_artifact": stats["persistent_artifact"],
+        "warmup_workers": warmup_mapping.get("workers"),
+        "warmup_max_pending": warmup_mapping.get("max_pending"),
+        "strict_decode_once_per_process": True,
+        "training_corruption_cached": False,
+    }
+    process_telemetry = {
+        "hits": stats["hits"],
+        "strict_decode_misses": stats["strict_decode_misses"],
+        "warmup": dict(warmup_mapping),
+        "cumulative_within_condition_process": True,
+    }
+    return shared_contract, process_telemetry
 
 
 def evaluate_pf1_condition(
@@ -1219,21 +1252,27 @@ def execute_pf1_four_grid(
         if int(model.config.vocab_size) != expected_vocab_size:
             raise PF1TrainingError("wrapper vocabulary differs from the PF-1 tokenizer")
         try:
-            conditions.append(
-                _train_one_condition(
-                    condition_id=condition_id,
-                    reader=reader,
-                    tokenizer_runtime=tokenizer_runtime,
-                    model=model,
-                    device=device,
-                    use_bf16=use_bf16,
-                    output_dir=output_dir,
-                    protocol=protocol,
-                    torch_module=torch_module,
-                    checkpoint_writer=checkpoint_writer,
-                    resume_checkpoint=resume_by_condition.get(condition_id),
-                )
+            condition_result = _train_one_condition(
+                condition_id=condition_id,
+                reader=reader,
+                tokenizer_runtime=tokenizer_runtime,
+                model=model,
+                device=device,
+                use_bf16=use_bf16,
+                output_dir=output_dir,
+                protocol=protocol,
+                torch_module=torch_module,
+                checkpoint_writer=checkpoint_writer,
+                resume_checkpoint=resume_by_condition.get(condition_id),
             )
+            _cache_contract, cache_telemetry = _validated_record_cache_views(
+                reader
+            )
+            if cache_telemetry is not None:
+                condition_result["input_pipeline_telemetry"] = {
+                    "validated_record_cache": cache_telemetry
+                }
+            conditions.append(condition_result)
         finally:
             model.zero_grad(set_to_none=True)
             del model
@@ -1268,6 +1307,7 @@ def execute_pf1_four_grid(
             "dev_corruption_seed": DEV_CORRUPTION_SEED,
             "dev_corruption_epoch": DEV_CORRUPTION_EPOCH,
             "mask_probability": MASK_PROBABILITY,
+            "validated_record_cache": _validated_record_cache_views(reader)[0],
         },
         "optimization": optimization,
         "precision": "bf16_autocast" if use_bf16 else "test_or_debug_precision",
@@ -1345,7 +1385,6 @@ def run(
         raise PF1TrainingError("PF-1 training requires one CUDA GPU")
     if not torch_module.cuda.is_bf16_supported():
         raise PF1TrainingError("PF-1 training requires CUDA BF16 support")
-
     paired_release = Path(args.paired_release).expanduser().resolve()
     base_model_snapshot = Path(args.base_model_snapshot).expanduser().resolve()
     base_tokenizer_snapshot = Path(args.base_tokenizer_snapshot).expanduser().resolve()
@@ -1378,6 +1417,15 @@ def run(
         output_dir=union_tokenizer_dir,
     )
     reader = reader_factory(paired_release)
+    if isinstance(reader, PF1PairedReleaseReader):
+        # Workers use an explicit spawn context and therefore cannot inherit
+        # the main process's CUDA runtime.  Every cached value still passes the
+        # canonical wire decoder and membership join exactly once.
+        reader.enable_decoded_record_cache()
+        reader.warm_decoded_record_cache(
+            workers=TRAIN_DECODE_CACHE_WORKERS,
+            max_pending=TRAIN_DECODE_CACHE_MAX_PENDING,
+        )
     return executor(
         reader=reader,
         tokenizer_runtime=tokenizer_build.runtime,

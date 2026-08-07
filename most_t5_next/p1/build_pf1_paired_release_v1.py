@@ -16,17 +16,21 @@ replacement, truncation, or silent row filtering.
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
+import concurrent.futures
 from dataclasses import dataclass
 import datetime as dt
 from importlib import metadata as importlib_metadata
 import json
+import multiprocessing
 from pathlib import Path
 import pickle
 import sqlite3
 import sys
 import tarfile
 import hashlib
+import threading
+import time
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from most_t5_next.p1 import freeze_pf1_connectivity_sample_v1 as selection
@@ -71,6 +75,20 @@ _WORKER_STATE: dict[str, Any] = {}
 
 class PF1PairedReleaseError(RuntimeError):
     """The frozen PF-1 paired release could not be materialized exactly."""
+
+
+def _decode_paired_wire_cache_worker(
+    item: tuple[str, bytes],
+) -> tuple[str, Any]:
+    """Decode one canonical wire row in a bounded CPU worker.
+
+    The parent process remains the only LMDB reader and cache writer.  Workers
+    receive one immutable value and return one fully validated record, so the
+    ordering and trust boundary are identical to ordinary reader replay.
+    """
+
+    storage_key, raw = item
+    return storage_key, paired_wire.decode_paired_training_record(raw)
 
 
 @dataclass(frozen=True)
@@ -1376,6 +1394,12 @@ class PF1PairedReleaseReader:
                 raise PF1PairedReleaseError("python-lmdb is required") from exc
         self.lmdb_module = lmdb_module
         self.decoder = decoder
+        self._uses_canonical_decoder = decoder is paired_wire.decode_paired_training_record
+        self._decoded_cache: dict[str, Any] | None = None
+        self._decoded_cache_lock = threading.Lock()
+        self._decoded_cache_hits = 0
+        self._decoded_cache_misses = 0
+        self._decoded_cache_warmup: dict[str, object] | None = None
         manifest_path = self.release_root / MANIFEST_NAME
         if not manifest_path.is_file():
             raise PF1PairedReleaseError("PF-1 paired manifest is absent")
@@ -1407,6 +1431,170 @@ class PF1PairedReleaseReader:
             == self.train_member_count + self.dev_member_count
         ):
             raise PF1PairedReleaseError("PF-1 reader counts differ from manifest")
+
+    @staticmethod
+    def _validate_record_against_membership(
+        record: Any,
+        row: Mapping[str, object],
+    ) -> None:
+        if not (
+            record.schedule_index == row["selection_index"]
+            and record.sdf_record_index == row["sdf_record_index"]
+            and record.atom_record.record_id == row["member_id"]
+        ):
+            raise PF1PairedReleaseError(
+                "decoded training row differs from membership"
+            )
+
+    def enable_decoded_record_cache(self) -> None:
+        """Enable one process-local cache populated only by strict decoding."""
+
+        with self._decoded_cache_lock:
+            if self._decoded_cache is None:
+                self._decoded_cache = {}
+
+    def decoded_record_cache_stats(self) -> dict[str, object]:
+        with self._decoded_cache_lock:
+            entries = len(self._decoded_cache or {})
+            return {
+                "enabled": self._decoded_cache is not None,
+                "entries": entries,
+                "expected_entries": self.train_member_count + self.dev_member_count,
+                "complete": entries
+                == self.train_member_count + self.dev_member_count,
+                "hits": self._decoded_cache_hits,
+                "strict_decode_misses": self._decoded_cache_misses,
+                "warmup": dict(self._decoded_cache_warmup)
+                if self._decoded_cache_warmup is not None
+                else None,
+                "process_local_only": True,
+                "persistent_artifact": False,
+            }
+
+    def warm_decoded_record_cache(
+        self,
+        *,
+        workers: int = 4,
+        max_pending: int = 16,
+    ) -> dict[str, object]:
+        """Strictly decode all uncached rows once with bounded ordered workers.
+
+        This is a runtime optimization, not a second data release.  The cache
+        is never serialized and every entry still passes the canonical wire
+        decoder plus the frozen membership join before insertion.
+        """
+
+        if workers <= 0 or max_pending < workers:
+            raise PF1PairedReleaseError(
+                "cache workers must be positive and max_pending must cover them"
+            )
+        if not self._uses_canonical_decoder:
+            raise PF1PairedReleaseError(
+                "parallel cache warmup requires the canonical paired-wire decoder"
+            )
+        self.enable_decoded_record_cache()
+        all_rows = self._train_rows + self._dev_rows
+        row_by_key = {str(row["storage_key"]): row for row in all_rows}
+        started = time.perf_counter()
+        scheduled = 0
+        inserted = 0
+        environment = self.lmdb_module.open(
+            str(self.lmdb_path),
+            subdir=True,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            max_readers=8,
+        )
+
+        def tasks() -> Iterator[tuple[str, bytes]]:
+            nonlocal scheduled
+            with environment.begin(write=False) as transaction:
+                for row in all_rows:
+                    storage_key = str(row["storage_key"])
+                    with self._decoded_cache_lock:
+                        already_cached = storage_key in (self._decoded_cache or {})
+                    if already_cached:
+                        continue
+                    raw = transaction.get(storage_key.encode("ascii"))
+                    if raw is None:
+                        raise PF1PairedReleaseError(
+                            "paired LMDB row is absent during cache warmup"
+                        )
+                    scheduled += 1
+                    yield storage_key, bytes(raw)
+
+        try:
+            if workers == 1:
+                results: Iterable[tuple[str, Any]] = (
+                    _decode_paired_wire_cache_worker(item) for item in tasks()
+                )
+            else:
+                # Spawn is intentional even on Linux: the training process may
+                # already have queried CUDA, and cache workers must never
+                # inherit that runtime through fork.
+                executor = concurrent.futures.ProcessPoolExecutor(
+                    max_workers=workers,
+                    mp_context=multiprocessing.get_context("spawn"),
+                )
+
+                def bounded_results() -> Iterator[tuple[str, Any]]:
+                    pending: deque[concurrent.futures.Future] = deque()
+                    try:
+                        for item in tasks():
+                            pending.append(
+                                executor.submit(
+                                    _decode_paired_wire_cache_worker, item
+                                )
+                            )
+                            if len(pending) >= max_pending:
+                                yield pending.popleft().result()
+                        while pending:
+                            yield pending.popleft().result()
+                    finally:
+                        executor.shutdown(wait=True)
+
+                results = bounded_results()
+            for storage_key, record in results:
+                row = row_by_key.get(storage_key)
+                if row is None:
+                    raise PF1PairedReleaseError(
+                        "cache worker returned an unknown storage key"
+                    )
+                self._validate_record_against_membership(record, row)
+                with self._decoded_cache_lock:
+                    assert self._decoded_cache is not None
+                    if storage_key in self._decoded_cache:
+                        raise PF1PairedReleaseError(
+                            "cache warmup produced a duplicate storage key"
+                        )
+                    self._decoded_cache[storage_key] = record
+                    self._decoded_cache_misses += 1
+                inserted += 1
+        finally:
+            environment.close()
+        elapsed = time.perf_counter() - started
+        with self._decoded_cache_lock:
+            assert self._decoded_cache is not None
+            complete = len(self._decoded_cache) == len(all_rows)
+        if not complete or inserted != scheduled:
+            raise PF1PairedReleaseError(
+                "decoded record cache warmup did not close the release domain"
+            )
+        report = {
+            "workers": workers,
+            "max_pending": max_pending,
+            "scheduled_strict_decodes": scheduled,
+            "inserted_records": inserted,
+            "seconds": elapsed,
+            "records_per_second": inserted / elapsed if elapsed else None,
+            "order_preserved": True,
+            "membership_join_rechecked": True,
+        }
+        with self._decoded_cache_lock:
+            self._decoded_cache_warmup = dict(report)
+        return report
 
     def _load_split(self, split: str, filename: str) -> tuple[dict[str, object], ...]:
         rows: list[dict[str, object]] = []
@@ -1448,20 +1636,27 @@ class PF1PairedReleaseReader:
                 for start in range(0, len(rows), batch_size):
                     decoded = []
                     for row in rows[start : start + batch_size]:
-                        raw = transaction.get(str(row["storage_key"]).encode("ascii"))
-                        if raw is None:
-                            raise PF1PairedReleaseError(
-                                "paired LMDB row is absent during training replay"
-                            )
-                        record = self.decoder(bytes(raw))
-                        if not (
-                            record.schedule_index == row["selection_index"]
-                            and record.sdf_record_index == row["sdf_record_index"]
-                            and record.atom_record.record_id == row["member_id"]
-                        ):
-                            raise PF1PairedReleaseError(
-                                "decoded training row differs from membership"
-                            )
+                        storage_key = str(row["storage_key"])
+                        record = None
+                        with self._decoded_cache_lock:
+                            if self._decoded_cache is not None:
+                                record = self._decoded_cache.get(storage_key)
+                                if record is not None:
+                                    self._decoded_cache_hits += 1
+                        if record is None:
+                            raw = transaction.get(storage_key.encode("ascii"))
+                            if raw is None:
+                                raise PF1PairedReleaseError(
+                                    "paired LMDB row is absent during training replay"
+                                )
+                            record = self.decoder(bytes(raw))
+                            self._validate_record_against_membership(record, row)
+                            with self._decoded_cache_lock:
+                                if self._decoded_cache is not None:
+                                    self._decoded_cache[storage_key] = record
+                                    self._decoded_cache_misses += 1
+                        else:
+                            self._validate_record_against_membership(record, row)
                         decoded.append(record)
                     yield tuple(decoded)
         finally:
