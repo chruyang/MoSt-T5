@@ -68,6 +68,7 @@
 | [48_PF2_reference_fusion_and_geometry_required_CE_plan_20260807.md](48_PF2_reference_fusion_and_geometry_required_CE_plan_20260807.md) | PF-1 失败机制、3D-MolT5 参考融合、条件式 T3MI 与 teacher/MSE 后置裁决 | 历史预注册；PF-2A 已完成 |
 | [49_PF2A_result_train_tail_motif_length_and_loader_decision_20260808.md](49_PF2A_result_train_tail_motif_length_and_loader_decision_20260808.md) | PF-2A 配对结果、标准尾批语义、33,600 条 motif/SELFIES 长度审计与 loader/worker 裁决 | PF-2A 未过 gate；进入 F-Gate 与 codec-v2 CPU 门 |
 | [50_GraphPorts_v2_and_validated_input_cache_decision_20260808.md](50_GraphPorts_v2_and_validated_input_cache_decision_20260808.md) | GraphPorts endpoint-pair v2 全量长度/可逆门与 4-worker 一次验证缓存 | v2 CPU 门及 33,600 条缓存门 PASS；待配对短筛和 GPU profiler |
+| [51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md](51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md) | 标准尾批、v1/v2 全量派生与 154,560-view 配对门、codec gate 阈值及 GPU 锯齿隔离方案 | CPU 配对门 PASS；下一步仅运行 M0-v1/M0-v2 GPU codec gate |
 
 ## 当前结论摘要
 
