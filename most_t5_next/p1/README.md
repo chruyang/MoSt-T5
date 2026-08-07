@@ -16,6 +16,24 @@ The authoritative current protocol and evidence are recorded in
 The sections below retain the contract's development history and model
 boundaries that remain relevant.
 
+## GPU execution modes
+
+`run_pf1_four_grid_v1.py` keeps the original sequential A0/A1/M0/M1 mode and
+also accepts `--condition-id A0|A1|M0|M1`.  The latter is the supported
+one-process-per-GPU boundary: four processes may read the same published LMDB,
+union tokenizer and union-init checkpoint while writing four distinct output
+directories.  `merge_pf1_condition_manifests_v1.py` accepts the four passed
+condition manifests, verifies their shared data/model/optimization contract,
+and publishes one ordered four-grid manifest.  Merely exposing more GPUs to
+the sequential mode does not create parallelism.
+
+Within each process, training uses a depth-two ordered producer queue.  The
+producer decodes and collates the next update while the GPU executes the
+current update.  A checkpoint records only the cursor belonging to a
+successfully completed optimizer update, never the producer's prefetched
+cursor.  Sync and prefetched paths have bitwise-equal batch order, dropout RNG,
+parameter trajectory and step-500 resume behavior in the frozen tests.
+
 ## Historical contract skeleton
 
 The first implementation supported deterministic synthetic fixtures and

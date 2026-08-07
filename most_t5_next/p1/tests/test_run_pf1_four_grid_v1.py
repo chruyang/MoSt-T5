@@ -369,6 +369,7 @@ class PF1CommandLineTest(unittest.TestCase):
 
         self.assertEqual(args.geometry_fusion_seed, 20260808)
         self.assertEqual(args.num_e3fp_embeddings, 4096)
+        self.assertIsNone(args.condition_id)
         self.assertIsNone(args.resume_condition)
         self.assertIsNone(args.resume_checkpoint)
         for forbidden in (
@@ -428,6 +429,7 @@ class PF1CommandLineTest(unittest.TestCase):
             self.assertEqual(bound["device"].index, 0)
             self.assertTrue(bound["use_bf16"])
             self.assertEqual(bound["resume_checkpoints"], {})
+            self.assertEqual(bound["condition_ids"], subject.CONDITION_ORDER)
             self.assertNotIn("protocol", bound)
             self.assertFalse(output.exists())
             self.assertEqual(os.environ["TRANSFORMERS_OFFLINE"], "1")
@@ -505,6 +507,46 @@ class PF1CommandLineTest(unittest.TestCase):
             with self.assertRaisesRegex(subject.PF1TrainingError, "provided together"):
                 subject.run(
                     incomplete,
+                    torch_module=_FakeTorchRuntime(),
+                    reader_factory=lambda _path: object(),
+                    tokenizer_loader=lambda **_kwargs: SimpleNamespace(
+                        runtime=SimpleNamespace(vocab_size=41)
+                    ),
+                    executor=executor,
+                )
+
+    def test_single_condition_cli_and_resume_must_name_the_same_cell(self) -> None:
+        captured: dict[str, object] = {}
+
+        def executor(**kwargs):
+            captured.update(kwargs)
+            return {"status": "pass"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subject.run(
+                _parse_cli(root / "m1", "--condition-id", "M1"),
+                torch_module=_FakeTorchRuntime(),
+                reader_factory=lambda _path: object(),
+                tokenizer_loader=lambda **_kwargs: SimpleNamespace(
+                    runtime=SimpleNamespace(vocab_size=41)
+                ),
+                executor=executor,
+            )
+            self.assertEqual(captured["condition_ids"], ("M1",))
+
+            mismatched = _parse_cli(
+                root / "bad",
+                "--condition-id",
+                "A1",
+                "--resume-condition",
+                "M1",
+                "--resume-checkpoint",
+                str(root / "checkpoint"),
+            )
+            with self.assertRaisesRegex(subject.PF1TrainingError, "must equal"):
+                subject.run(
+                    mismatched,
                     torch_module=_FakeTorchRuntime(),
                     reader_factory=lambda _path: object(),
                     tokenizer_loader=lambda **_kwargs: SimpleNamespace(
@@ -719,6 +761,72 @@ class PF1RunnerTest(unittest.TestCase):
                 (output_dir / "pf1_training_manifest.json").read_text(encoding="utf-8")
             )
             self.assertFalse(manifest["interpretation"]["architecture_superiority_claim"])
+
+    def test_single_condition_execution_writes_only_condition_manifest(self) -> None:
+        trained: list[str] = []
+
+        def fake_train(**kwargs):
+            trained.append(kwargs["condition_id"])
+            return {
+                "condition": kwargs["condition_id"],
+                "optimizer_updates": 2,
+            }
+
+        protocol = PF1OptimizationProtocol(
+            total_updates=2,
+            warmup_updates=1,
+            micro_batch_size=2,
+            gradient_accumulation_steps=2,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "m1"
+            with patch.object(subject, "_train_one_condition", side_effect=fake_train):
+                report = subject.execute_pf1_four_grid(
+                    reader=FakeReader(),
+                    tokenizer_runtime=object(),
+                    base_model_snapshot=Path("base-model"),
+                    base_tokenizer_snapshot=Path("base-tokenizer"),
+                    union_tokenizer_dir=Path("union-tokenizer"),
+                    union_init_dir=Path("union-init"),
+                    geometry_fusion_seed=7,
+                    num_e3fp_embeddings=4096,
+                    expected_vocab_size=19,
+                    output_dir=output_dir,
+                    device=torch.device("cpu"),
+                    use_bf16=False,
+                    torch_module=torch,
+                    wrapper_loader=lambda **_kwargs: FakeModel(19),
+                    protocol=protocol,
+                    condition_ids=("M1",),
+                )
+
+            self.assertEqual(trained, ["M1"])
+            self.assertEqual(report["execution"]["requested_conditions"], ["M1"])
+            self.assertFalse(report["execution"]["complete_four_grid"])
+            self.assertTrue((output_dir / subject.CONDITION_MANIFEST_NAME).is_file())
+            self.assertFalse((output_dir / subject.FOUR_GRID_MANIFEST_NAME).exists())
+
+    def test_execution_rejects_an_ambiguous_partial_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "partial"
+            with self.assertRaisesRegex(subject.PF1TrainingError, "full grid"):
+                subject.execute_pf1_four_grid(
+                    reader=FakeReader(),
+                    tokenizer_runtime=object(),
+                    base_model_snapshot=Path("base-model"),
+                    base_tokenizer_snapshot=Path("base-tokenizer"),
+                    union_tokenizer_dir=Path("union-tokenizer"),
+                    union_init_dir=Path("union-init"),
+                    geometry_fusion_seed=7,
+                    num_e3fp_embeddings=4096,
+                    expected_vocab_size=19,
+                    output_dir=output_dir,
+                    device=torch.device("cpu"),
+                    use_bf16=False,
+                    torch_module=torch,
+                    condition_ids=("A0", "A1"),
+                )
+            self.assertFalse(output_dir.exists())
 
     def test_train_reader_rejects_partial_microbatch(self) -> None:
         class PartialReader(FakeReader):

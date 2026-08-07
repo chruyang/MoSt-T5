@@ -59,6 +59,8 @@ from most_t5_next.r1.tokenizer.build_p1_canary_union_tokenizer_v1 import (
 
 REPORT_SCHEMA = "most-t5-p1/pf1-four-grid-training/v1"
 CHECKPOINT_SCHEMA = "most-t5-p1/pf1-four-grid-checkpoint/v1"
+FOUR_GRID_MANIFEST_NAME = "pf1_training_manifest.json"
+CONDITION_MANIFEST_NAME = "pf1_condition_manifest.json"
 CONDITION_ORDER = ("A0", "A1", "M0", "M1")
 TRAIN_CORRUPTION_SEED = 0
 DEV_CORRUPTION_SEED = 1
@@ -1127,20 +1129,38 @@ def execute_pf1_four_grid(
     checkpoint_writer: Callable[..., str] = write_pf1_checkpoint,
     protocol: PF1OptimizationProtocol = FROZEN_PF1_PROTOCOL,
     resume_checkpoints: Mapping[str, Path] | None = None,
+    condition_ids: Sequence[str] = CONDITION_ORDER,
 ) -> dict[str, object]:
-    """Train four cells, optionally resuming one cell from step 500/1000."""
+    """Train the requested cells with one shared frozen PF-1 contract.
+
+    The default remains the original sequential four-grid run.  Passing one
+    condition supports one-process-per-GPU execution without duplicating the
+    scientific training loop.
+    """
 
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=False)
-    resume_by_condition = dict(resume_checkpoints or {})
-    if len(resume_by_condition) > 1 or any(
-        condition_id not in CONDITION_ORDER for condition_id in resume_by_condition
+    requested_conditions = tuple(condition_ids)
+    if not (
+        requested_conditions == CONDITION_ORDER
+        or (
+            len(requested_conditions) == 1
+            and requested_conditions[0] in CONDITION_ORDER
+        )
     ):
         raise PF1TrainingError(
-            "PF-1 execution accepts at most one known condition checkpoint"
+            "PF-1 execution requires the full grid or exactly one condition"
         )
+    resume_by_condition = dict(resume_checkpoints or {})
+    if len(resume_by_condition) > 1 or any(
+        condition_id not in requested_conditions
+        for condition_id in resume_by_condition
+    ):
+        raise PF1TrainingError(
+            "PF-1 execution accepts at most one selected-condition checkpoint"
+        )
+    output_dir.mkdir(parents=True, exist_ok=False)
     conditions: list[dict[str, object]] = []
-    for condition_id in CONDITION_ORDER:
+    for condition_id in requested_conditions:
         torch_module.manual_seed(FORWARD_SEED)
         if device.type == "cuda":
             torch_module.cuda.manual_seed_all(FORWARD_SEED)
@@ -1211,9 +1231,29 @@ def execute_pf1_four_grid(
         "evaluation_updates": list(EVALUATION_UPDATES),
         "checkpoint_updates": list(CHECKPOINT_UPDATES),
         "resumed_condition": next(iter(resume_by_condition), None),
+        "execution": {
+            "requested_conditions": list(requested_conditions),
+            "complete_four_grid": requested_conditions == CONDITION_ORDER,
+            "parallelizable_one_condition_per_process": True,
+            "forward_seed": FORWARD_SEED,
+            "geometry_fusion_seed": geometry_fusion_seed,
+            "num_e3fp_embeddings": num_e3fp_embeddings,
+            "expected_vocab_size": expected_vocab_size,
+            "base_model_snapshot": str(Path(base_model_snapshot).resolve()),
+            "base_tokenizer_snapshot": str(
+                Path(base_tokenizer_snapshot).resolve()
+            ),
+            "union_tokenizer_dir": str(Path(union_tokenizer_dir).resolve()),
+            "union_init_dir": str(Path(union_init_dir).resolve()),
+        },
         "conditions": conditions,
     }
-    (output_dir / "pf1_training_manifest.json").write_text(
+    manifest_name = (
+        FOUR_GRID_MANIFEST_NAME
+        if requested_conditions == CONDITION_ORDER
+        else CONDITION_MANIFEST_NAME
+    )
+    (output_dir / manifest_name).write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -1231,6 +1271,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--geometry-fusion-seed", type=int, required=True)
     parser.add_argument("--num-e3fp-embeddings", type=int, default=4096)
+    parser.add_argument(
+        "--condition-id",
+        choices=CONDITION_ORDER,
+        help="run exactly one cell; launch four such processes on four GPUs",
+    )
     parser.add_argument("--resume-condition", choices=CONDITION_ORDER)
     parser.add_argument("--resume-checkpoint")
     return parser
@@ -1276,6 +1321,10 @@ def run(
     if resume_condition is not None:
         if resume_condition not in CONDITION_ORDER:
             raise PF1TrainingError("resume-condition is not a PF-1 condition")
+        if args.condition_id is not None and resume_condition != args.condition_id:
+            raise PF1TrainingError(
+                "resume-condition must equal the selected condition-id"
+            )
         resume_checkpoints[resume_condition] = (
             Path(resume_checkpoint).expanduser().resolve()
         )
@@ -1301,6 +1350,7 @@ def run(
         use_bf16=True,
         torch_module=torch_module,
         resume_checkpoints=resume_checkpoints,
+        condition_ids=(args.condition_id,) if args.condition_id else CONDITION_ORDER,
     )
 
 
