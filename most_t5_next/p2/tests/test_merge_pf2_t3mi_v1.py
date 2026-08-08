@@ -39,8 +39,8 @@ def _manifest(condition: str, *, nll: float, accuracy: float, delta=None, logit=
         "data": {"members": 10, "mask_probability": 1.0},
         "optimization": {
             "protocol_id": T3MI_PROTOCOL_ID,
-            "micro_batch_size": 32,
-            "gradient_accumulation_steps": 4,
+            "micro_batch_size": 64,
+            "gradient_accumulation_steps": 2,
         },
         "precision": "bf16_autocast",
         "evaluation_updates": [0, 1000],

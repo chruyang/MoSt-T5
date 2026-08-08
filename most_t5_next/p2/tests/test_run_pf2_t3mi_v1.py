@@ -14,7 +14,7 @@ from unittest import mock
 TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 
 if TORCH_AVAILABLE:
-    from most_t5_next.p1.pf1_optimization import PF1_SCREEN_PROTOCOL_ID
+    from most_t5_next.p1.pf1_optimization import G_CODEC_PROTOCOL_ID
     from most_t5_next.p2.run_pf2_gated_fusion_v1 import (
         FUSION_CONTRACT,
         build_f_gate_optimizer,
@@ -67,15 +67,15 @@ class PF2T3MIRunnerTest(unittest.TestCase):
             json.dumps(payload), encoding="utf-8"
         )
 
-    def test_cli_freezes_one_motif_condition_and_32x4_protocol(self):
+    def test_cli_freezes_one_motif_condition_and_64x2_protocol(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(self._required_cli())
         args = build_parser().parse_args(
             self._required_cli() + ["--condition-id", "M1"]
         )
-        self.assertEqual(args.protocol_id, PF1_SCREEN_PROTOCOL_ID)
-        self.assertEqual(T3MI_PROTOCOL.micro_batch_size, 32)
-        self.assertEqual(T3MI_PROTOCOL.gradient_accumulation_steps, 4)
+        self.assertEqual(args.protocol_id, G_CODEC_PROTOCOL_ID)
+        self.assertEqual(T3MI_PROTOCOL.micro_batch_size, 64)
+        self.assertEqual(T3MI_PROTOCOL.gradient_accumulation_steps, 2)
         self.assertEqual(T3MI_MASK_PROBABILITY, 1.0)
 
     def test_executor_changes_only_the_all_identity_view(self):
@@ -151,7 +151,7 @@ class PF2T3MIRunnerTest(unittest.TestCase):
                         condition_ids=conditions,
                         protocol=T3MI_PROTOCOL,
                     )
-        with self.assertRaisesRegex(RuntimeError, "32x4"):
+        with self.assertRaisesRegex(RuntimeError, "64x2"):
             execute_pf2_t3mi(
                 engine=should_not_run,
                 output_dir=Path("unused"),

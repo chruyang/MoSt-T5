@@ -12,15 +12,15 @@ introduced.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import json
 import math
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from most_t5_next.p1.pf1_optimization import (
-    FROZEN_PF1_PROTOCOL,
-    PF1_SCREEN_PROTOCOL_ID,
+    G_CODEC_PF1_PROTOCOL,
+    G_CODEC_PROTOCOL_ID,
     PF1OptimizationProtocol,
 )
 from most_t5_next.p1.run_pf1_four_grid_v1 import (
@@ -44,13 +44,9 @@ from most_t5_next.p2.run_pf2_gated_fusion_v1 import (
 REPORT_SCHEMA = "most-t5-p2/t3mi-mechanism-screen/v1"
 T3MI_MANIFEST_NAME = "pf2_t3mi_manifest.json"
 T3MI_CHECKPOINT_CONTRACT_NAME = "pf2_t3mi_contract.json"
-T3MI_PROTOCOL_ID = "pf2b-t3mi-all-identity-32x4-v1"
+T3MI_PROTOCOL_ID = "pf2b-t3mi-all-identity-64x2-v1"
 T3MI_MASK_PROBABILITY = 1.0
-T3MI_PROTOCOL = replace(
-    FROZEN_PF1_PROTOCOL,
-    micro_batch_size=32,
-    gradient_accumulation_steps=4,
-)
+T3MI_PROTOCOL = G_CODEC_PF1_PROTOCOL
 T3MI_OBJECTIVE_CONTRACT = {
     "objective_id": "topology-conditioned-e3fp-to-motif-identity-reconstruction-v1",
     "corruption_unit": "complete_logical_motif_identity_span",
@@ -188,7 +184,7 @@ def execute_pf2_t3mi(
         raise PF1TrainingError("T3MI executor requires exactly M0 or M1")
     incoming_protocol = kwargs.pop("protocol", None)
     if incoming_protocol != T3MI_PROTOCOL:
-        raise PF1TrainingError("T3MI requires the frozen 32x4 protocol")
+        raise PF1TrainingError("T3MI requires the frozen 64x2 protocol")
     report = engine(
         **kwargs,
         wrapper_loader=load_verified_gated_four_grid_wrapper,
@@ -249,14 +245,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--condition-id", choices=("M0", "M1"), required=True)
     parser.add_argument("--resume-condition", choices=("M0", "M1"))
     parser.add_argument("--resume-checkpoint")
-    parser.set_defaults(protocol_id=PF1_SCREEN_PROTOCOL_ID)
+    parser.set_defaults(protocol_id=G_CODEC_PROTOCOL_ID)
     return parser
 
 
 def run(args: Any, **kwargs: Any) -> dict[str, object]:
     if getattr(args, "condition_id", None) not in ("M0", "M1"):
         raise PF1TrainingError("T3MI requires exactly one motif condition")
-    if getattr(args, "protocol_id", None) != PF1_SCREEN_PROTOCOL_ID:
+    if getattr(args, "protocol_id", None) != G_CODEC_PROTOCOL_ID:
         raise PF1TrainingError("T3MI CLI protocol binding differs")
     if getattr(args, "resume_checkpoint", None) is not None:
         validate_t3mi_checkpoint_contract(

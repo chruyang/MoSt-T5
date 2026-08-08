@@ -20,7 +20,7 @@ M0-T/M1-T 共同使用：
 
 - PF-1 run3 的 30,240/3,360 train/dev membership、顺序和 split；
 - GraphPorts v1、34,666-token sample-bound union tokenizer 和同一 union-init；
-- `microbatch=32, accumulation=4, drop_last=False`，nominal effective batch 128；
+- `microbatch=64, accumulation=2, drop_last=False`，nominal effective batch 128；该合同与 fresh F-Gate 相同；
 - AdamWScale、gate absolute Adam group、100-step warmup、cosine、clip=1、BF16、1,000 updates；
 - train corruption 随 epoch 确定变化，dev corruption 固定；但 mask probability 固定为 `1.0`，故每条记录全部 logical motif identity 被选中；
 - 标准 T5 sentinel CE；无新词表、无新 head、无 teacher、无 MSE/辅助 loss。
@@ -46,7 +46,7 @@ M0-T 不执行 geometry path；M1-T 执行 F-Gate。connection skeleton 与 moti
 
 证据为 `tmp/pf2_t3mi_gpu_smoke_df426c8.json`。该 smoke 只证明数据视图、初始化和梯度边界，不进入模型效果比较。
 
-另对 train 中 target 最宽的 32 条真实记录执行一次丢弃式 M1-T forward/backward/optimizer 资源探针：full-mask target 最大 92、encoder input 最大 79，峰值 allocated/reserved 分别为 9,739,185,664 / 9,978,249,216 bytes，仅占 24 GB RTX 4090 的约 39%。因此冻结的 `32×4` 有充分显存余量；不再为“填满显存”主观扩大 microbatch，因为 effective batch、更新路径与比较合同已固定。证据为 `tmp/pf2_t3mi_memory_probe_df426c8.log`。
+先对 train 中 target 最宽的 32 条真实记录执行一次丢弃式 M1-T forward/backward/optimizer 资源探针：full-mask target 最大 92、encoder input 最大 79，峰值 allocated/reserved 分别为 9,739,185,664 / 9,978,249,216 bytes。该结果表明最初沿用的 `32×4` 过于保守。随后用最宽 64 条重复验证，target 仍最大 92，峰值 allocated/reserved 为 17,750,605,824 / 18,394,120,192 bytes，在 24 GB RTX 4090 上仍保留约 6.2 GB 余量。因此正式协议冻结为与 F-Gate 相同的 `64×2`；effective batch 始终为 128，变化只减少一半 microbatch 循环并提高 GPU 连续计算比例。证据为 `tmp/pf2_t3mi_memory_probe_df426c8.log` 与 `tmp/pf2_t3mi_memory_probe_b64_df426c8.log`。
 
 ## 4. 预注册裁决
 
