@@ -1,7 +1,7 @@
 # GraphPorts v1/v2 配对门与 GPU 利用率优化计划
 
 > 日期：2026-08-08  
-> 当前结论：GraphPorts v2 派生 release 与完整 CPU 配对门均已通过；下一次启用 GPU 时只运行 M0-v1/M0-v2 codec gate。数据供给已先行优化，优化器同步优化必须作为独立工程实验，不能与 codec 比较同时改变。
+> 当前结论：本文件冻结的 M0-v1/M0-v2 codec gate 已于 2026-08-08 完成；v2 虽显著缩短序列并提升吞吐，但 final dev NLL 恶化 7.28%，正式保留 GraphPorts v1。执行结果与 profiler 裁决见文档 53。
 
 ## 1. 三个问题的裁决
 

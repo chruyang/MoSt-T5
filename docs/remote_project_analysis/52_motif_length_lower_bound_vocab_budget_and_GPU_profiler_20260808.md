@@ -1,7 +1,7 @@
 # Motif 长度下界、词表预算与 GPU 分段 profiler
 
 > 日期：2026-08-08
-> 状态：PF-1 run3 的 33,600 条 v2 长度与 train-only 词表预算审计完成；稀有 motif 的 lossless byte-BPE 仅完成长度探针；独立 GPU profiler 已通过无卡代码门，待下一次单卡执行
+> 状态：PF-1 run3 的 33,600 条 v2 长度与 train-only 词表预算审计完成；独立 GPU profiler 与 M0-v1/M0-v2 gate 已在单卡完成。v2 因 final dev NLL 恶化 7.28% 被拒绝，正式保留 v1；结果见文档 53
 > 研究边界：本文件不改变 motif partition、GraphPorts v2、正式 tokenizer、优化器或 G-Codec Gate；所有词表数字均为 1% sample-bound 诊断，不是最终 311 万预训练词表
 
 ## 1. 结论
