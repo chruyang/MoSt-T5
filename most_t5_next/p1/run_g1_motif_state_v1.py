@@ -290,16 +290,25 @@ def run(args) -> Dict[str, Any]:
             )
             model.train()
 
-    torch.save(
-        {
-            "schema_version": RUN_SCHEMA,
-            "pooling": str(args.pooling),
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "completed_updates": int(args.updates),
-        },
-        output_dir / "final_state.pt",
-    )
+    checkpoint_payload = {
+        "schema_version": RUN_SCHEMA,
+        "pooling": str(args.pooling),
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "completed_updates": int(args.updates),
+    }
+    checkpoint_path = output_dir / "final_state.pt"
+    torch.save(checkpoint_payload, checkpoint_path)
+    if not checkpoint_path.is_file() or checkpoint_path.stat().st_size <= 0:
+        raise G1RunnerError("final checkpoint was not durably written")
+    checkpoint_replay = torch.load(checkpoint_path, map_location="cpu")
+    if not (
+        checkpoint_replay.get("schema_version") == RUN_SCHEMA
+        and checkpoint_replay.get("pooling") == str(args.pooling)
+        and checkpoint_replay.get("completed_updates") == int(args.updates)
+        and set(checkpoint_replay.get("model_state_dict", {})) == set(model.state_dict())
+    ):
+        raise G1RunnerError("final checkpoint readback differs from the completed run")
     elapsed = time.time() - start
     manifest = {
         "schema_version": RUN_SCHEMA,
@@ -352,6 +361,11 @@ def run(args) -> Dict[str, Any]:
             "peak_memory_reserved_bytes": (
                 int(torch.cuda.max_memory_reserved(device)) if device.type == "cuda" else None
             ),
+        },
+        "checkpoint": {
+            "relative_path": checkpoint_path.name,
+            "bytes": checkpoint_path.stat().st_size,
+            "readback_verified": True,
         },
         "input_pipeline": {
             "full_train_unigram_census_seconds": census_seconds,

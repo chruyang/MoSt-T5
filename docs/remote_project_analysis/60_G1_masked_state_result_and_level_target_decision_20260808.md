@@ -15,7 +15,10 @@ train/dev（30,240/3,360）上单独训练小型 motif-state encoder，直接回
 - gated：`tmp/g1_motif_state_formal_gated_20260808/manifest.json`；
 - train-to-dev 条件可预测性审计：`tmp/g1_state_predictability_audit_20260808.json`；
 - 修订后的 Deep Sets level 1+2：
-  `tmp/g1b_motif_state_l12_deep_v2_20260808/manifest.json`。
+  `tmp/g1b_motif_state_l12_deep_v2_20260808/manifest.json`；
+- 可读 checkpoint 复跑：`tmp/g1b_motif_state_l12_deep_v3_20260808/manifest.json`；
+- aligned/shuffled：`tmp/g1c_aligned_shuffled_l12_v2_20260808.json`。
+- 多构象表示：`tmp/g1c_multiconformer_128_fp32_v3_20260808.json`。
 
 这些结果是几何机制门，不是 T5、下游任务或最终预训练性能。
 
@@ -93,23 +96,41 @@ level 1+2，仍使用更简单的 Deep Sets；它不是对原预注册 G1 的重
 - 不使用 raw-ID MSE；4096 个 folded ID 没有连续距离语义；
 - pooling 采用标准 Deep Sets，gated 只保留为已完成的阴性对照。
 
-## 5. 下一门：G1c，而不是立即扩大 T5 训练
+## 5. G1c 内容使用与多构象门
 
-当前只证明“level 1/2 state 可重建”，还没有闭合原计划中的几何内容使用。进入
-geometry-to-motif CE/T5 bridge 前，仅补两个定向诊断：
+当前已经证明“level 1/2 state 可重建”，并完成 G1c 的两项内容使用诊断：
 
-1. 在完整 dev 上比较 aligned 与 same-atom-count shuffled E3FP 的 level 1/2
-   state NLL；aligned 必须稳定更好。
-2. 在 C0 的 same-2D multi-conformer 子集上比较 motif representation；不同构象
-   应产生可重复差异，而刚体复制应保持一致。
+1. 完整 dev 的 3,359/3,360 eligible members 使用 same-atom-count 无自配对 donor；
+   level 1 aligned/shuffled NLL 为 2.70336/8.56184，`delta=+5.85848`；level 2
+   为 7.99151/8.40724，`delta=+0.41573`。唯一排除的是 atom-count=4 singleton，
+   正常 aligned dev 评价没有排除它。两层均明确依赖正确配对的 E3FP 内容。
+2. 从冻结 C0 顺序重放 144 个候选，1 个因 ETKDG prune 后不足两个构象而明确
+   拒绝，取前 128 个成功分子，共 711 个构象对。完整四层输入的 motif 表示在
+   711/711 对中变化，median representation RMS 为 0.31621；屏蔽高熵 level 3
+   后仍为 711/711，median 为 0.25781。因此差异不只是 level 3 哈希噪声。
+   128 个刚体复制的 E3FP 矩阵和 CPU FP32 motif 表示均 128/128 位级相同。
 
-这两个诊断只复用 G1b checkpoint，不重新训练 Deep Sets/gated，也不重跑 PF-1、
-GraphPorts 或 T5 四格。若通过，再进入 G2：正常 motif denoising CE、level 1/2
-state CE 与 geometry-to-motif generation CE 的清晰任务交替；若不通过，说明即使
-state head 能拟合，motif carrier 仍没有保留可用几何，不能继续放大预训练。
+除因首次 `autodl-fs` checkpoint 为零字节而按同一冻结配置复跑一次 G1b 外，G1c
+没有重新比较 Deep Sets/gated，也没有重跑 PF-1、GraphPorts 或 T5 四格。三条机制
+条件现已闭合：state target 可学、aligned 优于 shuffled、同一 2D 的不同构象改变
+表示且刚体复制不变。下一步进入 G2：正常 motif denoising CE、level 1/2 state CE
+与 geometry-to-motif generation CE 的清晰任务交替。
+
+GPU BF16 的同批 segment `index_add` 曾使刚体表示只有 97/128 位级相等，最大绝对
+差 0.03125；输入 E3FP 本身仍为 128/128 完全相同，CPU FP32 则恢复 128/128。
+因此它被记录为浮点归约次序效应，而不是化学不变性失败；后续报告用容差比较 GPU
+表示，不把 BF16 位级一致作为模型效果指标。
 
 ## 6. 资源裁决
 
 G1/G1b 的单格峰值显存不足 2.5 GB、500 updates 约 20 秒。后续 G1c 主要是推理
 与 C0 小样本重放，一张 4090 已足够；无需为该门租 2/4/8 卡。多卡应保留给 G2
 通过后的正式多任务训练，而不是用于扩大一个已经被统计性质否定的 level 3 目标。
+
+## 7. Checkpoint 落盘事实
+
+首次把 G1/G1b 输出直接写入 `autodl-fs` 时，manifest 正常完成但 `final_state.pt`
+为 0 byte；所以这些 manifest 可作为已完成指标的证据，却不能作为恢复权重。G1b
+随后用相同冻结配置在快盘复跑，checkpoint 为 11,165,285 bytes，`torch.load`
+回读成功，并用于上述 aligned/shuffled 诊断。runner 现已把非空与结构回读设为
+manifest 写出前的必要条件；以后不会再把“指标完成”与“checkpoint 可恢复”混为一谈。

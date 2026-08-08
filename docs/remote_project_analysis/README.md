@@ -77,7 +77,7 @@
 | [57_PF2_geometry_semantic_use_verdict_20260808.md](57_PF2_geometry_semantic_use_verdict_20260808.md) | T3MI/PF-2C 语义使用裁决、扰动证据与 raw-ID MSE 边界 | 实验事实有效；InfoNCE 优先路线已由文档 58 取代 |
 | [58_literature_grounded_geometry_supervision_and_motif_plan_20260808.md](58_literature_grounded_geometry_supervision_and_motif_plan_20260808.md) | 结合 3D-MolT5、MolCA、FineMolTex、CAMT5、Deep Sets 与构象基准，重定几何监督、motif 长度和最小实验路线 | 当前文献与执行裁决；先 C0 构象审计，再 G1 几何状态门 |
 | [59_C0_multiconformer_E3FP_identifiability_result_20260808.md](59_C0_multiconformer_E3FP_identifiability_result_20260808.md) | 1,000 分子多构象 E3FP 可辨识性、刚体不变性与 MMFF 小样本复核 | C0 PASS；进入 level-aware gated set pooling + masked-state CE 的 G1 门 |
-| [60_G1_masked_state_result_and_level_target_decision_20260808.md](60_G1_masked_state_result_and_level_target_decision_20260808.md) | Deep Sets/gated 两卡 G1、level-wise 可预测性与 level 1+2 目标修订 | 原三层 G1 未通过；保留 Deep Sets，进入 aligned/shuffled 与多构象 G1c |
+| [60_G1_masked_state_result_and_level_target_decision_20260808.md](60_G1_masked_state_result_and_level_target_decision_20260808.md) | Deep Sets/gated 两卡 G1、level-wise 可预测性、level 1+2 修订与 G1c | 原三层 G1 未通过；修订机制门 PASS，保留 Deep Sets 并进入 G2 |
 
 ## 当前结论摘要
 
