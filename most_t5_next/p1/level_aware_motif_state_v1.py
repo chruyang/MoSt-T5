@@ -28,6 +28,7 @@ class MaskedE3FPStateBatch:
     corrupted_ids: Tensor
     target_ids: Tensor
     target_mask: Tensor
+    corruption_mask: Tensor
 
 
 @dataclass(frozen=True)
@@ -48,8 +49,29 @@ def build_masked_e3fp_state_batch(
     seed: int,
     first_geometry_level: int = 1,
     target_levels: Optional[Tuple[int, ...]] = None,
+    masking_strategy: str = "legacy_slot",
+    atom_to_group: Optional[Tensor] = None,
 ) -> MaskedE3FPStateBatch:
-    """Mask populated geometry shell slots with at least one target per record."""
+    """Build deterministic E3FP corruptions and categorical state targets.
+
+    ``legacy_slot`` preserves the original G1 behaviour exactly: sampled target
+    slots are the only corrupted slots.  The formal strategies separate the
+    slots hidden from the encoder (``corruption_mask``) from the slots scored by
+    CE (``target_mask``):
+
+    * ``suffix`` samples target slots and hides that shell and every populated
+      higher shell on the same atom, preventing recursive E3FP-shell leakage;
+        * ``atom_row`` samples atoms and hides their complete populated E3FP rows;
+        * ``motif_atom_row`` samples motifs containing at least two eligible
+          atoms and hides exactly one uniformly selected row, so every target
+          retains a real same-motif state peer;
+        * ``motif_block`` samples groups and hides the complete populated E3FP rows
+      of every atom assigned to each selected group.
+
+    Every record with an eligible target is guaranteed at least one target.
+    Sampling uses a private CPU generator, so the result depends only on the
+    arguments rather than on process-global RNG state.
+    """
 
     if e3fp_ids.ndim != 3 or e3fp_ids.shape[-1] != 4:
         raise MotifStateContractError("e3fp_ids must have shape [batch, atoms, 4]")
@@ -59,6 +81,29 @@ def build_masked_e3fp_state_batch(
         raise MotifStateContractError("probability must be in (0, 1]")
     if not 0 <= int(first_geometry_level) < 4:
         raise MotifStateContractError("first_geometry_level must be in [0, 3]")
+    normalized_strategy = str(masking_strategy)
+    if normalized_strategy not in (
+        "legacy_slot",
+        "suffix",
+        "atom_row",
+        "motif_atom_row",
+        "motif_block",
+    ):
+        raise MotifStateContractError(
+            "masking_strategy must be legacy_slot, suffix, atom_row, "
+            "motif_atom_row or motif_block"
+        )
+    if normalized_strategy in ("motif_atom_row", "motif_block"):
+        if atom_to_group is None:
+            raise MotifStateContractError(
+                "atom_to_group is required for motif-owned masking"
+            )
+        if atom_to_group.shape != e3fp_ids.shape[:2]:
+            raise MotifStateContractError("atom_to_group must be [batch, atoms]")
+        if bool((atom_to_group[atom_valid] < 0).any()):
+            raise MotifStateContractError(
+                "valid atoms require non-negative group IDs for motif-owned masking"
+            )
 
     if target_levels is None:
         normalized_target_levels = tuple(range(int(first_geometry_level), 4))
@@ -76,24 +121,141 @@ def build_masked_e3fp_state_batch(
                 "target_levels must be unique levels within the permitted geometry range"
             )
 
-    eligible = (e3fp_ids >= 0) & atom_valid.unsqueeze(-1)
+    populated = (e3fp_ids >= 0) & atom_valid.unsqueeze(-1)
     permitted = torch.zeros(4, dtype=torch.bool, device=e3fp_ids.device)
     permitted[list(normalized_target_levels)] = True
-    eligible &= permitted.view(1, 1, 4)
+    eligible = populated & permitted.view(1, 1, 4)
     generator = torch.Generator(device="cpu")
     generator.manual_seed(int(seed))
-    draws = torch.rand(e3fp_ids.shape, generator=generator, device="cpu")
-    target_mask = (draws.to(e3fp_ids.device) < float(probability)) & eligible
-    for batch_index in range(e3fp_ids.shape[0]):
-        if bool(eligible[batch_index].any()) and not bool(target_mask[batch_index].any()):
-            first = eligible[batch_index].nonzero(as_tuple=False)[0]
-            target_mask[batch_index, int(first[0]), int(first[1])] = True
+
+    if normalized_strategy in ("legacy_slot", "suffix"):
+        draws = torch.rand(e3fp_ids.shape, generator=generator, device="cpu")
+        target_mask = (draws.to(e3fp_ids.device) < float(probability)) & eligible
+        for batch_index in range(e3fp_ids.shape[0]):
+            if bool(eligible[batch_index].any()) and not bool(
+                target_mask[batch_index].any()
+            ):
+                candidates = eligible[batch_index].nonzero(as_tuple=False)
+                if normalized_strategy == "legacy_slot":
+                    selected = candidates[0]
+                else:
+                    selected = candidates[
+                        int(torch.randint(len(candidates), (), generator=generator))
+                    ]
+                target_mask[
+                    batch_index,
+                    int(selected[0]),
+                    int(selected[1]),
+                ] = True
+        if normalized_strategy == "legacy_slot":
+            corruption_mask = target_mask.clone()
+        else:
+            corruption_mask = torch.zeros_like(target_mask)
+            for level in range(4):
+                lower_or_equal_target = target_mask[..., : level + 1].any(dim=-1)
+                corruption_mask[..., level] = (
+                    lower_or_equal_target & populated[..., level]
+                )
+    elif normalized_strategy == "atom_row":
+        eligible_atoms = eligible.any(dim=-1)
+        draws = torch.rand(eligible_atoms.shape, generator=generator, device="cpu")
+        selected_atoms = (
+            draws.to(e3fp_ids.device) < float(probability)
+        ) & eligible_atoms
+        for batch_index in range(e3fp_ids.shape[0]):
+            if bool(eligible_atoms[batch_index].any()) and not bool(
+                selected_atoms[batch_index].any()
+            ):
+                candidates = eligible_atoms[batch_index].nonzero(as_tuple=False).flatten()
+                selected_atom = candidates[
+                    int(torch.randint(len(candidates), (), generator=generator))
+                ]
+                selected_atoms[batch_index, int(selected_atom)] = True
+        target_mask = selected_atoms.unsqueeze(-1) & eligible
+        corruption_mask = selected_atoms.unsqueeze(-1) & populated
+    elif normalized_strategy == "motif_atom_row":
+        assert atom_to_group is not None
+        selected_atoms = torch.zeros_like(atom_valid)
+        eligible_atoms = eligible.any(dim=-1)
+        for batch_index in range(e3fp_ids.shape[0]):
+            candidate_group_ids = torch.unique(
+                atom_to_group[batch_index][eligible_atoms[batch_index]], sorted=True
+            ).tolist()
+            group_ids = [
+                int(group_id)
+                for group_id in candidate_group_ids
+                if int(
+                    (
+                        eligible_atoms[batch_index]
+                        & (atom_to_group[batch_index] == int(group_id))
+                    ).sum()
+                )
+                >= 2
+            ]
+            if not group_ids:
+                continue
+            selected_group_ids = [
+                int(group_id)
+                for group_id in group_ids
+                if float(torch.rand((), generator=generator)) < float(probability)
+            ]
+            if not selected_group_ids:
+                selected_group_ids = [
+                    int(
+                        group_ids[
+                            int(torch.randint(len(group_ids), (), generator=generator))
+                        ]
+                    )
+                ]
+            for group_id in selected_group_ids:
+                candidates = (
+                    eligible_atoms[batch_index]
+                    & (atom_to_group[batch_index] == int(group_id))
+                ).nonzero(as_tuple=False).flatten()
+                selected_atom = candidates[
+                    int(torch.randint(len(candidates), (), generator=generator))
+                ]
+                selected_atoms[batch_index, int(selected_atom)] = True
+        target_mask = selected_atoms.unsqueeze(-1) & eligible
+        corruption_mask = selected_atoms.unsqueeze(-1) & populated
+    else:
+        assert atom_to_group is not None
+        selected_atoms = torch.zeros_like(atom_valid)
+        eligible_atoms = eligible.any(dim=-1)
+        for batch_index in range(e3fp_ids.shape[0]):
+            group_ids = torch.unique(
+                atom_to_group[batch_index][eligible_atoms[batch_index]], sorted=True
+            ).tolist()
+            if not group_ids:
+                continue
+            selected_group_ids = [
+                int(group_id)
+                for group_id in group_ids
+                if float(torch.rand((), generator=generator)) < float(probability)
+            ]
+            if not selected_group_ids:
+                selected_group_ids = [
+                    int(
+                        group_ids[
+                            int(torch.randint(len(group_ids), (), generator=generator))
+                        ]
+                    )
+                ]
+            for group_id in selected_group_ids:
+                selected_atoms[batch_index] |= (
+                    atom_valid[batch_index]
+                    & (atom_to_group[batch_index] == int(group_id))
+                )
+        target_mask = selected_atoms.unsqueeze(-1) & eligible
+        corruption_mask = selected_atoms.unsqueeze(-1) & populated
+
     corrupted = e3fp_ids.clone()
-    corrupted[target_mask] = int(mask_token_id)
+    corrupted[corruption_mask] = int(mask_token_id)
     return MaskedE3FPStateBatch(
         corrupted_ids=corrupted,
         target_ids=e3fp_ids.clone(),
         target_mask=target_mask,
+        corruption_mask=corruption_mask,
     )
 
 

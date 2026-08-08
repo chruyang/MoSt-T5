@@ -18,6 +18,50 @@ def _write_jsonl(path: Path, rows) -> None:
 
 
 class PF1ConnectivitySelectionTests(unittest.TestCase):
+    def test_named_pf10_profile_freezes_final_v4_contract(self):
+        args = argparse.Namespace(
+            selection_profile=selection.PF10_PROFILE_ID,
+            target_members=None,
+            expected_permitted_members=3_360_067,
+            seed=20260807,
+            baseline_membership="pf1-run3-membership.jsonl",
+            preserve_baseline_splits=False,
+        )
+        profile, target, preserve, fraction = selection.resolve_selection_profile(
+            args
+        )
+        self.assertEqual(profile, selection.PF10_PROFILE_ID)
+        self.assertEqual(target, 336_006)
+        self.assertTrue(preserve)
+        self.assertEqual(fraction, 0.10)
+
+    def test_named_pf10_rejects_missing_baseline_or_numeric_drift(self):
+        common = dict(
+            selection_profile=selection.PF10_PROFILE_ID,
+            target_members=None,
+            expected_permitted_members=3_360_067,
+            seed=20260807,
+            preserve_baseline_splits=False,
+        )
+        with self.assertRaisesRegex(selection.PF1SelectionError, "baseline"):
+            selection.resolve_selection_profile(
+                argparse.Namespace(baseline_membership=None, **common)
+            )
+        with self.assertRaisesRegex(selection.PF1SelectionError, "target_members"):
+            selection.resolve_selection_profile(
+                argparse.Namespace(
+                    baseline_membership="pf1.jsonl",
+                    **{**common, "target_members": 336_007},
+                )
+            )
+        with self.assertRaisesRegex(selection.PF1SelectionError, "seed"):
+            selection.resolve_selection_profile(
+                argparse.Namespace(
+                    baseline_membership="pf1.jsonl",
+                    **{**common, "seed": 7},
+                )
+            )
+
     def test_closest_prefix_never_splits_a_group(self):
         groups = {"g0": 3, "g1": 4, "g2": 10}
         self.assertEqual(
@@ -92,6 +136,105 @@ class PF1ConnectivitySelectionTests(unittest.TestCase):
         self.assertFalse(
             set(candidate["train_groups"]) & set(candidate["dev_groups"])
         )
+
+    def test_expanded_plan_preserves_every_baseline_group_split(self):
+        sizes = {f"g{index}": 1 + (index % 2) for index in range(80)}
+        baseline = selection.freeze_group_plan(
+            sizes,
+            seed=20260807,
+            target_members=24,
+            dev_fraction=0.20,
+            benchmark_target_members=8,
+            np=np,
+        )
+        baseline_roles = {
+            group_id: "dev"
+            if group_id in set(baseline["dev_groups"])
+            else "train"
+            for group_id in baseline["selection_order"]
+        }
+        expanded = selection.freeze_group_plan(
+            sizes,
+            seed=20260807,
+            target_members=72,
+            dev_fraction=0.20,
+            benchmark_target_members=8,
+            baseline_group_splits=baseline_roles,
+            preserve_baseline_splits=True,
+            np=np,
+        )
+        expanded_dev = set(expanded["dev_groups"])
+        for group_id, role in baseline_roles.items():
+            self.assertIn(group_id, expanded["selection_order"])
+            self.assertEqual("dev" if group_id in expanded_dev else "train", role)
+        proof = expanded["baseline_split_preservation"]
+        self.assertTrue(proof["enabled"])
+        self.assertEqual(proof["changed_baseline_group_count"], 0)
+
+    def test_expanded_run_publishes_exact_split_preserving_superset_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            permitted_path = root / "permitted.jsonl"
+            identity_path = root / "identities.jsonl"
+            baseline_output = root / "baseline"
+            expanded_output = root / "expanded"
+            members = [f"{selection.MEMBER_PREFIX}{index}" for index in range(60)]
+            _write_jsonl(
+                permitted_path,
+                (
+                    {
+                        "schema_version": selection.PERMITTED_SCHEMA,
+                        "member_id": member_id,
+                    }
+                    for member_id in members
+                ),
+            )
+            _write_jsonl(
+                identity_path,
+                (
+                    {
+                        "schema_version": selection.IDENTITY_SCHEMA,
+                        "member_id": member_id,
+                        "connectivity_identity_sha256": f"g{index // 2}",
+                    }
+                    for index, member_id in enumerate(members)
+                ),
+            )
+            common = dict(
+                selection_profile=None,
+                permitted_membership=str(permitted_path),
+                identity_rows=str(identity_path),
+                seed=20260807,
+                expected_permitted_members=60,
+                dev_fraction=0.20,
+                benchmark_target_members=4,
+            )
+            selection.run(
+                argparse.Namespace(
+                    output_dir=str(baseline_output),
+                    target_members=12,
+                    **common,
+                )
+            )
+            manifest = selection.run(
+                argparse.Namespace(
+                    output_dir=str(expanded_output),
+                    target_members=40,
+                    baseline_membership=str(baseline_output / "membership.jsonl"),
+                    preserve_baseline_splits=True,
+                    **common,
+                )
+            )
+            comparison = manifest["baseline_comparison"]
+            self.assertEqual(comparison["removed_member_count"], 0)
+            self.assertEqual(comparison["removed_group_count"], 0)
+            self.assertEqual(comparison["common_group_split_change_count"], 0)
+            self.assertTrue(
+                manifest["selection"]["baseline_membership_is_strict_subset"]
+            )
+            self.assertTrue(
+                manifest["split"]["baseline_split_preservation"]["enabled"]
+            )
 
     def test_run_stream_joins_member_only_permitted_membership(self):
         with tempfile.TemporaryDirectory() as directory:

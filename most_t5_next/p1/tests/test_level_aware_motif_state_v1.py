@@ -41,6 +41,8 @@ class LevelAwareMotifStateTests(unittest.TestCase):
         self.assertFalse(bool(left.target_mask[..., 0].any()))
         self.assertTrue(bool(left.target_mask.any()))
         self.assertTrue(torch.equal(left.target_ids, ids))
+        self.assertTrue(torch.equal(left.corruption_mask, left.target_mask))
+        self.assertTrue(torch.equal(left.corruption_mask, right.corruption_mask))
 
     def test_mask_can_exclude_high_entropy_outer_shell(self):
         ids, valid, _ = self._fixture()
@@ -56,6 +58,161 @@ class LevelAwareMotifStateTests(unittest.TestCase):
         self.assertTrue(bool(masked.target_mask[..., 2].any()))
         self.assertFalse(bool(masked.target_mask[..., 0].any()))
         self.assertFalse(bool(masked.target_mask[..., 3].any()))
+
+    def test_suffix_level_one_target_hides_all_higher_shells(self):
+        ids, valid, _ = self._fixture()
+        masked = build_masked_e3fp_state_batch(
+            ids,
+            valid,
+            mask_token_id=4097,
+            probability=1.0,
+            seed=7,
+            target_levels=(1,),
+            masking_strategy="suffix",
+        )
+        self.assertTrue(bool(masked.target_mask[0, :3, 1].all()))
+        self.assertFalse(bool(masked.target_mask[0, 3, 1]))
+        self.assertFalse(bool(masked.target_mask[..., (0, 2, 3)].any()))
+        self.assertFalse(bool(masked.corruption_mask[..., 0].any()))
+        self.assertTrue(bool(masked.corruption_mask[0, :3, 1].all()))
+        self.assertTrue(bool(masked.corruption_mask[0, :3, 2].all()))
+        self.assertTrue(bool(masked.corruption_mask[0, :2, 3].all()))
+        self.assertFalse(bool(masked.corruption_mask[0, 2, 3]))
+        self.assertTrue(
+            bool(
+                (
+                    masked.corrupted_ids[masked.corruption_mask]
+                    == 4097
+                ).all()
+            )
+        )
+
+    def test_suffix_level_two_target_keeps_lower_shell_and_hides_outer_shell(self):
+        ids, valid, _ = self._fixture()
+        masked = build_masked_e3fp_state_batch(
+            ids,
+            valid,
+            mask_token_id=4097,
+            probability=1.0,
+            seed=9,
+            target_levels=(2,),
+            masking_strategy="suffix",
+        )
+        self.assertTrue(torch.equal(masked.corrupted_ids[..., :2], ids[..., :2]))
+        self.assertTrue(bool(masked.corruption_mask[0, :3, 2].all()))
+        self.assertTrue(bool(masked.corruption_mask[0, :2, 3].all()))
+        self.assertFalse(bool(masked.corruption_mask[..., 1].any()))
+        self.assertTrue(torch.equal(masked.target_mask[..., 2], valid))
+        self.assertFalse(bool(masked.target_mask[..., 3].any()))
+
+    def test_atom_row_hides_level_zero_but_only_scores_requested_levels(self):
+        ids, valid, _ = self._fixture()
+        masked = build_masked_e3fp_state_batch(
+            ids,
+            valid,
+            mask_token_id=4097,
+            probability=1.0,
+            seed=13,
+            target_levels=(1, 2),
+            masking_strategy="atom_row",
+        )
+        populated = (ids >= 0) & valid.unsqueeze(-1)
+        self.assertTrue(torch.equal(masked.corruption_mask, populated))
+        self.assertFalse(bool(masked.target_mask[..., 0].any()))
+        self.assertFalse(bool(masked.target_mask[..., 3].any()))
+        self.assertTrue(bool(masked.target_mask[0, :3, 1:3].all()))
+
+    def test_motif_block_hides_all_atoms_in_selected_motif(self):
+        ids, valid, groups = self._fixture()
+        masked = build_masked_e3fp_state_batch(
+            ids,
+            valid,
+            mask_token_id=4097,
+            probability=1.0,
+            seed=17,
+            target_levels=(1, 2),
+            masking_strategy="motif_block",
+            atom_to_group=groups,
+        )
+        populated = (ids >= 0) & valid.unsqueeze(-1)
+        self.assertTrue(torch.equal(masked.corruption_mask, populated))
+        self.assertTrue(bool(masked.target_mask[0, :3, 1:3].all()))
+        self.assertFalse(bool(masked.target_mask[..., (0, 3)].any()))
+
+    def test_motif_atom_row_selects_at_most_one_atom_per_group(self):
+        ids, valid, groups = self._fixture()
+        masked = build_masked_e3fp_state_batch(
+            ids,
+            valid,
+            mask_token_id=4097,
+            probability=1.0,
+            seed=19,
+            target_levels=(1, 2),
+            masking_strategy="motif_atom_row",
+            atom_to_group=groups,
+        )
+        selected_atoms = masked.corruption_mask.any(dim=-1)[0]
+        for group_id in (0, 1):
+            self.assertLessEqual(
+                int(selected_atoms[groups[0] == group_id].sum()),
+                1,
+            )
+        self.assertEqual(int(selected_atoms.sum()), 1)
+        self.assertFalse(bool(selected_atoms[2]))
+        self.assertTrue(
+            torch.equal(
+                masked.corruption_mask,
+                selected_atoms.view(1, -1, 1) & ((ids >= 0) & valid.unsqueeze(-1)),
+            )
+        )
+
+    def test_motif_block_low_probability_selects_whole_group_and_is_deterministic(self):
+        ids, valid, groups = self._fixture()
+        kwargs = dict(
+            mask_token_id=4097,
+            probability=0.01,
+            seed=23,
+            target_levels=(1,),
+            masking_strategy="motif_block",
+            atom_to_group=groups,
+        )
+        left = build_masked_e3fp_state_batch(ids, valid, **kwargs)
+        right = build_masked_e3fp_state_batch(ids, valid, **kwargs)
+        self.assertTrue(torch.equal(left.target_mask, right.target_mask))
+        self.assertTrue(torch.equal(left.corruption_mask, right.corruption_mask))
+        selected_atoms = left.corruption_mask.any(dim=-1)[0]
+        self.assertEqual(bool(selected_atoms[0]), bool(selected_atoms[1]))
+        self.assertFalse(bool(selected_atoms[3]))
+        self.assertTrue(bool(left.target_mask.any()))
+
+    def test_motif_block_requires_valid_group_mapping(self):
+        ids, valid, _ = self._fixture()
+        with self.assertRaisesRegex(MotifStateContractError, "atom_to_group"):
+            build_masked_e3fp_state_batch(
+                ids,
+                valid,
+                mask_token_id=4097,
+                probability=0.5,
+                seed=3,
+                masking_strategy="motif_block",
+            )
+
+    def test_formal_nonempty_fallback_is_not_fixed_to_first_candidate(self):
+        ids, valid, _ = self._fixture()
+        selected_atoms = set()
+        for seed in range(24):
+            masked = build_masked_e3fp_state_batch(
+                ids,
+                valid,
+                mask_token_id=4097,
+                probability=1.0e-12,
+                seed=seed,
+                target_levels=(1,),
+                masking_strategy="suffix",
+            )
+            coordinate = masked.target_mask[0].nonzero(as_tuple=False)[0]
+            selected_atoms.add(int(coordinate[0]))
+        self.assertGreater(len(selected_atoms), 1)
 
     def test_both_poolers_preserve_shapes_and_normalize_members(self):
         ids, valid, groups = self._fixture()

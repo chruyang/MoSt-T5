@@ -1,5 +1,7 @@
 # G2：冻结 G1b 状态编码器的 geometry-to-motif CE 桥接
 
+> 状态更新：G2 已完成；实际 run4 因文件存储配额改在 `autodl-tmp` 保存最终 checkpoint。结果与裁决见 `62_G2_result_geometry_channel_not_state_specific_20260808.md`。下方启动命令保留为预注册执行记录，不再用于重跑。
+
 ## 1. 本阶段回答的问题
 
 G1 已证明 motif 内的 E3FP 状态可被 Deep Sets 编码器学习，且对同尺寸错配几何和同一 2D 身份下的构象变化敏感。G2 不再继续比较集合编码器，而是回答下一层问题：
@@ -28,7 +30,7 @@ G1 已证明 motif 内的 E3FP 状态可被 Deep Sets 编码器学习，且对�
 - corruption：`mask_probability=1.0`，每条记录的全部 motif identity 被遮蔽；
 - protocol：micro-batch 64，gradient accumulation 2，nominal effective batch 128；短尾批沿既有 `drop_last=False` 语义处理；
 - updates：1,000；step 0/250/500/750/1000 固定 dev；
-- checkpoint：step 500 和 1,000；
+- checkpoint：step 500 保留评估 marker，step 1,000 保存完整恢复状态；G2 是分钟级机制筛选，不重复保存两份约 3GB 的同格权重；
 - 输入流水：每进程 12-worker 一次性 validated-record cache warm-up，随后 ordered prefetch depth 2；
 - 两张 GPU 时每卡一格，必须分别设置 `CUDA_VISIBLE_DEVICES=0` 和 `1`。
 

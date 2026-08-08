@@ -78,6 +78,12 @@
 | [58_literature_grounded_geometry_supervision_and_motif_plan_20260808.md](58_literature_grounded_geometry_supervision_and_motif_plan_20260808.md) | 结合 3D-MolT5、MolCA、FineMolTex、CAMT5、Deep Sets 与构象基准，重定几何监督、motif 长度和最小实验路线 | 当前文献与执行裁决；先 C0 构象审计，再 G1 几何状态门 |
 | [59_C0_multiconformer_E3FP_identifiability_result_20260808.md](59_C0_multiconformer_E3FP_identifiability_result_20260808.md) | 1,000 分子多构象 E3FP 可辨识性、刚体不变性与 MMFF 小样本复核 | C0 PASS；进入 level-aware gated set pooling + masked-state CE 的 G1 门 |
 | [60_G1_masked_state_result_and_level_target_decision_20260808.md](60_G1_masked_state_result_and_level_target_decision_20260808.md) | Deep Sets/gated 两卡 G1、level-wise 可预测性、level 1+2 修订与 G1c | 原三层 G1 未通过；修订机制门 PASS，保留 Deep Sets 并进入 G2 |
+| [61_G2_frozen_state_geometry_to_motif_bridge_20260808.md](61_G2_frozen_state_geometry_to_motif_bridge_20260808.md) | 冻结 G1b 状态编码器的 geometry-to-motif CE 桥接协议 | 已执行；结果见文档 62 |
+| [62_G2_result_geometry_channel_not_state_specific_20260808.md](62_G2_result_geometry_channel_not_state_specific_20260808.md) | G2 生成效果、matched/shuffled 和 zero-bridge 因果裁决 | CE 改善但对应状态使用门 FAIL |
+| [63_G3_motif_state_contrastive_alignment_plan_20260808.md](63_G3_motif_state_contrastive_alignment_plan_20260808.md) | FACET 启发下的连续构象关系预注册协议 | 已执行；identity-disjoint 连续关系门 FAIL |
+| [64_G3a_relation_result_and_continuous_geometry_decision_20260808.md](64_G3a_relation_result_and_continuous_geometry_decision_20260808.md) | G3a 结果、ETKDG 数据边界与离散 E3FP state 主线修订 | 不把 E3FP 强制解释为连续构象距离 |
+| [65_overall_architecture_literature_and_methodology_adjudication_20260808.md](65_overall_architecture_literature_and_methodology_adjudication_20260808.md) | GraphPorts、motif、E3FP、T5、训练目标、数据边界与下游证据的整体裁决 | 主线可行；完成 block state mask、state-memory adapter、2D/shuffle/zero 控制与 geometry-sensitive endpoint 后再全量训练 |
+| [66_factorized_state_adapter_p0_implementation_and_pf10_gate_20260808.md](66_factorized_state_adapter_p0_implementation_and_pf10_gate_20260808.md) | 将文档 65 落为 nested-shell-safe mask、post-T5 motif-state adapter、显式三视图与 PF-10 因果门 | P0 接口与真实 run3 小批数据流 PASS；待 PF-10 物化及 GPU 因果对照 |
 
 ## 当前结论摘要
 
@@ -108,6 +114,10 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 2026-08-08 F-Gate 准入更新：GraphPorts v1 上的单标量 zero-init `tanh` residual、单格 runner、配对合并器与真实 run3 GPU smoke 已实现；无卡 P1+P2 回归为 174/174 PASS。真实 4090 smoke 证明 M0/M1 的 CE、完整初始化、zero-gate logits/loss 全部相同，首次 gate 梯度 finite/nonzero，而 E3FP 表梯度精确为 0。数值探针同时发现 AdamWScale 的 parameter-RMS 会使零 gate 在完整 schedule 中只移动约 `5.09e-4`，故仅 gate 标量关闭该缩放；一个丢弃的真实 optimizer step 已证明 gate 正常移动而 E3FP 表仍不变。首次 M0-G 在 `autodl-fs` 写 step-500 时发生 short-write，未产生可用结果；fresh pair 将改用快盘。F-Gate 是 PF-10 前最后一个 1% 机制门，但通过后仍须完成保持 2D identity 的 3D-sensitive probe、10% 嵌套确认、完整-support tokenizer 和 PCQM/legacy 数据源裁决。最早可在这些门闭合后的 24–48 小时启动 PF-FULL；不能把当前 3,360,067-member PCQM permitted profile 写成 legacy 3,119,717。详见文档 54。
 
 2026-08-08 几何语义与文献裁决更新：T3MI 虽显著降低 M1-T 的 dev NLL，same-atom-count shuffled、gate=0、occupancy-only、atom-row rotation 和 random-ID 扰动均表明最终预测几乎不使用 E3FP 内容；冻结 M0-T 的 PF-2C adapter 也未建立配对敏感性。因此不再把 CE 改善解释为 3D 增益，也不把 motif–E3FP InfoNCE 作为下一主线。下一步先在 same-2D multi-conformer 数据上审计 E3FP 的可识别性，再以 Deep-Sets 式可学习 motif 聚合和 categorical E3FP-state CE 建立直接几何目标，通过后加入 geometry→motif 生成 CE。当前 motif partition 与无损 GraphPorts v1 保留；序列变长主要来自连接语法，而非 motif 数量，输入压缩将在几何机制通过后以 sidecar topology 单独验证。详见文档 58。
+
+2026-08-08 G2/FACET 裁决更新：G1b 对同一 2D 分子的不同构象确实敏感，但表示距离与 RMSD 的 Pearson 仅约 0.17--0.21；G2 geometry 格虽改善最终 CE，same-size shuffle 只增加 0.00214 NLL，零 bridge 反而改善 0.00238 NLL，故不能认定 T5 使用了对应构象。FACET 支持“fragment graph 参与几何交互、显式监督构象关系、分阶段接入任务模型”的机制方向，但不直接验证本项目。下一步先执行不含 T5 的 G3a 构象关系保持门；通过后才运行 topology-aware G3b 条件对齐，不对 folded E3FP ID 做数值 MSE。详见文档 62--63。
+
+2026-08-08 G3a 结果与数据边界更新：998 个 PF-1 train identities、5,547 个 RDKit 构象对的连续关系门未通过。frozen G1b baseline 的 dev Pearson/Spearman 为 0.066/0.099；两层 motif-topology adapter 为 0.182/0.224，而 train 达 0.921/0.913，说明 E3FP 不应被强行解释为跨分子的连续距离。但 PCQM 主数据没有真实多构象集合，ETKDG 只能作压力测试；该阴性结果不否定 E3FP 承担离散3D状态。主线保留 motif identity + E3FP categorical state，改为独立 state masking/head、同分子内部 correspondence corruption 与 topology-aware cross-attention；连续 SchNet/PaiNN 仅作为 GEOM/QMugs 等高质量构象集上的外部对照。详见文档 64。
 
 ## 维护约定
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the PF-1 connectivity-group sample and its bounded benchmark prefix.
+"""Freeze a named PF-1/PF-10 connectivity-group membership.
 
 The input clean membership contains member IDs only.  This module therefore
 streams the admitted PCQM identity rows, joins them to the permitted IDs and
@@ -7,10 +7,10 @@ uses the already-defined ``connectivity_identity_sha256`` as the scientific
 group key.  Selection itself is performed by NumPy PCG64, never by member or
 digest rank.
 
-No molecule payload is copied.  The output is a new, small membership release:
-approximately one percent of the final-v4 permitted members, complete at the
-connectivity-group boundary, with group-disjoint train/dev roles and an
-approximately 1024-member group-complete benchmark prefix.
+No molecule payload is copied.  Both named profiles are complete at the
+connectivity-group boundary.  PF-10 replays the PF-1 group order and preserves
+every supplied PF-1 baseline train/dev role; only newly admitted groups are
+assigned to fill the larger dev quota.
 """
 
 from __future__ import annotations
@@ -32,13 +32,79 @@ IDENTITY_SCHEMA = "most-t5-r1/molecule-identity-row/v1"
 MEMBER_PREFIX = "ogb_pcqm4mv2_train_row_index:"
 EXPECTED_PERMITTED_MEMBERS = 3_360_067
 TARGET_MEMBERS = math.floor(0.01 * EXPECTED_PERMITTED_MEMBERS)
+PF10_TARGET_MEMBERS = math.floor(0.10 * EXPECTED_PERMITTED_MEMBERS)
 DEV_FRACTION = 0.10
 BENCHMARK_TARGET_MEMBERS = 1024
 DEFAULT_SEED = 20_260_807
+PF1_PROFILE_ID = "pf1-final-v4-1pct-v1"
+PF10_PROFILE_ID = "pf10-final-v4-10pct-split-preserving-v1"
+SELECTION_PROFILES = {
+    PF1_PROFILE_ID: {
+        "target_fraction": 0.01,
+        "target_members": TARGET_MEMBERS,
+        "requires_baseline": False,
+        "preserve_baseline_splits": False,
+    },
+    PF10_PROFILE_ID: {
+        "target_fraction": 0.10,
+        "target_members": PF10_TARGET_MEMBERS,
+        "requires_baseline": True,
+        "preserve_baseline_splits": True,
+    },
+}
 
 
 class PF1SelectionError(RuntimeError):
     """The requested group-complete selection cannot be frozen."""
+
+
+def resolve_selection_profile(
+    args: argparse.Namespace,
+) -> tuple[str | None, int, bool, float | None]:
+    """Resolve the named fidelity contract without changing fixture callers.
+
+    Older programmatic callers pass an explicit ``target_members`` and no
+    profile.  The formal CLI always supplies one of ``SELECTION_PROFILES``;
+    PF-10 consequently cannot silently drift from 336,006 members, the frozen
+    seed, or baseline split preservation.
+    """
+
+    profile_id = getattr(args, "selection_profile", None)
+    requested_target = getattr(args, "target_members", None)
+    explicit_preservation = bool(
+        getattr(args, "preserve_baseline_splits", False)
+    )
+    if profile_id is None:
+        if (
+            isinstance(requested_target, bool)
+            or not isinstance(requested_target, int)
+            or requested_target <= 0
+        ):
+            raise PF1SelectionError("target_members must be a positive integer")
+        return None, requested_target, explicit_preservation, None
+    try:
+        profile = SELECTION_PROFILES[profile_id]
+    except KeyError as exc:
+        raise PF1SelectionError("unknown connectivity selection profile") from exc
+    target = int(profile["target_members"])
+    if requested_target is not None and requested_target != target:
+        raise PF1SelectionError(
+            "named connectivity profile forbids a different target_members"
+        )
+    if getattr(args, "expected_permitted_members", None) != EXPECTED_PERMITTED_MEMBERS:
+        raise PF1SelectionError(
+            "named connectivity profile requires final-v4 permitted 3,360,067"
+        )
+    if getattr(args, "seed", None) != DEFAULT_SEED:
+        raise PF1SelectionError(
+            "named connectivity profile requires PCG64 seed 20260807"
+        )
+    preserve = bool(profile["preserve_baseline_splits"])
+    if bool(profile["requires_baseline"]) and not getattr(
+        args, "baseline_membership", None
+    ):
+        raise PF1SelectionError("PF-10 requires the frozen PF-1 baseline membership")
+    return profile_id, target, preserve, float(profile["target_fraction"])
 
 
 def _read_jsonl(path: Path) -> Iterable[tuple[int, dict]]:
@@ -256,6 +322,8 @@ def freeze_group_plan(
     dev_fraction: float,
     benchmark_target_members: int,
     ineligible_group_ids: Iterable[str] = (),
+    baseline_group_splits: Mapping[str, str] | None = None,
+    preserve_baseline_splits: bool = False,
     np,
 ) -> dict[str, object]:
     """Use PCG64 to freeze PF-1 group order, split and benchmark prefix."""
@@ -289,8 +357,54 @@ def freeze_group_plan(
         for index in rng.permutation(len(selected_groups))
     )
     dev_target = max(1, math.floor(dev_fraction * selected_member_count))
-    dev_groups = closest_complete_prefix(split_order, group_sizes, dev_target)
-    dev_set = set(dev_groups)
+    baseline_group_splits = dict(baseline_group_splits or {})
+    if preserve_baseline_splits and not baseline_group_splits:
+        raise PF1SelectionError(
+            "preserve_baseline_splits requires a nonempty baseline membership"
+        )
+    invalid_baseline_roles = {
+        group_id: split
+        for group_id, split in baseline_group_splits.items()
+        if split not in {"train", "dev"}
+    }
+    if invalid_baseline_roles:
+        raise PF1SelectionError("baseline group splits contain an invalid role")
+    missing_baseline_groups = set(baseline_group_splits) - set(selected_groups)
+    if preserve_baseline_splits and missing_baseline_groups:
+        raise PF1SelectionError(
+            "expanded selection does not retain every baseline connectivity group"
+        )
+
+    if preserve_baseline_splits:
+        baseline_dev = {
+            group_id
+            for group_id, split in baseline_group_splits.items()
+            if split == "dev"
+        }
+        existing_dev_members = sum(group_sizes[group_id] for group_id in baseline_dev)
+        remaining_dev_target = max(0, dev_target - existing_dev_members)
+        new_split_order = tuple(
+            group_id
+            for group_id in split_order
+            if group_id not in baseline_group_splits
+        )
+        if remaining_dev_target > 0 and new_split_order:
+            additional_dev = set(
+                closest_complete_prefix(
+                    new_split_order,
+                    group_sizes,
+                    remaining_dev_target,
+                )
+            )
+        else:
+            additional_dev = set()
+        dev_set = baseline_dev | additional_dev
+        dev_groups = tuple(
+            group_id for group_id in selected_groups if group_id in dev_set
+        )
+    else:
+        dev_groups = closest_complete_prefix(split_order, group_sizes, dev_target)
+        dev_set = set(dev_groups)
     train_groups = tuple(
         group_id for group_id in selected_groups if group_id not in dev_set
     )
@@ -314,6 +428,28 @@ def freeze_group_plan(
         ),
         "eligible_group_count": len(selection_order),
         "ineligible_group_count": len(ineligible_set),
+        "baseline_split_preservation": {
+            "enabled": bool(preserve_baseline_splits),
+            "baseline_group_count": len(baseline_group_splits),
+            "baseline_train_group_count": sum(
+                split == "train" for split in baseline_group_splits.values()
+            ),
+            "baseline_dev_group_count": sum(
+                split == "dev" for split in baseline_group_splits.values()
+            ),
+            "changed_baseline_group_count": sum(
+                (
+                    group_id in dev_set
+                    and split != "dev"
+                )
+                or (
+                    group_id not in dev_set
+                    and split != "train"
+                )
+                for group_id, split in baseline_group_splits.items()
+                if group_id in selected_groups
+            ),
+        },
     }
 
 
@@ -368,6 +504,21 @@ def load_baseline_membership(
     return rows
 
 
+def baseline_group_split_map(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, str]:
+    """Return the already-validated connectivity-group split assignment."""
+
+    mapping: dict[str, str] = {}
+    for row in rows:
+        group_id = str(row["connectivity_identity_sha256"])
+        split = str(row["split"])
+        previous = mapping.setdefault(group_id, split)
+        if previous != split:
+            raise PF1SelectionError("baseline connectivity group crosses train/dev")
+    return mapping
+
+
 def compare_memberships(
     baseline: Sequence[Mapping[str, object]],
     candidate: Sequence[Mapping[str, object]],
@@ -380,6 +531,14 @@ def compare_memberships(
     candidate_groups = {
         str(row["connectivity_identity_sha256"]) for row in candidate
     }
+    baseline_splits = baseline_group_split_map(baseline)
+    candidate_splits = baseline_group_split_map(candidate)
+    common_groups = baseline_groups & candidate_groups
+    changed_groups = sorted(
+        group_id
+        for group_id in common_groups
+        if baseline_splits[group_id] != candidate_splits[group_id]
+    )
     return {
         "baseline_member_count": len(baseline_members),
         "candidate_member_count": len(candidate_members),
@@ -394,6 +553,8 @@ def compare_memberships(
         "removed_connectivity_groups": sorted(baseline_groups - candidate_groups),
         "added_connectivity_groups": sorted(candidate_groups - baseline_groups),
         "added_member_ids": sorted(candidate_members - baseline_members),
+        "common_group_split_change_count": len(changed_groups),
+        "common_groups_with_changed_split": changed_groups,
     }
 
 
@@ -469,6 +630,9 @@ def _write_jsonl(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
 def run(args: argparse.Namespace) -> dict[str, object]:
     import numpy as np
 
+    profile_id, target_members, preserve_baseline_splits, target_fraction = (
+        resolve_selection_profile(args)
+    )
     permitted_path = Path(args.permitted_membership).expanduser().resolve()
     identity_path = Path(args.identity_rows).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -514,13 +678,28 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         permitted_ids,
         expected_evidence_groups=evidence_groups,
     )
+    baseline_rows = (
+        load_baseline_membership(baseline_path, group_sizes)
+        if baseline_path is not None
+        else None
+    )
+    if preserve_baseline_splits and baseline_rows is None:
+        raise PF1SelectionError(
+            "--preserve-baseline-splits requires --baseline-membership"
+        )
     group_plan = freeze_group_plan(
         group_sizes,
         seed=args.seed,
-        target_members=args.target_members,
+        target_members=target_members,
         dev_fraction=args.dev_fraction,
         benchmark_target_members=args.benchmark_target_members,
         ineligible_group_ids=ineligible_groups,
+        baseline_group_splits=(
+            baseline_group_split_map(baseline_rows)
+            if baseline_rows is not None
+            else None
+        ),
+        preserve_baseline_splits=preserve_baseline_splits,
         np=np,
     )
     membership, benchmark = collect_selected_members(
@@ -531,16 +710,22 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     if len(benchmark) != group_plan["benchmark_member_count"]:
         raise PF1SelectionError("materialized benchmark count differs from group plan")
 
-    baseline_rows = (
-        load_baseline_membership(baseline_path, group_sizes)
-        if baseline_path is not None
-        else None
-    )
     baseline_comparison = (
         compare_memberships(baseline_rows, membership)
         if baseline_rows is not None
         else None
     )
+    if preserve_baseline_splits:
+        if baseline_comparison is None:
+            raise PF1SelectionError("split preservation lacks a baseline comparison")
+        if (
+            baseline_comparison["removed_member_count"] != 0
+            or baseline_comparison["removed_group_count"] != 0
+            or baseline_comparison["common_group_split_change_count"] != 0
+        ):
+            raise PF1SelectionError(
+                "expanded membership is not a split-preserving PF-1 superset"
+            )
     if support_coverage_status is None:
         support_coverage_status = "candidate" if ineligible_groups else "complete"
     if support_coverage_status not in {"candidate", "complete"}:
@@ -568,22 +753,42 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "permitted_connectivity_group_count": len(group_sizes),
         },
         "selection": {
+            "profile_id": profile_id or "explicit-programmatic-target",
             "bit_generator": "PCG64",
             "seed": args.seed,
-            "target_rule": "floor(0.01 * final_v4_permitted_members)",
-            "target_member_count": args.target_members,
+            "target_fraction": target_fraction,
+            "target_rule": (
+                "explicit_programmatic_target"
+                if target_fraction is None
+                else "floor({:.2f} * final_v4_permitted_members)".format(
+                    target_fraction
+                )
+            ),
+            "target_member_count": target_members,
             "selected_member_count": len(membership),
             "selected_group_count": len(group_plan["selection_order"]),
             "whole_group_prefix_nearest_target": True,
+            "baseline_membership_is_strict_subset": (
+                baseline_comparison is not None
+                and baseline_comparison["removed_member_count"] == 0
+                and baseline_comparison["added_member_count"] > 0
+            ),
         },
         "split": {
-            "policy": "PCG64_permuted_selected_groups_whole_group_dev_prefix",
+            "policy": (
+                "preserve_baseline_group_roles_then_PCG64_new_group_dev_prefix"
+                if preserve_baseline_splits
+                else "PCG64_permuted_selected_groups_whole_group_dev_prefix"
+            ),
             "target_dev_fraction": args.dev_fraction,
             "train_member_count": split_counts["train"],
             "dev_member_count": split_counts["dev"],
             "train_group_count": len(group_plan["train_groups"]),
             "dev_group_count": len(group_plan["dev_groups"]),
             "connectivity_group_intersection": 0,
+            "baseline_split_preservation": group_plan[
+                "baseline_split_preservation"
+            ],
         },
         "benchmark": {
             "target_member_count": args.benchmark_target_members,
@@ -645,11 +850,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--permitted-membership", required=True)
     parser.add_argument("--identity-rows", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument(
+        "--selection-profile",
+        choices=tuple(SELECTION_PROFILES),
+        default=PF1_PROFILE_ID,
+        help=(
+            "named final-v4 fidelity contract; PF-10 fixes target=336006, "
+            "seed=20260807 and requires the PF-1 baseline membership"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument(
         "--expected-permitted-members", type=int, default=EXPECTED_PERMITTED_MEMBERS
     )
-    parser.add_argument("--target-members", type=int, default=TARGET_MEMBERS)
+    parser.add_argument(
+        "--target-members",
+        type=int,
+        help="legacy explicit target; when supplied it must equal the named profile",
+    )
     parser.add_argument("--dev-fraction", type=float, default=DEV_FRACTION)
     parser.add_argument(
         "--benchmark-target-members", type=int, default=BENCHMARK_TARGET_MEMBERS
@@ -660,7 +878,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--baseline-membership",
-        help="previous group-complete membership used only for cohort delta reporting",
+        help=(
+            "previous group-complete membership; mandatory for PF-10 and used "
+            "to preserve every baseline group split"
+        ),
+    )
+    parser.add_argument(
+        "--preserve-baseline-splits",
+        action="store_true",
+        help="retain every baseline connectivity group's train/dev role in an expanded cohort",
     )
     parser.add_argument(
         "--support-coverage-status",
@@ -679,11 +905,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if min(
+    numeric_counts = [
         args.expected_permitted_members,
-        args.target_members,
         args.benchmark_target_members,
-    ) <= 0:
+    ]
+    if args.target_members is not None:
+        numeric_counts.append(args.target_members)
+    if min(numeric_counts) <= 0:
         parser.error("member counts must be positive")
     manifest = run(args)
     print(json.dumps(manifest, ensure_ascii=False, sort_keys=True))
@@ -698,7 +926,11 @@ __all__ = [
     "BENCHMARK_SCHEMA",
     "INELIGIBLE_GROUP_SCHEMA",
     "MEMBERSHIP_SCHEMA",
+    "PF1_PROFILE_ID",
+    "PF10_PROFILE_ID",
+    "PF10_TARGET_MEMBERS",
     "PF1SelectionError",
+    "SELECTION_PROFILES",
     "closest_complete_prefix",
     "collect_selected_members",
     "count_permitted_connectivity_groups",
@@ -708,4 +940,5 @@ __all__ = [
     "load_baseline_membership",
     "compare_memberships",
     "member_ordinal",
+    "resolve_selection_profile",
 ]
