@@ -201,3 +201,83 @@ motif 数量本身；平均 motif 数仅约 7.20，明显少于平均原子数 1
 - MARCEL, ICLR 2024: https://openreview.net/forum?id=NSDszJ2uIV
 - 3DCS, ICLR 2026: https://iclr.cc/virtual/2026/poster/10010228
 - data2vec: https://arxiv.org/abs/2202.03555
+
+## 10. Deep Sets 的现行地位与更适合本项目的变体
+
+### 10.1 Deep Sets 并未过时，但通常是基础组件而非最终复杂架构
+
+MARCEL（ICLR 2024）在 6 个单构象 3D backbone、9 个任务上比较 mean、
+DeepSets 和 self-attention 三类 conformer-set encoder。DeepSets 在 54 组
+实验中的 42 组取得显著改善；简单 mean 丢失辨别信息，而理论表达力更强的
+self-attention 结果反而不稳定。作者将其归因于 DeepSets 的两个非线性变换
+能够以较小开销建模集合，而 pairwise attention 更难优化。这是与本项目最接近
+的现成证据：**Deep Sets 仍是可信且强的低成本基线，复杂 attention 不保证更好。**
+
+AllSet（ICLR 2022）把 Deep Sets 和 Set Transformer 都作为可替换 multiset
+function；Graph Multiset Transformer（ICLR 2021）则把结构依赖加入 attention
+pooling。这说明近年的趋势不是抛弃 Deep Sets，而是在需要元素交互或图结构时，
+在其置换不变框架上加入 attention/structural bias。
+
+### 10.2 本项目不应把 atom×shell 直接视作一个扁平集合
+
+每个 motif 的输入实际有两层结构：
+
+1. 同一原子的 shell level 0–3 有固定语义和顺序；
+2. motif 内原子的排列应当不影响输出。
+
+因此“把所有 `(atom, shell)` embedding 直接 mean”以及“对所有 pair 直接做
+Deep Sets”都会丢掉层级。更合适的最薄结构是 **level-aware gated set pooling**：
+
+```text
+h_a = phi(concat_l(E[id_a,l] + LevelEmbedding[l]), valid_shell_mask)
+score_a = w^T tanh(W h_a)
+alpha_a = masked_softmax(score_a over atoms in motif)
+g_m = rho(sum_a alpha_a h_a)
+```
+
+- shell 先在 atom 内按固定 level 编码，不把 level 当作无序元素；
+- atom 再以 attention-weighted set pooling 聚合，保持 atom permutation invariance；
+- `h_a` 可直接接 per-shell categorical state head；
+- `g_m` 作为唯一 motif geometry carrier 接入 T5，不增加序列长度；
+- 参数量只是一组小 MLP 和一个标量 attention scorer。
+
+这一形式可视为 gated attention MIL pooling 与 Deep Sets 的结合。它比纯
+Deep Sets 多了可解释的 atom 权重，但不引入 atom–atom 的二次 attention。
+
+### 10.3 候选方法的适配度
+
+| 方法 | 优点 | 对当前任务的风险 | 裁决 |
+|---|---|---|---|
+| 原始 mean | 无参数、快 | 已被实验证明容易被忽略；无聚合前非线性 | 淘汰为历史对照 |
+| 标准 Deep Sets | 置换不变、轻量；MARCEL直接支持 | 若扁平化会丢失atom/shell层级 | 保留为必要基线 |
+| level-aware gated set pooling | 保留shell层级；学习atom重要性；开销小 | 不显式建模atom–atom pair | **G1主候选** |
+| Set Transformer/PMA | 显式建模集合元素交互 | MARCEL中attention结果混合；参数与优化更复杂 | 主候选失败后再启用 |
+| atom–motif cross-attention / hierarchical GNN | HimGNN等证明适合多尺度分子性质学习 | 容易把2D拓扑捷径重新引入几何机制门 | 后续完整模型候选，不用于首个3D因果门 |
+| SE(3)/E(3) GNN（PaiNN/GemNet等） | 直接使用坐标，几何归纳偏置最强 | 更换E3FP输入定义、数据流和计算预算 | 若C0证明E3FP不可辨时才转向 |
+
+HimGNN 的 atom-MPNN、motif-MPNN 与 cross-attention，以及 Substructure-Atom
+Cross Attention 都证明 atom–motif 交互在性质预测中有价值；但它们的目标是
+融合完整化学拓扑。当前 G1 的目的则是隔离“E3FP内容是否被使用”，过早引入
+motif graph message passing 会增加 2D 混杂。因此“领域内更复杂”并不等于
+“本机制实验更合适”。
+
+### 10.4 更新后的最小比较
+
+G1 只需同一数据、同一 state CE 下比较：
+
+1. standard Deep Sets：atom-level `phi -> mean/sum -> rho`；
+2. level-aware gated set pooling：atom-level shell encoder + learned atom weights。
+
+若 gated pooling 未优于 Deep Sets 或仍没有 shuffled/conformer sensitivity，再试
+单层 Set Transformer/PMA；不同时展开 GNN、cross-attention 和多层 set attention。
+这样既有领域内强基线，也能把改进归因于“层级与自适应聚合”，而不是模型规模。
+
+补充来源：
+
+- MARCEL set encoder comparison: https://sxkdz.github.io/files/publications/ICLR/MARCEL/MARCEL.pdf
+- Set Transformer, ICML 2019: https://proceedings.mlr.press/v97/lee19d.html
+- Graph Multiset Transformer, ICLR 2021: https://iclr.cc/virtual/2021/poster/3311
+- AllSet, ICLR 2022: https://iclr.cc/virtual/2022/poster/6302
+- Attention-based Deep MIL: https://arxiv.org/abs/1802.04712
+- HimGNN: https://academic.oup.com/bib/article/24/5/bbad305/7245716
+- Substructure-Atom Cross Attention: https://arxiv.org/abs/2210.08243
