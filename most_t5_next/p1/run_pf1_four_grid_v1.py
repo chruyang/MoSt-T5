@@ -908,9 +908,10 @@ def _train_one_condition(
     checkpoint_writer: Callable[..., str],
     resume_checkpoint: Path | None = None,
     train_prefetch_depth: int = TRAIN_PREFETCH_DEPTH,
+    optimizer_builder: Callable[..., Any] = build_pf1_optimizer,
 ) -> dict[str, object]:
     model.to(device)
-    optimizer = build_pf1_optimizer(model, protocol)
+    optimizer = optimizer_builder(model, protocol)
     scheduler = PF1LearningRateSchedule(optimizer, protocol)
     cursor = _TrainCursor(reader, protocol.micro_batch_size)
     if train_prefetch_depth < 0:
@@ -1207,6 +1208,7 @@ def execute_pf1_four_grid(
     torch_module: Any,
     wrapper_loader: Callable[..., Any] = load_verified_four_grid_wrapper,
     checkpoint_writer: Callable[..., str] = write_pf1_checkpoint,
+    optimizer_builder: Callable[..., Any] = build_pf1_optimizer,
     protocol: PF1OptimizationProtocol = FROZEN_PF1_PROTOCOL,
     resume_checkpoints: Mapping[str, Path] | None = None,
     condition_ids: Sequence[str] = CONDITION_ORDER,
@@ -1267,6 +1269,7 @@ def execute_pf1_four_grid(
                 protocol=protocol,
                 torch_module=torch_module,
                 checkpoint_writer=checkpoint_writer,
+                optimizer_builder=optimizer_builder,
                 resume_checkpoint=resume_by_condition.get(condition_id),
             )
             _cache_contract, cache_telemetry = _validated_record_cache_views(

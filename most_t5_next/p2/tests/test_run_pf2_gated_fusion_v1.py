@@ -13,7 +13,12 @@ from unittest import mock
 TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 
 if TORCH_AVAILABLE:
-    from most_t5_next.p1.pf1_optimization import G_CODEC_PROTOCOL_ID
+    import torch
+
+    from most_t5_next.p1.pf1_optimization import (
+        G_CODEC_PROTOCOL_ID,
+        PF1LearningRateSchedule,
+    )
     from most_t5_next.p2.gated_reference_geometry_fusion_v1 import (
         FUSION_ID,
         ZeroInitGatedE3FPCarrierFusion,
@@ -25,6 +30,7 @@ if TORCH_AVAILABLE:
         F_GATE_PROTOCOL,
         F_GATE_PROTOCOL_ID,
         REPORT_SCHEMA,
+        build_f_gate_optimizer,
         build_parser,
         execute_pf2_gated_fusion,
         validate_f_gate_checkpoint_contract,
@@ -144,6 +150,7 @@ class PF2GatedFusionRunnerTest(unittest.TestCase):
             )
             self.assertIs(captured["protocol"], F_GATE_PROTOCOL)
             self.assertIs(captured["checkpoint_writer"], write_f_gate_checkpoint)
+            self.assertIs(captured["optimizer_builder"], build_f_gate_optimizer)
             self.assertEqual(
                 report["data"]["paired_release_root"],
                 str(release_root.resolve()),
@@ -152,6 +159,33 @@ class PF2GatedFusionRunnerTest(unittest.TestCase):
                 (output_dir / F_GATE_MANIFEST_NAME).read_text(encoding="utf-8")
             )
             self.assertEqual(saved, report)
+
+    def test_gate_optimizer_uses_absolute_update_only_for_the_scalar(self):
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.regular = torch.nn.Parameter(torch.ones(2))
+                self.geometry_fusion = ZeroInitGatedE3FPCarrierFusion(
+                    num_e3fp_embeddings=8,
+                    hidden_size=2,
+                )
+
+        model = Model()
+        optimizer = build_f_gate_optimizer(model, F_GATE_PROTOCOL)
+        self.assertEqual(len(optimizer.param_groups), 2)
+        self.assertTrue(optimizer.param_groups[0]["scale_parameter"])
+        self.assertFalse(optimizer.param_groups[1]["scale_parameter"])
+        self.assertIs(
+            optimizer.param_groups[1]["params"][0],
+            model.geometry_fusion.geometry_gate_logit,
+        )
+        schedule = PF1LearningRateSchedule(optimizer, F_GATE_PROTOCOL)
+        gate = model.geometry_fusion.geometry_gate_logit
+        for _ in range(F_GATE_PROTOCOL.total_updates):
+            gate.grad = torch.ones_like(gate)
+            optimizer.step()
+            schedule.step()
+        self.assertGreater(abs(float(gate.detach().item())), 0.1)
 
     def test_executor_rejects_wrong_scope_or_protocol(self):
         def should_not_run(**kwargs):

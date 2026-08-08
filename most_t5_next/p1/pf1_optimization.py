@@ -78,6 +78,7 @@ class AdamWScale(torch.optim.Optimizer):
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1.0e-6,
         weight_decay: float = 0.0,
+        scale_parameter: bool = True,
     ) -> None:
         if lr < 0.0:
             raise ValueError("learning rate must be nonnegative")
@@ -87,6 +88,8 @@ class AdamWScale(torch.optim.Optimizer):
             raise ValueError("epsilon must be nonnegative")
         if weight_decay < 0.0:
             raise ValueError("weight decay must be nonnegative")
+        if not isinstance(scale_parameter, bool):
+            raise ValueError("scale_parameter must be boolean")
         super().__init__(
             params,
             defaults={
@@ -94,6 +97,7 @@ class AdamWScale(torch.optim.Optimizer):
                 "betas": tuple(float(value) for value in betas),
                 "eps": float(eps),
                 "weight_decay": float(weight_decay),
+                "scale_parameter": scale_parameter,
             },
         )
 
@@ -138,7 +142,11 @@ class AdamWScale(torch.optim.Optimizer):
                     * math.sqrt(bias_correction2)
                     / bias_correction1
                 )
-                rms_scale = max(1.0e-3, float(self._rms(parameter).item()))
+                rms_scale = (
+                    max(1.0e-3, float(self._rms(parameter).item()))
+                    if group.get("scale_parameter", True)
+                    else 1.0
+                )
                 denominator = exp_avg_sq.sqrt().add_(group["eps"])
                 parameter.addcdiv_(
                     exp_avg,

@@ -38,20 +38,29 @@ h'_i=h_i+\tanh(\alpha)g_i,
 
 其中只有一个 shape `[1]` 的标量 gate；不加入 projection、LayerNorm、teacher、MSE 或辅助 loss。`alpha=0` 时 M1 在函数上与 M0 相同，首次反向只更新 gate，E3FP 表在 gate 打开前梯度严格为零。
 
+这里必须处理 AdamWScale 与零参数的真实交互。该优化器把每个更新乘以 `max(1e-3, parameter_rms)`；对零初始化标量，即使恒定单位梯度，完整 1,000-step schedule 的 logit 也只移动 `-5.09e-4`，从机制上几乎打不开 gate。正式合同因此保持：
+
+- T5 与 E3FP table 继续使用原 AdamWScale parameter-RMS scaling；
+- 只有 shape `[1]` 的 gate 使用相同 Adam moments、LR schedule、clip 与 weight decay，但关闭 parameter-RMS scaling；
+- M0/M1 都有完全相同的两个 parameter groups；M0 的 gate 无 gradient，因此仍精确不动。
+
+这不是为 M1 单独调 LR，也不改变任何已有权重的更新规则；它只避免把 T5 风格的相对参数缩放错误用于零初始化控制量。旧 checkpoint 若没有该新 group 字段，loader 仍默认恢复原 parameter-RMS 行为，保持历史可恢复性。
+
 这不是主观补丁。Flamingo 使用 zero-initialized `tanh` gates 将新增视觉 cross-attention/residual 安全接入冻结语言模型，并报告移除门控会损害稳定性；LLaMA-Adapter 同样用零初始化 attention gate 避免新增模态在训练初期扰动语言模型。[Flamingo](https://arxiv.org/abs/2204.14198)、[LLaMA-Adapter, ICLR 2024](https://proceedings.iclr.cc/paper_files/paper/2024/hash/c196239c5f9481e0db2755f31fe4585f-Abstract-Conference.html)。本项目只借用“安全注入”原则，不把它们当作分子 3D 有效性的证据。
 
 代码还与固定上游实现逐行对照：OpenFlamingo commit [`655f693`](https://github.com/mlfoundations/open_flamingo/commit/655f693fbfa04cd6e9a987d960654624d48917cf) 和 LLaMA-Adapter commit [`521a09d`](https://github.com/OpenGVLab/LLaMA-Adapter/commit/521a09da84f70f6913d54b7421afa24010319e47) 均以 `tanh(gate)` 缩放新增支路。3D-MolT5 支持 E3FP embedding summation 的领域先例，但没有验证 motif pooling 后固定 0.5 注入一定稳定，因此不能机械照搬。[3D-MolT5, ICLR 2025](https://proceedings.iclr.cc/paper_files/paper/2025/file/3d4dc72d715bd6415d356293079adf3d-Paper-Conference.pdf)
 
 ## 3. GPU 前的硬门
 
-正式 M0-G/M1-G 前只运行一个 2-member、零 optimizer step 的真实 run3 smoke，并要求：
+正式 M0-G/M1-G 前只运行一个 2-member 的真实 run3 smoke，并要求：
 
 1. M0/M1 collator 的 CE tensors 完全相同；
 2. 两个 wrapper 的完整初始化 state 逐 tensor 相同；
 3. eval 模式下零 gate 的 M0/M1 logits 与 loss bitwise equal；
 4. M1 首次 backward 的 gate gradient finite 且非零；
 5. 同一 backward 中 E3FP table gradient L1 必须严格为 0；
-6. 不写训练 checkpoint、不改变任何参数。
+6. 执行一个随后丢弃的 optimizer step：gate 必须按 absolute Adam scale 明显离开 0，而 E3FP table 仍 bitwise unchanged；
+7. 不写训练 checkpoint，所有 smoke 后模型状态均丢弃。
 
 实现入口为 `most_t5_next/p2/validate_pf2_gated_fusion_gpu_smoke_v1.py`。该 smoke 只验证接口，不参与模型选择。
 
@@ -65,10 +74,14 @@ h'_i=h_i+\tanh(\alpha)g_i,
 | zero-gate logits/loss | bitwise equal |
 | 首次 gate gradient | 45.2913，finite/nonzero |
 | 同次 E3FP table gradient L1 | 0.0 |
-| optimizer steps | 0 |
-| peak allocated GPU memory | 3,219,304,960 bytes |
+| first-update LR | 1e-4 |
+| first-update preclip norm | 5,528.085 |
+| gate logit after discarded step | -9.96155e-5 |
+| E3FP table after discarded step | bitwise unchanged |
+| persisted optimizer steps | 0 |
+| peak allocated GPU memory | 5,284,049,920 bytes |
 
-证据为 `tmp/pf2_f_gate_gpu_smoke_v1_20260808.json`。因此 GPU runtime admission 已关闭；上述 loss=62.575 只是未训练模型的 smoke 数值，不进入科学比较。
+证据为 `tmp/pf2_f_gate_gpu_smoke_optimizer_v3_20260808.json`。因此 GPU runtime admission 已关闭；上述 loss=62.575 只是未训练模型的 smoke 数值，不进入科学比较。
 
 ## 4. F-Gate 的预注册裁决
 
@@ -145,8 +158,8 @@ CE 两门通过、sensitivity 不通过
 - 单格 runner：`most_t5_next/p2/run_pf2_gated_fusion_v1.py`
 - paired adjudicator：`most_t5_next/p2/merge_pf2_gated_fusion_v1.py`
 - real GPU smoke：`most_t5_next/p2/validate_pf2_gated_fusion_gpu_smoke_v1.py`
-- CPU regression：新增模块与既有 P1/P2 联合 `171/171 PASS`
-- real GPU smoke：`tmp/pf2_f_gate_gpu_smoke_v1_20260808.json`，status=`pass`
+- CPU regression：新增模块与既有 P1/P2 联合 `174/174 PASS`
+- real GPU smoke：`tmp/pf2_f_gate_gpu_smoke_optimizer_v3_20260808.json`，status=`pass`
 - run3 paired release、union-init 与 base T5 均已在 nmb1 保留，无需重新下载或重建
 
-当前 nmb1 已可见 1×RTX 4090（24,564 MiB），第 3 节 smoke 已通过。下一动作是先提交并固定本轮源码，再顺序运行 fresh M0-G/M1-G；不再插入新的架构候选。
+当前 nmb1 已可见 1×RTX 4090（24,564 MiB），第 3 节 smoke 已通过。commit `4060d86` 的首次 M0-G 尝试在 step-500 写入 `autodl-fs` 时遇到 PyTorch zip writer short-write（`unexpected pos`）并自动退出；只留下不完整 checkpoint，未产生可用模型结果，也未启动 M1。该失败目录被保留作执行证据，不进入裁决。下一次从包含 gate optimizer 修正的新提交、快盘新输出路径 fresh 重跑，避免复用损坏 checkpoint；不再插入新的架构候选。

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Validate the real run3 F-Gate boundary before a 1,000-update screen.
 
-The smoke uses one frozen motif minibatch and performs no optimizer update.  It
-proves three implementation facts on the actual T5/union-tokenizer/runtime:
+The smoke uses one frozen motif minibatch and discards all state after one
+optimizer update.  It proves four implementation facts on the actual
+T5/union-tokenizer/runtime:
 
 * M0 and M1 receive exactly the same CE tensors;
 * a zero gate makes the M1 logits and loss bitwise equal to M0 in eval mode;
 * the first M1 backward gives the scalar gate a finite nonzero gradient while
-  the E3FP embedding table receives an exact zero gradient.
+  the E3FP embedding table receives an exact zero gradient;
+* one discarded optimizer step moves the scalar on the absolute Adam scale
+  while leaving the still-closed E3FP table bitwise unchanged.
 
 It is a runtime admission test, not a model-quality experiment.
 """
@@ -26,6 +29,10 @@ from most_t5_next.p1.build_pf1_paired_release_v1 import (
     PF1PairedReleaseReader,
     TOKENIZER_DIRECTORY,
 )
+from most_t5_next.p1.pf1_optimization import (
+    PF1LearningRateSchedule,
+    clip_pf1_gradients,
+)
 from most_t5_next.p1.run_pf1_four_grid_v1 import collate_pf1_condition
 from most_t5_next.p1.training_adapter import (
     select_four_grid_forward_inputs,
@@ -35,6 +42,10 @@ from most_t5_next.p2.gated_reference_geometry_fusion_v1 import (
     FUSION_ID,
     ZeroInitGatedE3FPCarrierFusion,
     load_verified_gated_four_grid_wrapper,
+)
+from most_t5_next.p2.run_pf2_gated_fusion_v1 import (
+    F_GATE_PROTOCOL,
+    build_f_gate_optimizer,
 )
 from most_t5_next.r1.tokenizer.build_p1_canary_union_tokenizer_v1 import (
     load_verified_canary_union_tokenizer,
@@ -198,11 +209,26 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
         )
     train_output.loss.backward()
     gradient_report = _require_zero_gate_gradient_boundary(wrappers["M1"])
+    fusion = wrappers["M1"].geometry_fusion
+    table_before = fusion.shared_embedding.weight.detach().clone()
+    optimizer = build_f_gate_optimizer(wrappers["M1"], F_GATE_PROTOCOL)
+    scheduler = PF1LearningRateSchedule(optimizer, F_GATE_PROTOCOL)
+    first_update_lr = float(optimizer.param_groups[0]["lr"])
+    preclip_norm = clip_pf1_gradients(wrappers["M1"], F_GATE_PROTOCOL)
+    optimizer.step()
+    scheduler.step()
+    gate_after_step = float(
+        fusion.geometry_gate_logit.detach().float().cpu().item()
+    )
+    if not math.isfinite(gate_after_step) or abs(gate_after_step) < 1.0e-5:
+        raise FGateSmokeError("absolute-scale gate did not open on its first update")
+    if not torch.equal(table_before, fusion.shared_embedding.weight.detach()):
+        raise FGateSmokeError("closed E3FP table changed on the first gate update")
 
     report: dict[str, object] = {
         "schema_version": REPORT_SCHEMA,
         "status": "pass",
-        "scope": "real_run3_runtime_admission_only_no_optimizer_step",
+        "scope": "real_run3_runtime_admission_one_discarded_optimizer_step",
         "fusion_id": FUSION_ID,
         "members": len(rows),
         "record_ids": list(batches["M0"].ce_batch.record_ids),
@@ -212,7 +238,12 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
         "m0_m1_zero_gate_loss_bitwise_equal": True,
         "loss": loss_value,
         **gradient_report,
-        "optimizer_steps": 0,
+        "discarded_optimizer_steps": 1,
+        "persisted_optimizer_steps": 0,
+        "first_update_learning_rate": first_update_lr,
+        "first_update_preclip_gradient_norm": preclip_norm,
+        "geometry_gate_logit_after_first_update": gate_after_step,
+        "e3fp_table_bitwise_unchanged_after_first_update": True,
         "peak_gpu_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
         "runtime": {
             "torch": torch.__version__,

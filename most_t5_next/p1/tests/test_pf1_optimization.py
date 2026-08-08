@@ -111,6 +111,43 @@ class PF1OptimizationTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(parameter).all())
         self.assertEqual(optimizer.state[parameter]["step"], 1)
 
+    def test_adamwscale_can_disable_parameter_rms_for_zero_scalars(self) -> None:
+        scaled = torch.nn.Parameter(torch.zeros(1))
+        absolute = torch.nn.Parameter(torch.zeros(1))
+        optimizer = AdamWScale(
+            [
+                {"params": [scaled]},
+                {"params": [absolute], "scale_parameter": False},
+            ],
+            lr=1.0e-3,
+            betas=(0.9, 0.999),
+            eps=1.0e-6,
+            weight_decay=0.0,
+        )
+        scaled.grad = torch.ones_like(scaled)
+        absolute.grad = torch.ones_like(absolute)
+        optimizer.step()
+        self.assertAlmostEqual(
+            float(absolute.detach().item() / scaled.detach().item()),
+            1000.0,
+            places=3,
+        )
+        self.assertTrue(optimizer.param_groups[0]["scale_parameter"])
+        self.assertFalse(optimizer.param_groups[1]["scale_parameter"])
+
+    def test_legacy_optimizer_state_defaults_to_parameter_rms_scaling(self) -> None:
+        source_parameter = torch.nn.Parameter(torch.ones(1))
+        source = AdamWScale([source_parameter], lr=1.0e-3)
+        state = source.state_dict()
+        state["param_groups"][0].pop("scale_parameter")
+
+        target_parameter = torch.nn.Parameter(torch.ones(1))
+        target = AdamWScale([target_parameter], lr=1.0e-3)
+        target.load_state_dict(state)
+        target_parameter.grad = torch.ones_like(target_parameter)
+        target.step()
+        self.assertLess(float(target_parameter.detach().item()), 1.0)
+
     def test_global_gradient_clip_reports_preclip_norm(self) -> None:
         model = torch.nn.Linear(2, 1, bias=False)
         protocol = PF1OptimizationProtocol(

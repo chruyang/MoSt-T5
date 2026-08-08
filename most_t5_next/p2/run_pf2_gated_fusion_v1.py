@@ -18,8 +18,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 from most_t5_next.p1.build_pf1_paired_release_v1 import MANIFEST_NAME
 from most_t5_next.p1.pf1_optimization import (
+    AdamWScale,
     G_CODEC_PF1_PROTOCOL,
     G_CODEC_PROTOCOL_ID,
+    PF1OptimizationProtocol,
 )
 from most_t5_next.p1.run_pf1_four_grid_v1 import (
     CONDITION_MANIFEST_NAME,
@@ -50,6 +52,8 @@ FUSION_CONTRACT = {
     "carrier_injection": "identity_plus_tanh_scalar_gate_times_geometry",
     "gate_parameter_shape": [1],
     "gate_initial_logit": 0.0,
+    "gate_optimizer": "adam_without_parameter_rms_scaling",
+    "other_parameter_optimizer": "adamwscale_with_parameter_rms_scaling",
     "initial_function_equals_geometry_free_model": True,
     "noncarrier_identity_unchanged": True,
     "projection": False,
@@ -58,6 +62,43 @@ FUSION_CONTRACT = {
     "auxiliary_loss": False,
     "matched_motif_pair_required": True,
 }
+
+
+def build_f_gate_optimizer(
+    model: Any,
+    protocol: PF1OptimizationProtocol,
+) -> AdamWScale:
+    """Keep AdamWScale everywhere except the zero-initialized scalar gate.
+
+    AdamWScale multiplies each update by ``max(1e-3, parameter_rms)``.  That is
+    appropriate for the pretrained weights and E3FP table, but would limit a
+    scalar initialized at zero to an approximately 5e-4 trajectory over this
+    complete screen.  The gate therefore uses the same Adam moments and LR
+    schedule without parameter-RMS scaling, matching the absolute update used
+    for zero-initialized gates in the reference architectures.
+    """
+
+    fusion = getattr(model, "geometry_fusion", None)
+    if not isinstance(fusion, ZeroInitGatedE3FPCarrierFusion):
+        raise PF1TrainingError("F-Gate optimizer received a different fusion")
+    gate = fusion.geometry_gate_logit
+    regular = [
+        parameter
+        for parameter in model.parameters()
+        if parameter.requires_grad and parameter is not gate
+    ]
+    if not regular or not gate.requires_grad:
+        raise PF1TrainingError("F-Gate optimizer parameter partition is empty")
+    return AdamWScale(
+        [
+            {"params": regular, "scale_parameter": True},
+            {"params": [gate], "scale_parameter": False},
+        ],
+        lr=protocol.base_learning_rate,
+        betas=(protocol.beta1, protocol.beta2),
+        eps=protocol.epsilon,
+        weight_decay=protocol.weight_decay,
+    )
 
 
 def _paired_release_binding(reader: Any) -> dict[str, object]:
@@ -212,6 +253,7 @@ def execute_pf2_gated_fusion(
         wrapper_loader=load_verified_gated_four_grid_wrapper,
         protocol=F_GATE_PROTOCOL,
         checkpoint_writer=write_f_gate_checkpoint,
+        optimizer_builder=build_f_gate_optimizer,
     )
     if not isinstance(report, dict) or report.get("status") != "pass":
         raise PF1TrainingError("F-Gate engine did not return a passing report")
@@ -230,6 +272,8 @@ def execute_pf2_gated_fusion(
     if not isinstance(optimization, dict):
         raise PF1TrainingError("F-Gate engine lacks optimization contract")
     optimization["protocol_id"] = F_GATE_PROTOCOL_ID
+    optimization["geometry_gate_parameter_rms_scaling"] = False
+    optimization["all_other_parameter_rms_scaling"] = True
     interpretation = report.get("interpretation")
     if not isinstance(interpretation, Mapping):
         interpretation = {}
@@ -305,6 +349,7 @@ __all__ = [
     "F_GATE_PROTOCOL_ID",
     "REPORT_SCHEMA",
     "build_parser",
+    "build_f_gate_optimizer",
     "execute_pf2_gated_fusion",
     "main",
     "run",
