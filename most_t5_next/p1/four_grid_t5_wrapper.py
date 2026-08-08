@@ -242,6 +242,7 @@ class FourGridT5Wrapper(nn.Module):
         e3fp_ids: Tensor | None = None,
         e3fp_atom_mask: Tensor | None = None,
         e3fp_atom_to_token: Tensor | None = None,
+        e3fp_atom_is_attachment: Tensor | None = None,
         condition_id: object | None = None,
         **t5_kwargs: Any,
     ) -> Any:
@@ -277,6 +278,7 @@ class FourGridT5Wrapper(nn.Module):
             e3fp_ids=e3fp_ids,
             e3fp_atom_mask=e3fp_atom_mask,
             e3fp_atom_to_token=e3fp_atom_to_token,
+            e3fp_atom_is_attachment=e3fp_atom_is_attachment,
         )
         input_embeddings = self.get_input_embeddings()(input_ids)
         fused_embeddings = self.geometry_fusion(

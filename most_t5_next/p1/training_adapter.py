@@ -19,6 +19,7 @@ GEOMETRY_MODEL_INPUT_KEYS = (
     "e3fp_atom_mask",
     "e3fp_atom_to_token",
 )
+OPTIONAL_GEOMETRY_MODEL_INPUT_KEYS = ("e3fp_atom_is_attachment",)
 FOUR_GRID_MODEL_INPUT_KEYS = MODEL_INPUT_KEYS + GEOMETRY_MODEL_INPUT_KEYS
 
 
@@ -147,7 +148,9 @@ def to_four_grid_batch_encoding(
     """Convert one validated A0/A1/M0/M1 batch to wrapper tensor kwargs.
 
     CE-only cells return the ordinary three T5 tensors.  Geometry-enabled
-    cells add exactly the three fields declared by :class:`FourGridT5Wrapper`;
+    cells add the three original geometry fields and, when persisted by the
+    motif record, the optional attachment-role field declared by
+    :class:`FourGridT5Wrapper`;
     record IDs and ``model_to_source_atom_index`` remain audit provenance and
     never cross the model boundary.
     """
@@ -174,11 +177,17 @@ def to_four_grid_batch_encoding(
         "e3fp_ids": torch_module.long,
         "e3fp_atom_mask": torch_module.bool,
         "e3fp_atom_to_token": torch_module.long,
+        "e3fp_atom_is_attachment": torch_module.bool,
     }
     for key in GEOMETRY_MODEL_INPUT_KEYS:
         encoded[key] = torch_module.as_tensor(
             geometry_values[key], dtype=dtypes[key], device=device
         )
+    for key in OPTIONAL_GEOMETRY_MODEL_INPUT_KEYS:
+        if key in geometry_values:
+            encoded[key] = torch_module.as_tensor(
+                geometry_values[key], dtype=dtypes[key], device=device
+            )
     return encoded
 
 
@@ -194,5 +203,12 @@ def select_four_grid_forward_inputs(
     if all(present):
         selected.update(
             {key: batch_encoding[key] for key in GEOMETRY_MODEL_INPUT_KEYS}
+        )
+        selected.update(
+            {
+                key: batch_encoding[key]
+                for key in OPTIONAL_GEOMETRY_MODEL_INPUT_KEYS
+                if key in batch_encoding
+            }
         )
     return selected

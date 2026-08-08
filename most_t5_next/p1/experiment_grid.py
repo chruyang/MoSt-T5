@@ -141,6 +141,7 @@ class GeometryBatchSidecar:
     atom_lengths: tuple[int, ...]
     e3fp_level_count: int
     token_width: int
+    e3fp_atom_is_attachment: tuple[tuple[bool, ...], ...] | None = None
 
     def __post_init__(self) -> None:
         batch_size = len(self.record_ids)
@@ -155,6 +156,10 @@ class GeometryBatchSidecar:
             raise FourGridContractError("geometry sidecar batch dimensions disagree")
         if self.e3fp_level_count <= 0 or self.token_width <= 0:
             raise FourGridContractError("geometry dimensions must be positive")
+        if self.e3fp_atom_is_attachment is not None and len(
+            self.e3fp_atom_is_attachment
+        ) != batch_size:
+            raise FourGridContractError("attachment-role batch dimension disagrees")
 
         atom_widths = {len(row) for row in self.e3fp_ids}
         if len(atom_widths) != 1 or 0 in atom_widths:
@@ -165,6 +170,11 @@ class GeometryBatchSidecar:
             mask = self.e3fp_atom_mask[batch_index]
             carriers = self.e3fp_atom_to_token[batch_index]
             source_indices = self.model_to_source_atom_index[batch_index]
+            attachment_roles = (
+                None
+                if self.e3fp_atom_is_attachment is None
+                else self.e3fp_atom_is_attachment[batch_index]
+            )
             atom_length = self.atom_lengths[batch_index]
             if (
                 len(mask) != atom_width
@@ -172,6 +182,8 @@ class GeometryBatchSidecar:
                 or len(source_indices) != atom_width
             ):
                 raise FourGridContractError("geometry atom-domain arrays disagree")
+            if attachment_roles is not None and len(attachment_roles) != atom_width:
+                raise FourGridContractError("attachment roles must match the atom width")
             if not 0 < atom_length <= atom_width:
                 raise FourGridContractError("atom_lengths disagree with padded geometry")
             expected_mask = (True,) * atom_length + (False,) * (atom_width - atom_length)
@@ -196,6 +208,11 @@ class GeometryBatchSidecar:
                 raise FourGridContractError(
                     "padded model_to_source_atom_index values must be -1"
                 )
+            if attachment_roles is not None:
+                if any(not isinstance(value, bool) for value in attachment_roles):
+                    raise FourGridContractError("attachment roles must be Boolean")
+                if any(attachment_roles[atom_length:]):
+                    raise FourGridContractError("padded attachment roles must be false")
             for levels, active, carrier in zip(rows, mask, carriers):
                 if len(levels) != self.e3fp_level_count:
                     raise FourGridContractError("E3FP level width changed within a batch")
@@ -210,11 +227,14 @@ class GeometryBatchSidecar:
     def model_inputs(self) -> dict[str, tuple[object, ...]]:
         """Return only geometry-side names reserved by the four-grid wrapper."""
 
-        return {
+        result = {
             "e3fp_ids": self.e3fp_ids,
             "e3fp_atom_mask": self.e3fp_atom_mask,
             "e3fp_atom_to_token": self.e3fp_atom_to_token,
         }
+        if self.e3fp_atom_is_attachment is not None:
+            result["e3fp_atom_is_attachment"] = self.e3fp_atom_is_attachment
+        return result
 
 
 @dataclass(frozen=True)

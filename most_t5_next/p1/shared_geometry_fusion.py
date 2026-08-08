@@ -27,10 +27,12 @@ class GeometryFusionError(ValueError):
 
 @dataclass(frozen=True)
 class GeometryTensorSidecar:
-    """Tensor form of the three model-facing geometry inputs.
+    """Tensor form of the model-facing geometry inputs.
 
     Shapes are ``[B, A, L]`` for E3FP IDs and ``[B, A]`` for both the atom
-    mask and atom-to-token mapping.  Real atoms are selected by the Boolean
+    mask and atom-to-token mapping.  The optional Boolean attachment role is
+    retained for a later motif-state encoder and ignored by the original P1
+    fusion.  Real atoms are selected by the Boolean
     mask.  Every padded atom must contain only ``-1`` in both ID and carrier
     fields.
     """
@@ -38,6 +40,7 @@ class GeometryTensorSidecar:
     e3fp_ids: Tensor
     e3fp_atom_mask: Tensor
     e3fp_atom_to_token: Tensor
+    e3fp_atom_is_attachment: Tensor | None = None
 
     @classmethod
     def from_contract(
@@ -65,6 +68,15 @@ class GeometryTensorSidecar:
                 sidecar.e3fp_atom_to_token,
                 dtype=torch.long,
                 device=device,
+            ),
+            e3fp_atom_is_attachment=(
+                None
+                if sidecar.e3fp_atom_is_attachment is None
+                else torch.as_tensor(
+                    sidecar.e3fp_atom_is_attachment,
+                    dtype=torch.bool,
+                    device=device,
+                )
             ),
         )
 

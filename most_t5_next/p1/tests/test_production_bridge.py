@@ -120,7 +120,12 @@ class ProductionBridgeTest(unittest.TestCase):
         self.assertIsNotNone(m1.geometry)
         self.assertEqual(
             set(m1.geometry_inputs()),
-            {"e3fp_ids", "e3fp_atom_mask", "e3fp_atom_to_token"},
+            {
+                "e3fp_ids",
+                "e3fp_atom_mask",
+                "e3fp_atom_to_token",
+                "e3fp_atom_is_attachment",
+            },
         )
         self.assertEqual(m1.geometry.record_ids, m1.ce_batch.record_ids)
         self.assertEqual(

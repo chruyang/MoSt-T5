@@ -189,6 +189,8 @@ class ConditionAudit:
             if geometry
             else ()
         )
+        if self.condition_id == "M1":
+            keys += ("e3fp_atom_is_attachment",)
         if tuple(encoded) != keys:
             raise PF1FullCollatorGateError(
                 self.condition_id + " model-input allowlist changed"
@@ -207,6 +209,10 @@ class ConditionAudit:
                 len(atom_shape) == 3
                 and shapes["e3fp_atom_mask"] == atom_shape[:2]
                 and shapes["e3fp_atom_to_token"] == atom_shape[:2]
+                and (
+                    self.condition_id != "M1"
+                    or shapes["e3fp_atom_is_attachment"] == atom_shape[:2]
+                )
                 and atom_shape[0] == size
             ):
                 raise PF1FullCollatorGateError(
@@ -223,6 +229,7 @@ class ConditionAudit:
             "e3fp_ids": torch_module.long,
             "e3fp_atom_mask": torch_module.bool,
             "e3fp_atom_to_token": torch_module.long,
+            "e3fp_atom_is_attachment": torch_module.bool,
         }
         dtypes = {}
         for key in keys:

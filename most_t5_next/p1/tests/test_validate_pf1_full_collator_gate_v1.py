@@ -94,6 +94,7 @@ def paired_row(schedule_index: int) -> LoadedPairedTrainingRecord:
         atom_valid_mask=(True, True),
         model_to_source_atom_index=(0, 1),
         atom_to_logical_motif=(0, 0),
+        atom_is_attachment=(False, True),
     )
     receipt = ProductionPairReceipt(
         member_id=record_id,

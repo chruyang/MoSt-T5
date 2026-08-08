@@ -109,6 +109,7 @@ class ProductionCEExample:
     model_to_source_atom_index: tuple[int, ...]
     atom_to_logical_motif: tuple[int, ...]
     atom_to_carrier: tuple[int, ...]
+    atom_is_attachment: tuple[bool, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ class ProductionMotifRecord:
     atom_valid_mask: tuple[bool, ...]
     model_to_source_atom_index: tuple[int, ...]
     atom_to_logical_motif: tuple[int, ...]
+    atom_is_attachment: tuple[bool, ...] = ()
 
 
 def _validate_sentinel_contract(
@@ -207,6 +209,7 @@ def load_production_motif_record(
         atom_valid_mask=tuple(atom_domain["atom_valid_mask"]),
         model_to_source_atom_index=tuple(atom_domain["model_to_source_atom_index"]),
         atom_to_logical_motif=tuple(atom_domain["atom_to_logical_motif"]),
+        atom_is_attachment=tuple(atom_domain["atom_is_attachment"]),
     )
 
 
@@ -358,6 +361,7 @@ def collate_production_motif_record(
         model_to_source_atom_index=record.model_to_source_atom_index,
         atom_to_logical_motif=atom_to_logical_motif,
         atom_to_carrier=atom_to_carrier,
+        atom_is_attachment=record.atom_is_attachment,
     )
     _validate_collated_example(example, record, sentinels, eos_token_id)
     return example
@@ -444,6 +448,7 @@ def _build_geometry_sidecar(
     padded_masks = []
     padded_carriers = []
     padded_source_indices = []
+    padded_attachment_roles = []
     atom_lengths = []
     for example in examples:
         atom_length = len(example.full_e3fp_ids)
@@ -457,6 +462,14 @@ def _build_geometry_sidecar(
         padded_source_indices.append(
             example.model_to_source_atom_index + (-1,) * pad_count
         )
+        if example.atom_is_attachment:
+            if len(example.atom_is_attachment) != atom_length:
+                raise ProductionBridgeError(
+                    "atom attachment roles and E3FP rows disagree"
+                )
+            padded_attachment_roles.append(
+                example.atom_is_attachment + (False,) * pad_count
+            )
     try:
         return GeometryBatchSidecar(
             record_ids=tuple(example.record_id for example in examples),
@@ -467,6 +480,11 @@ def _build_geometry_sidecar(
             atom_lengths=tuple(atom_lengths),
             e3fp_level_count=level_count,
             token_width=len(ce_batch.input_ids[0]),
+            e3fp_atom_is_attachment=(
+                tuple(padded_attachment_roles)
+                if len(padded_attachment_roles) == len(examples)
+                else None
+            ),
         )
     except FourGridContractError as exc:
         raise ProductionBridgeError("production geometry sidecar is inconsistent") from exc
