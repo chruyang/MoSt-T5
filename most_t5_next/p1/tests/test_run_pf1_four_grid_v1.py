@@ -626,7 +626,16 @@ class PF1RunnerTest(unittest.TestCase):
         checkpoint_diagnostics: list[tuple[str, int, object]] = []
         geometry_diagnostic_calls: list[str] = []
 
-        def collate(records, *, condition_id, tokenizer_runtime, seed, epoch):
+        def collate(
+            records,
+            *,
+            condition_id,
+            tokenizer_runtime,
+            seed,
+            epoch,
+            mask_probability=subject.MASK_PROBABILITY,
+        ):
+            self.assertEqual(mask_probability, subject.MASK_PROBABILITY)
             del tokenizer_runtime
             values = tuple(int(value) for value in records)
             collate_calls.append((condition_id, seed, epoch, values))
@@ -802,10 +811,10 @@ class PF1RunnerTest(unittest.TestCase):
             self.assertFalse(manifest["interpretation"]["architecture_superiority_claim"])
 
     def test_single_condition_execution_writes_only_condition_manifest(self) -> None:
-        trained: list[str] = []
+        trained: list[tuple[str, float]] = []
 
         def fake_train(**kwargs):
-            trained.append(kwargs["condition_id"])
+            trained.append((kwargs["condition_id"], kwargs["mask_probability"]))
             return {
                 "condition": kwargs["condition_id"],
                 "optimizer_updates": 2,
@@ -836,10 +845,12 @@ class PF1RunnerTest(unittest.TestCase):
                     torch_module=torch,
                     wrapper_loader=lambda **_kwargs: FakeModel(19),
                     protocol=protocol,
+                    mask_probability=1.0,
                     condition_ids=("M1",),
                 )
 
-            self.assertEqual(trained, ["M1"])
+            self.assertEqual(trained, [("M1", 1.0)])
+            self.assertEqual(report["data"]["mask_probability"], 1.0)
             self.assertEqual(report["execution"]["requested_conditions"], ["M1"])
             self.assertFalse(report["execution"]["complete_four_grid"])
             self.assertTrue((output_dir / subject.CONDITION_MANIFEST_NAME).is_file())
@@ -951,7 +962,16 @@ class PF1RunnerTest(unittest.TestCase):
             reader = FakeReader()
             collate_trace: list[tuple[int, tuple[int, ...]]] = []
 
-            def collate(records, *, condition_id, tokenizer_runtime, seed, epoch):
+            def collate(
+                records,
+                *,
+                condition_id,
+                tokenizer_runtime,
+                seed,
+                epoch,
+                mask_probability=subject.MASK_PROBABILITY,
+            ):
+                self.assertEqual(mask_probability, subject.MASK_PROBABILITY)
                 del condition_id, tokenizer_runtime, seed
                 values = tuple(int(value) for value in records)
                 collate_trace.append((epoch, values))

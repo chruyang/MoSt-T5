@@ -132,6 +132,7 @@ def collate_pf1_condition(
     tokenizer_runtime: Any,
     seed: int,
     epoch: int,
+    mask_probability: float = MASK_PROBABILITY,
 ) -> P1ConditionBatch:
     """Reuse the production collators without reinterpreting paired records."""
 
@@ -143,7 +144,7 @@ def collate_pf1_condition(
             tokenizer=tokenizer_runtime,
             seed=seed,
             epoch=epoch,
-            mask_probability=MASK_PROBABILITY,
+            mask_probability=mask_probability,
         )
     if condition_id in ("M0", "M1"):
         return collate_production_batch(
@@ -152,7 +153,7 @@ def collate_pf1_condition(
             tokenizer=tokenizer_runtime,
             seed=seed,
             epoch=epoch,
-            mask_probability=MASK_PROBABILITY,
+            mask_probability=mask_probability,
         )
     raise PF1TrainingError("unknown PF-1 condition")
 
@@ -245,6 +246,7 @@ def _prepare_train_update(
     condition_id: str,
     tokenizer_runtime: Any,
     data_lock: Any | None,
+    mask_probability: float = MASK_PROBABILITY,
 ) -> _PreparedTrainUpdate:
     """Decode and collate one update without changing its ordered semantics.
 
@@ -266,6 +268,7 @@ def _prepare_train_update(
                     tokenizer_runtime=tokenizer_runtime,
                     seed=TRAIN_CORRUPTION_SEED,
                     epoch=epoch,
+                    mask_probability=mask_probability,
                 )
             )
         return _PreparedTrainUpdate(
@@ -287,6 +290,7 @@ class _OrderedTrainPrefetch:
         condition_id: str,
         tokenizer_runtime: Any,
         data_lock: Any,
+        mask_probability: float = MASK_PROBABILITY,
     ) -> None:
         if total_updates < 0 or depth <= 0:
             raise PF1TrainingError("invalid PF-1 train prefetch bounds")
@@ -297,6 +301,7 @@ class _OrderedTrainPrefetch:
         self._condition_id = condition_id
         self._tokenizer_runtime = tokenizer_runtime
         self._data_lock = data_lock
+        self._mask_probability = mask_probability
         self._executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="pf1-ordered-prefetch",
@@ -317,6 +322,7 @@ class _OrderedTrainPrefetch:
                 condition_id=self._condition_id,
                 tokenizer_runtime=self._tokenizer_runtime,
                 data_lock=self._data_lock,
+                mask_probability=self._mask_probability,
             )
         )
         self._submitted += 1
@@ -408,6 +414,7 @@ def evaluate_pf1_condition(
     protocol: PF1OptimizationProtocol,
     torch_module: Any,
     data_lock: Any | None = None,
+    mask_probability: float = MASK_PROBABILITY,
 ) -> dict[str, object]:
     """Evaluate token-weighted NLL and teacher-forced masked-token accuracy."""
 
@@ -434,6 +441,7 @@ def evaluate_pf1_condition(
                     tokenizer_runtime=tokenizer_runtime,
                     seed=DEV_CORRUPTION_SEED,
                     epoch=DEV_CORRUPTION_EPOCH,
+                    mask_probability=mask_probability,
                 )
                 encoded = to_four_grid_batch_encoding(batch, device=device)
                 forward_inputs = select_four_grid_forward_inputs(encoded)
@@ -608,6 +616,7 @@ def evaluate_pf1_geometry_sensitivity(
     use_bf16: bool,
     protocol: PF1OptimizationProtocol,
     torch_module: Any,
+    mask_probability: float = MASK_PROBABILITY,
 ) -> dict[str, object]:
     """Paired final-dev NLL under aligned and same-size shuffled E3FP.
 
@@ -661,6 +670,7 @@ def evaluate_pf1_geometry_sensitivity(
                     tokenizer_runtime=tokenizer_runtime,
                     seed=DEV_CORRUPTION_SEED,
                     epoch=DEV_CORRUPTION_EPOCH,
+                    mask_probability=mask_probability,
                 )
                 shuffled_batch = _replace_with_donor_e3fp(
                     aligned_batch,
@@ -909,6 +919,7 @@ def _train_one_condition(
     resume_checkpoint: Path | None = None,
     train_prefetch_depth: int = TRAIN_PREFETCH_DEPTH,
     optimizer_builder: Callable[..., Any] = build_pf1_optimizer,
+    mask_probability: float = MASK_PROBABILITY,
 ) -> dict[str, object]:
     model.to(device)
     optimizer = optimizer_builder(model, protocol)
@@ -997,6 +1008,7 @@ def _train_one_condition(
                     use_bf16=use_bf16,
                     protocol=protocol,
                     torch_module=torch_module,
+                    mask_probability=mask_probability,
                 ),
             }
         )
@@ -1014,6 +1026,7 @@ def _train_one_condition(
             condition_id=condition_id,
             tokenizer_runtime=tokenizer_runtime,
             data_lock=data_lock,
+            mask_probability=mask_probability,
         )
     else:
         synchronous_stream = (
@@ -1023,6 +1036,7 @@ def _train_one_condition(
                 condition_id=condition_id,
                 tokenizer_runtime=tokenizer_runtime,
                 data_lock=None,
+                mask_probability=mask_probability,
             )
             for _ in range(remaining_updates)
         )
@@ -1099,6 +1113,7 @@ def _train_one_condition(
                             protocol=protocol,
                             torch_module=torch_module,
                             data_lock=data_lock,
+                            mask_probability=mask_probability,
                         ),
                     }
                 )
@@ -1119,6 +1134,7 @@ def _train_one_condition(
                             use_bf16=use_bf16,
                             protocol=protocol,
                             torch_module=torch_module,
+                            mask_probability=mask_probability,
                         )
                 model.train()
             if update in CHECKPOINT_UPDATES:
@@ -1210,6 +1226,7 @@ def execute_pf1_four_grid(
     checkpoint_writer: Callable[..., str] = write_pf1_checkpoint,
     optimizer_builder: Callable[..., Any] = build_pf1_optimizer,
     protocol: PF1OptimizationProtocol = FROZEN_PF1_PROTOCOL,
+    mask_probability: float = MASK_PROBABILITY,
     resume_checkpoints: Mapping[str, Path] | None = None,
     condition_ids: Sequence[str] = CONDITION_ORDER,
 ) -> dict[str, object]:
@@ -1221,6 +1238,13 @@ def execute_pf1_four_grid(
     """
 
     output_dir = Path(output_dir)
+    if (
+        isinstance(mask_probability, bool)
+        or not isinstance(mask_probability, (int, float))
+        or not 0.0 < float(mask_probability) <= 1.0
+    ):
+        raise PF1TrainingError("mask_probability must be in (0, 1]")
+    mask_probability = float(mask_probability)
     requested_conditions = tuple(condition_ids)
     if not (
         requested_conditions == CONDITION_ORDER
@@ -1270,6 +1294,7 @@ def execute_pf1_four_grid(
                 torch_module=torch_module,
                 checkpoint_writer=checkpoint_writer,
                 optimizer_builder=optimizer_builder,
+                mask_probability=mask_probability,
                 resume_checkpoint=resume_by_condition.get(condition_id),
             )
             _cache_contract, cache_telemetry = _validated_record_cache_views(
@@ -1314,7 +1339,7 @@ def execute_pf1_four_grid(
             "train_corruption_changes_by_epoch": True,
             "dev_corruption_seed": DEV_CORRUPTION_SEED,
             "dev_corruption_epoch": DEV_CORRUPTION_EPOCH,
-            "mask_probability": MASK_PROBABILITY,
+            "mask_probability": mask_probability,
             "validated_record_cache": _validated_record_cache_views(reader)[0],
         },
         "optimization": optimization,

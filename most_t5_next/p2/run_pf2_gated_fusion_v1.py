@@ -101,7 +101,7 @@ def build_f_gate_optimizer(
     )
 
 
-def _paired_release_binding(reader: Any) -> dict[str, object]:
+def paired_release_binding(reader: Any) -> dict[str, object]:
     """Bind the matched runs to one published paired release, not just counts."""
 
     release_root = getattr(reader, "release_root", None)
@@ -267,7 +267,7 @@ def execute_pf2_gated_fusion(
     data = report.get("data")
     if not isinstance(data, dict):
         raise PF1TrainingError("F-Gate engine lacks its data contract")
-    data.update(_paired_release_binding(kwargs.get("reader")))
+    data.update(paired_release_binding(kwargs.get("reader")))
     optimization = report.get("optimization")
     if not isinstance(optimization, dict):
         raise PF1TrainingError("F-Gate engine lacks optimization contract")
@@ -352,6 +352,7 @@ __all__ = [
     "build_f_gate_optimizer",
     "execute_pf2_gated_fusion",
     "main",
+    "paired_release_binding",
     "run",
     "validate_f_gate_checkpoint_contract",
     "write_f_gate_checkpoint",

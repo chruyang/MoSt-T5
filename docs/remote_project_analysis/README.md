@@ -71,7 +71,8 @@
 | [51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md](51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md) | 标准尾批、v1/v2 全量派生与 154,560-view 配对门、codec gate 阈值及 GPU 锯齿隔离方案 | 历史预注册；GPU gate 已执行，结果见文档 53 |
 | [52_motif_length_lower_bound_vocab_budget_and_GPU_profiler_20260808.md](52_motif_length_lower_bound_vocab_budget_and_GPU_profiler_20260808.md) | v2 图语法下界、train-only whole-motif K 曲线、lossless fallback BPE 长度探针与独立 GPU 分段 profiler | 长度/词表审计完成；profiler 已执行，结果见文档 53 |
 | [53_GraphPorts_codec_gate_result_and_single_GPU_profile_20260808.md](53_GraphPorts_codec_gate_result_and_single_GPU_profile_20260808.md) | 单卡 profiler、M0-v1/M0-v2 配对结果、自动裁决及 motif/资源后续边界 | v2 NLL 恶化 7.28%；保留 GraphPorts v1，下一机制门为 F-Gate |
-| [54_F_Gate_preregistration_and_formal_training_admission_20260808.md](54_F_Gate_preregistration_and_formal_training_admission_20260808.md) | 零初始化 gated residual 的文献/代码依据、真实 GPU smoke、M0-G/M1-G 预注册裁决与 PF-FULL 准入时间线 | 174/174 与 optimizer-aware GPU smoke PASS；fresh M0-G/M1-G 待重跑 |
+| [54_F_Gate_preregistration_and_formal_training_admission_20260808.md](54_F_Gate_preregistration_and_formal_training_admission_20260808.md) | 零初始化 gated residual 的文献/代码依据、真实 GPU smoke、M0-G/M1-G 预注册裁决与 PF-FULL 准入时间线 | fresh pair 完成；CE 改善但 geometry sensitivity 未通过，进入 T3MI |
+| [55_T3MI_preregistration_and_formal_training_gate_20260808.md](55_T3MI_preregistration_and_formal_training_gate_20260808.md) | 全 motif 身份遮蔽的 topology-conditioned 3D identity reconstruction、配对裁决与正式训练剩余门 | CPU 回归与真实 GPU smoke PASS；M0-T/M1-T 待执行 |
 
 ## 当前结论摘要
 

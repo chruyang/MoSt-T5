@@ -33,7 +33,10 @@ from most_t5_next.p1.pf1_optimization import (
     PF1LearningRateSchedule,
     clip_pf1_gradients,
 )
-from most_t5_next.p1.run_pf1_four_grid_v1 import collate_pf1_condition
+from most_t5_next.p1.run_pf1_four_grid_v1 import (
+    MASK_PROBABILITY,
+    collate_pf1_condition,
+)
 from most_t5_next.p1.training_adapter import (
     select_four_grid_forward_inputs,
     to_four_grid_batch_encoding,
@@ -96,7 +99,54 @@ def _require_zero_gate_gradient_boundary(model: Any) -> dict[str, float]:
     }
 
 
-def run_smoke(args: argparse.Namespace) -> dict[str, object]:
+def _require_all_motif_identities_masked(
+    rows: Sequence[Any],
+    batch: Any,
+    sentinel_token_ids: Sequence[int],
+) -> dict[str, int]:
+    """Prove that each identity span became exactly one input sentinel."""
+
+    if len(rows) != len(batch.ce_batch.input_ids):
+        raise FGateSmokeError("all-identity audit row count differs")
+    sentinels = set(int(value) for value in sentinel_token_ids)
+    motif_count = 0
+    original_identity_tokens = 0
+    for row, padded, input_length in zip(
+        rows,
+        batch.ce_batch.input_ids,
+        batch.ce_batch.input_lengths,
+    ):
+        motif = row.motif_record
+        spans = tuple(motif.identity_spans)
+        motif_count += len(spans)
+        original_identity_tokens += sum(span.stop - span.start for span in spans)
+        unpadded = tuple(padded[:input_length])
+        if sum(token_id in sentinels for token_id in unpadded) != len(spans):
+            raise FGateSmokeError("not every motif identity became one sentinel")
+        expected_length = (
+            len(motif.input_ids)
+            - sum(span.stop - span.start for span in spans)
+            + len(spans)
+        )
+        if len(unpadded) != expected_length:
+            raise FGateSmokeError("all-identity input length reduction differs")
+    return {
+        "logical_motif_identities": motif_count,
+        "original_identity_tokens": original_identity_tokens,
+        "input_identity_sentinels": motif_count,
+    }
+
+
+def run_smoke(
+    args: argparse.Namespace,
+    *,
+    mask_probability: float = MASK_PROBABILITY,
+    protocol: Any = F_GATE_PROTOCOL,
+    report_schema: str = REPORT_SCHEMA,
+    scope: str = "real_run3_runtime_admission_one_discarded_optimizer_step",
+    objective_contract: Mapping[str, object] | None = None,
+    require_all_motif_identities_masked: bool = False,
+) -> dict[str, object]:
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise FGateSmokeError("CUDA BF16 is required")
     paired_release = Path(args.paired_release).expanduser().resolve()
@@ -130,11 +180,21 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
             tokenizer_runtime=tokenizer.runtime,
             seed=CORRUPTION_SEED,
             epoch=CORRUPTION_EPOCH,
+            mask_probability=mask_probability,
         )
         for condition in ("M0", "M1")
     }
     if batches["M0"].ce_batch != batches["M1"].ce_batch:
         raise FGateSmokeError("M0/M1 CE tensors differ before the model")
+    all_identity_audit = None
+    if require_all_motif_identities_masked:
+        if mask_probability != 1.0:
+            raise FGateSmokeError("all-identity audit requires mask_probability=1")
+        all_identity_audit = _require_all_motif_identities_masked(
+            rows,
+            batches["M0"],
+            tokenizer.runtime.sentinel_token_ids,
+        )
 
     wrappers = {
         condition: load_verified_gated_four_grid_wrapper(
@@ -211,10 +271,10 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
     gradient_report = _require_zero_gate_gradient_boundary(wrappers["M1"])
     fusion = wrappers["M1"].geometry_fusion
     table_before = fusion.shared_embedding.weight.detach().clone()
-    optimizer = build_f_gate_optimizer(wrappers["M1"], F_GATE_PROTOCOL)
-    scheduler = PF1LearningRateSchedule(optimizer, F_GATE_PROTOCOL)
+    optimizer = build_f_gate_optimizer(wrappers["M1"], protocol)
+    scheduler = PF1LearningRateSchedule(optimizer, protocol)
     first_update_lr = float(optimizer.param_groups[0]["lr"])
-    preclip_norm = clip_pf1_gradients(wrappers["M1"], F_GATE_PROTOCOL)
+    preclip_norm = clip_pf1_gradients(wrappers["M1"], protocol)
     optimizer.step()
     scheduler.step()
     gate_after_step = float(
@@ -226,10 +286,13 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
         raise FGateSmokeError("closed E3FP table changed on the first gate update")
 
     report: dict[str, object] = {
-        "schema_version": REPORT_SCHEMA,
+        "schema_version": report_schema,
         "status": "pass",
-        "scope": "real_run3_runtime_admission_one_discarded_optimizer_step",
+        "scope": scope,
         "fusion_id": FUSION_ID,
+        "mask_probability": float(mask_probability),
+        "objective_contract": dict(objective_contract or {}),
+        "all_motif_identities_masked": all_identity_audit,
         "members": len(rows),
         "record_ids": list(batches["M0"].ce_batch.record_ids),
         "m0_m1_ce_equal": True,
@@ -291,6 +354,7 @@ __all__ = [
     "FGateSmokeError",
     "REPORT_SCHEMA",
     "SMOKE_BATCH_SIZE",
+    "_require_all_motif_identities_masked",
     "build_parser",
     "main",
     "run_smoke",

@@ -2,9 +2,22 @@
 
 > 日期：2026-08-08
 >
-> 当前状态：F-Gate 实现、P1+P2 无卡回归与真实 RTX 4090 runtime smoke 已闭合；M0-G/M1-G 可启动
+> 当前状态：fresh M0-G/M1-G 已完成并自动裁决；CE 安全门通过、geometry sensitivity 门失败，路线进入唯一一次 T3MI 机制门
 >
 > 研究范围：GraphPorts v1、PF-1 run3 的 1% failure screen；不是 PF-10、PF-FULL 或下游优势结论
+
+## 0. 2026-08-08 实际结果更新
+
+commit `df426c8` 的 fresh pair 已在同一 run3 release、union-init、GraphPorts v1、`64×2` 可变尾批和 1,000-update 合同下完成：
+
+| 指标 | M0-G | M1-G | 配对结果 |
+|---|---:|---:|---:|
+| step-1000 dev NLL | 1.876950 | 1.727283 | ratio=0.920260 |
+| masked-token accuracy | 0.568741 | 0.602471 | +0.033731 |
+| final effective gate | 0 | 0.023788 | gate 已打开 |
+| shuffled-minus-aligned ΔNLL | — | -0.000893 | 未达到 `+0.01` |
+
+因此两个 CE practical gates 均通过，但 E3FP 对齐敏感性没有保留。自动决定为 `enter_pf2b_t3mi`；这意味着 F-Gate 解决了“随机几何强注入破坏语言恢复”的稳定性问题，却没有证明模型在普通 15% motif corruption 下真正使用配对几何。不得据此进入 PF-10/PF-FULL，也不得据此触发 teacher/MSE。对应机器证据为 `tmp/pf2_f_gate_M0_df426c8_manifest.json`、`tmp/pf2_f_gate_M1_df426c8_manifest.json` 与 `tmp/pf2_f_gate_pair_df426c8_decision.json`。
 
 ## 1. 为什么还不能直接启动数百万规模预训练
 
@@ -129,7 +142,7 @@ CE 两门通过、sensitivity 不通过
 
 ## 6. 进入 PF-FULL 前仍需闭合的最小条件
 
-1. **F-Gate：**真实 GPU smoke 与 M0-G/M1-G 自动裁决通过；
+1. **T3MI：**F-Gate 的 CE 安全门已通过但 sensitivity 失败；须先完成全 motif 身份遮蔽的 M0-T/M1-T 配对机制门；
 2. **3D-specificity：**至少一个保持 2D identity 的 conformer/geometry perturbation probe，避免把 E3FP 的 2D 拓扑部分误写成构象理解；
 3. **PF-10：**winner 与最近因果对照在嵌套 10% membership 上确认，不允许 PF-1 排序直接外推；
 4. **数据源：**冻结 PCQM mainline 或 legacy mainline，禁止混写 3,360,067 与 3,119,717；
@@ -162,4 +175,4 @@ CE 两门通过、sensitivity 不通过
 - real GPU smoke：`tmp/pf2_f_gate_gpu_smoke_optimizer_v3_20260808.json`，status=`pass`
 - run3 paired release、union-init 与 base T5 均已在 nmb1 保留，无需重新下载或重建
 
-当前 nmb1 已可见 1×RTX 4090（24,564 MiB），第 3 节 smoke 已通过。commit `4060d86` 的首次 M0-G 尝试在 step-500 写入 `autodl-fs` 时遇到 PyTorch zip writer short-write（`unexpected pos`）并自动退出；只留下不完整 checkpoint，未产生可用模型结果，也未启动 M1。该失败目录被保留作执行证据，不进入裁决。下一次从包含 gate optimizer 修正的新提交、快盘新输出路径 fresh 重跑，避免复用损坏 checkpoint；不再插入新的架构候选。
+当前 nmb1 已可见 1×RTX 4090（24,564 MiB）。commit `4060d86` 的首次 short-write 尝试仍只作为执行失败证据；正式裁决仅使用 commit `df426c8` 在快盘完成的 fresh M0-G/M1-G pair。下一步固定为文档 55 的 T3MI，不再插入额外 fusion、teacher、MSE 或无边界消融。
