@@ -77,8 +77,13 @@ GEOMETRY_PERTURBATION_UPDATE = 1000
 GEOMETRY_DERANGEMENT_SEED = 20260809
 GEOMETRY_PAIRED_FORWARD_SEED = 20260810
 TRAIN_PREFETCH_DEPTH = 2
-TRAIN_DECODE_CACHE_WORKERS = 4
-TRAIN_DECODE_CACHE_MAX_PENDING = 16
+# Runtime-only input-pipeline tuning.  A 16-vCPU RTX 4090 node measured the
+# complete 33,600-record strict cache warmup at 35.43 s / 20.64 s / 15.59 s /
+# 16.36 s for 4 / 8 / 12 / 16 workers respectively.  Twelve workers leaves
+# CPU capacity for the parent process while giving the best observed rate.
+# These values do not change membership, corruption, batching or optimization.
+TRAIN_DECODE_CACHE_WORKERS = 12
+TRAIN_DECODE_CACHE_MAX_PENDING = 48
 
 
 class PF1TrainingError(RuntimeError):
