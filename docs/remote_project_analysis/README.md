@@ -73,6 +73,9 @@
 | [53_GraphPorts_codec_gate_result_and_single_GPU_profile_20260808.md](53_GraphPorts_codec_gate_result_and_single_GPU_profile_20260808.md) | 单卡 profiler、M0-v1/M0-v2 配对结果、自动裁决及 motif/资源后续边界 | v2 NLL 恶化 7.28%；保留 GraphPorts v1，下一机制门为 F-Gate |
 | [54_F_Gate_preregistration_and_formal_training_admission_20260808.md](54_F_Gate_preregistration_and_formal_training_admission_20260808.md) | 零初始化 gated residual 的文献/代码依据、真实 GPU smoke、M0-G/M1-G 预注册裁决与 PF-FULL 准入时间线 | fresh pair 完成；CE 改善但 geometry sensitivity 未通过，进入 T3MI |
 | [55_T3MI_preregistration_and_formal_training_gate_20260808.md](55_T3MI_preregistration_and_formal_training_gate_20260808.md) | 全 motif 身份遮蔽的 topology-conditioned 3D identity reconstruction、配对裁决与正式训练剩余门 | CPU 回归与真实 GPU smoke PASS；M0-T/M1-T 待执行 |
+| [56_PF2C_frozen_topology_E3FP_adapter_gate_20260808.md](56_PF2C_frozen_topology_E3FP_adapter_gate_20260808.md) | 冻结 M0-T 的 E3FP adapter 机制门与 paired sensitivity 结果 | adapter 未改善基线，未形成几何敏感性 |
+| [57_PF2_geometry_semantic_use_verdict_20260808.md](57_PF2_geometry_semantic_use_verdict_20260808.md) | T3MI/PF-2C 语义使用裁决、扰动证据与 raw-ID MSE 边界 | 实验事实有效；InfoNCE 优先路线已由文档 58 取代 |
+| [58_literature_grounded_geometry_supervision_and_motif_plan_20260808.md](58_literature_grounded_geometry_supervision_and_motif_plan_20260808.md) | 结合 3D-MolT5、MolCA、FineMolTex、CAMT5、Deep Sets 与构象基准，重定几何监督、motif 长度和最小实验路线 | 当前文献与执行裁决；先 C0 构象审计，再 G1 几何状态门 |
 
 ## 当前结论摘要
 
@@ -101,6 +104,8 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 2026-08-08 G-Codec Gate 更新：单卡 13-update profiler 显示 prepared-data queue wait 仅占 0.01445%，worker 不是当前瓶颈；`64×2` 正式训练计算段多次达到 84%–98% GPU utilization。GraphPorts v2 将 dev encoder tokens 降到 v1 的 62.51%、吞吐提升 16.99%、峰值显存降低 9.42%，但 step-1000 dev NLL 恶化 7.28%，超过预注册的 5% 硬拒绝线。自动裁决保留 GraphPorts v1，不追加 seed、不物化 v2+BPE，也不据此修改 motif partition；下一独立机制门为 v1 上的 F-Gate。详见文档 53。
 
 2026-08-08 F-Gate 准入更新：GraphPorts v1 上的单标量 zero-init `tanh` residual、单格 runner、配对合并器与真实 run3 GPU smoke 已实现；无卡 P1+P2 回归为 174/174 PASS。真实 4090 smoke 证明 M0/M1 的 CE、完整初始化、zero-gate logits/loss 全部相同，首次 gate 梯度 finite/nonzero，而 E3FP 表梯度精确为 0。数值探针同时发现 AdamWScale 的 parameter-RMS 会使零 gate 在完整 schedule 中只移动约 `5.09e-4`，故仅 gate 标量关闭该缩放；一个丢弃的真实 optimizer step 已证明 gate 正常移动而 E3FP 表仍不变。首次 M0-G 在 `autodl-fs` 写 step-500 时发生 short-write，未产生可用结果；fresh pair 将改用快盘。F-Gate 是 PF-10 前最后一个 1% 机制门，但通过后仍须完成保持 2D identity 的 3D-sensitive probe、10% 嵌套确认、完整-support tokenizer 和 PCQM/legacy 数据源裁决。最早可在这些门闭合后的 24–48 小时启动 PF-FULL；不能把当前 3,360,067-member PCQM permitted profile 写成 legacy 3,119,717。详见文档 54。
+
+2026-08-08 几何语义与文献裁决更新：T3MI 虽显著降低 M1-T 的 dev NLL，same-atom-count shuffled、gate=0、occupancy-only、atom-row rotation 和 random-ID 扰动均表明最终预测几乎不使用 E3FP 内容；冻结 M0-T 的 PF-2C adapter 也未建立配对敏感性。因此不再把 CE 改善解释为 3D 增益，也不把 motif–E3FP InfoNCE 作为下一主线。下一步先在 same-2D multi-conformer 数据上审计 E3FP 的可识别性，再以 Deep-Sets 式可学习 motif 聚合和 categorical E3FP-state CE 建立直接几何目标，通过后加入 geometry→motif 生成 CE。当前 motif partition 与无损 GraphPorts v1 保留；序列变长主要来自连接语法，而非 motif 数量，输入压缩将在几何机制通过后以 sidecar topology 单独验证。详见文档 58。
 
 ## 维护约定
 

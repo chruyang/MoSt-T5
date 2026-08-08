@@ -1,5 +1,11 @@
 # PF-2 几何语义使用裁决：从隐式 CE 转向显式 motif 对齐
 
+> **后续路线更新（2026-08-08）：** 本文第 1–3、5 节的实验事实与 MSE
+> 边界仍有效；第 4、6 节“InfoNCE 优先、暂不做 same-2D conformer probe”的
+> 执行建议已由文档 58 取代。新裁决优先采用可学习的置换不变 motif 几何编码、
+> E3FP categorical state prediction 与 geometry→motif generation，并把
+> same-2D multi-conformer sensitivity 作为扩容前门禁。
+
 ## 1. 已完成实验
 
 ### 1.1 T3MI：拓扑可见、全部 motif identity 遮蔽
