@@ -71,6 +71,7 @@
 | [51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md](51_GraphPorts_v1_v2_paired_gate_and_GPU_utilization_plan_20260808.md) | 标准尾批、v1/v2 全量派生与 154,560-view 配对门、codec gate 阈值及 GPU 锯齿隔离方案 | 历史预注册；GPU gate 已执行，结果见文档 53 |
 | [52_motif_length_lower_bound_vocab_budget_and_GPU_profiler_20260808.md](52_motif_length_lower_bound_vocab_budget_and_GPU_profiler_20260808.md) | v2 图语法下界、train-only whole-motif K 曲线、lossless fallback BPE 长度探针与独立 GPU 分段 profiler | 长度/词表审计完成；profiler 已执行，结果见文档 53 |
 | [53_GraphPorts_codec_gate_result_and_single_GPU_profile_20260808.md](53_GraphPorts_codec_gate_result_and_single_GPU_profile_20260808.md) | 单卡 profiler、M0-v1/M0-v2 配对结果、自动裁决及 motif/资源后续边界 | v2 NLL 恶化 7.28%；保留 GraphPorts v1，下一机制门为 F-Gate |
+| [54_F_Gate_preregistration_and_formal_training_admission_20260808.md](54_F_Gate_preregistration_and_formal_training_admission_20260808.md) | 零初始化 gated residual 的文献/代码依据、真实 GPU smoke、M0-G/M1-G 预注册裁决与 PF-FULL 准入时间线 | 171/171 与真实 GPU smoke PASS；M0-G/M1-G 可启动 |
 
 ## 当前结论摘要
 
@@ -97,6 +98,8 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 2026-08-08 表示效率更新：GraphPorts v2 的 33,600 条 graph stream 已逐条达到 `4+2E`，完整 M 均值为 31.215，但仍有 71.26% 长于 AtomSELFIES。当前 2,150 个 macro 覆盖 97.40% occurrence；长尾 fallback 可由 64 个 train-only lossless byte-BPE merges 将 M 均值试探性降至 29.551，却几乎不改变 M>A 比例。因此不因长度立刻重划 motif；先运行 M0-v1/M0-v2 G-Codec Gate，再按下游结构任务证据决定 partition。独立 13-update GPU profiler 已准备，用于区分 data wait、H2D、forward/backward、clip 与 AdamWScale host-sync，不改变正式 gate。详见文档 52。
 
 2026-08-08 G-Codec Gate 更新：单卡 13-update profiler 显示 prepared-data queue wait 仅占 0.01445%，worker 不是当前瓶颈；`64×2` 正式训练计算段多次达到 84%–98% GPU utilization。GraphPorts v2 将 dev encoder tokens 降到 v1 的 62.51%、吞吐提升 16.99%、峰值显存降低 9.42%，但 step-1000 dev NLL 恶化 7.28%，超过预注册的 5% 硬拒绝线。自动裁决保留 GraphPorts v1，不追加 seed、不物化 v2+BPE，也不据此修改 motif partition；下一独立机制门为 v1 上的 F-Gate。详见文档 53。
+
+2026-08-08 F-Gate 准入更新：GraphPorts v1 上的单标量 zero-init `tanh` residual、单格 runner、配对合并器与真实 run3 GPU smoke 已实现；无卡 P1+P2 回归为 171/171 PASS。真实 4090 smoke 证明 M0/M1 的 CE、完整初始化、zero-gate logits/loss 全部相同，首次 gate 梯度 finite/nonzero，而 E3FP 表梯度精确为 0；未做 optimizer step。F-Gate 是 PF-10 前最后一个 1% 机制门，但通过后仍须完成保持 2D identity 的 3D-sensitive probe、10% 嵌套确认、完整-support tokenizer 和 PCQM/legacy 数据源裁决。最早可在这些门闭合后的 24–48 小时启动 PF-FULL；不能把当前 3,360,067-member PCQM permitted profile 写成 legacy 3,119,717。详见文档 54。
 
 ## 维护约定
 
