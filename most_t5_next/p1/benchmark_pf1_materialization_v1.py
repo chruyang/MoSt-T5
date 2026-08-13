@@ -27,6 +27,7 @@ from most_t5_next.p1 import freeze_pf1_connectivity_sample_v1 as selection
 from most_t5_next.r1.adapter import build_p1_inherited_e3fp_overlay_v1 as overlay
 from most_t5_next.r1.adapter import build_p1_paired_canary_v1 as paired_builder
 from most_t5_next.r1.adapter import build_pcqm_p1_geometry_production_v1 as production_builder
+from most_t5_next.r1.adapter import graphports_donor_atom_map_sidecar_v1 as donor_atom_map
 from most_t5_next.r1.adapter import mol_linearizer
 from most_t5_next.r1.adapter import p1_topology_augmentation_v1 as topology
 from most_t5_next.r1.adapter import production_paired_identity_records_v1 as paired
@@ -39,6 +40,7 @@ SCHEMA_VERSION = "most-t5-p1/pf1-materialization-benchmark-manifest/v1"
 DEFAULT_WORKERS = 8
 DEFAULT_MAX_PENDING = 24
 PF1_TARGET_MEMBERS = selection.TARGET_MEMBERS
+DONOR_ATOM_MAP_NAME = "donor_atom_maps.jsonl"
 _WORKER_STATE: dict[str, Any] = {}
 
 
@@ -118,8 +120,10 @@ def _init_worker(e3fp_source: str, linearizer_sha256: str) -> None:
     )
 
 
-def _materialize_one(task: tuple[int, int, bytes, Mapping[str, object]]) -> dict[str, object]:
-    benchmark_index, ordinal, mol_binary, binding = task
+def _materialize_one(
+    task: tuple[int, int, str, str, bytes, Mapping[str, object]]
+) -> dict[str, object]:
+    benchmark_index, ordinal, member_id, split, mol_binary, binding = task
     Chem = _WORKER_STATE["Chem"]
     np = _WORKER_STATE["np"]
     sf = _WORKER_STATE["sf"]
@@ -137,6 +141,10 @@ def _materialize_one(task: tuple[int, int, bytes, Mapping[str, object]]) -> dict
         base_record, base_membership = overlay.validate_base_binding(
             np, binding, ordinal
         )
+        if base_membership["member_id"] != member_id:
+            raise PF1MaterializationBenchmarkError(
+                "benchmark member differs from production binding"
+            )
         stage = "projection"
         stage_started = time.perf_counter()
         tagged, source_atom_count, _ = projection.tag_source_atoms(Chem, source_mol)
@@ -224,6 +232,14 @@ def _materialize_one(task: tuple[int, int, bytes, Mapping[str, object]]) -> dict
         len(motif.identity_smiles.encode("utf-8"))
         for motif in surfaces.graph_encoding.motifs
     )
+    planning_row = donor_atom_map.build_release_row(
+        selection_index=benchmark_index,
+        member_id=member_id,
+        sdf_record_index=ordinal,
+        split=split,
+        storage_key=str(base_membership["record_storage_key"]),
+        graph_encoding=surfaces.graph_encoding,
+    )
     return {
         "status": "pass",
         "benchmark_index": benchmark_index,
@@ -239,6 +255,7 @@ def _materialize_one(task: tuple[int, int, bytes, Mapping[str, object]]) -> dict
         "projection_seconds": projection_seconds,
         "e3fp_seconds": e3fp_seconds,
         "surface_seconds": surface_seconds,
+        "donor_atom_map_row": planning_row,
     }
 
 
@@ -448,6 +465,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         (
             int(row["benchmark_index"]),
             int(row["sdf_record_index"]),
+            str(row["member_id"]),
+            str(row["split"]),
             bytes(molecules[int(row["sdf_record_index"])].ToBinary()),
             bound[int(row["sdf_record_index"])],
         )
@@ -491,6 +510,30 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         shard_count=len(shard_receipts),
     )
     output_dir.mkdir(parents=True)
+    donor_path = output_dir / DONOR_ATOM_MAP_NAME
+    if not any(row.get("status") == "reject" for row in results):
+        sidecar_bytes = 0
+        with donor_path.open("x", encoding="utf-8", newline="\n") as handle:
+            for result in results:
+                sidecar_bytes += donor_atom_map.write_release_row(
+                    handle, result["donor_atom_map_row"]  # type: ignore[arg-type]
+                )
+        sidecar_benchmark = donor_atom_map.benchmark_release_prefix(
+            donor_path, max_rows=len(results)
+        )
+        manifest["donor_atom_map_artifact"] = {
+            "relative_path": DONOR_ATOM_MAP_NAME,
+            "schema_version": donor_atom_map.ROW_SCHEMA,
+            "row_count": len(results),
+            "payload_bytes": sidecar_bytes,
+            "stream_replay": sidecar_benchmark,
+            "enters_training_wire": False,
+        }
+    else:
+        manifest["donor_atom_map_artifact"] = {
+            "published": False,
+            "reason": "benchmark chemistry rejects prevent a dense planning sidecar",
+        }
     with (output_dir / "manifest.json").open(
         "x", encoding="utf-8", newline="\n"
     ) as handle:
@@ -531,6 +574,7 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "DONOR_ATOM_MAP_NAME",
     "PF1MaterializationBenchmarkError",
     "load_benchmark_membership",
     "summarize_results",

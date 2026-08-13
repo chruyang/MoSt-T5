@@ -24,6 +24,7 @@ from most_t5_next.p1.run_pf1_four_grid_v1 import (
     PF1TrainingError,
     execute_pf1_four_grid,
     run as run_pf1,
+    write_pf1_checkpoint,
 )
 from most_t5_next.p2.g1_deep_sets_geometry_fusion_v1 import (
     FUSION_ID,
@@ -50,6 +51,38 @@ G2_OBJECTIVE_CONTRACT = {
     "mse_or_auxiliary_loss": False,
     "pure_3d_claim": False,
 }
+
+
+def write_g2_checkpoint(**kwargs: Any) -> str:
+    """Keep the final recovery state; retain step 500 as an evaluation marker.
+
+    This two-cell mechanism screen completes in minutes, while each full T5
+    optimizer checkpoint is about 3 GB.  The mid-run evaluation remains in
+    the manifest, but only step 1000 consumes a recovery checkpoint.
+    """
+
+    update = kwargs.get("update")
+    if update == 1000:
+        return write_pf1_checkpoint(**kwargs)
+    if update != 500:
+        raise PF1TrainingError("G2 checkpoint update must be 500 or 1000")
+    checkpoint_dir = (
+        Path(kwargs["output_dir"])
+        / str(kwargs["condition_id"])
+        / "step-0500"
+    )
+    checkpoint_dir.mkdir(parents=True, exist_ok=False)
+    marker = {
+        "schema_version": "most-t5-p2/g2-midpoint-evaluation-marker/v1",
+        "completed_updates": 500,
+        "recovery_state_saved": False,
+        "reason": "short_mechanism_screen_keeps_final_checkpoint_only",
+    }
+    (checkpoint_dir / "evaluation_marker.json").write_text(
+        json.dumps(marker, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return str(checkpoint_dir)
 
 
 def _attach_bridge_summary(report: dict[str, object], g1_checkpoint: Path) -> None:
@@ -85,6 +118,7 @@ def execute_g2_geometry_to_motif_ce(
         wrapper_loader=wrapper_loader,
         protocol=G2_PROTOCOL,
         mask_probability=G2_MASK_PROBABILITY,
+        checkpoint_writer=write_g2_checkpoint,
     )
     if not isinstance(report, dict) or report.get("status") != "pass":
         raise PF1TrainingError("G2 engine did not return a passing report")
@@ -97,6 +131,10 @@ def execute_g2_geometry_to_motif_ce(
     report["scope"] = "g2_frozen_state_geometry_to_motif_bridge_screen"
     report["objective_contract"] = G2_OBJECTIVE_CONTRACT
     report["fusion_id"] = FUSION_ID
+    report["checkpoint_policy"] = {
+        "step_500": "evaluation_marker_only",
+        "step_1000": "complete_recovery_state",
+    }
     optimization = report.get("optimization")
     if not isinstance(optimization, dict):
         raise PF1TrainingError("G2 engine lacks its optimization contract")

@@ -84,6 +84,17 @@
 | [64_G3a_relation_result_and_continuous_geometry_decision_20260808.md](64_G3a_relation_result_and_continuous_geometry_decision_20260808.md) | G3a 结果、ETKDG 数据边界与离散 E3FP state 主线修订 | 不把 E3FP 强制解释为连续构象距离 |
 | [65_overall_architecture_literature_and_methodology_adjudication_20260808.md](65_overall_architecture_literature_and_methodology_adjudication_20260808.md) | GraphPorts、motif、E3FP、T5、训练目标、数据边界与下游证据的整体裁决 | 主线可行；完成 block state mask、state-memory adapter、2D/shuffle/zero 控制与 geometry-sensitive endpoint 后再全量训练 |
 | [66_factorized_state_adapter_p0_implementation_and_pf10_gate_20260808.md](66_factorized_state_adapter_p0_implementation_and_pf10_gate_20260808.md) | 将文档 65 落为 nested-shell-safe mask、post-T5 motif-state adapter、显式三视图与 PF-10 因果门 | P0 接口与真实 run3 小批数据流 PASS；待 PF-10 物化及 GPU 因果对照 |
+| [67_stereo_free_anchor_open_vocab_3dmotif_architecture_decision_20260810.md](67_stereo_free_anchor_open_vocab_3dmotif_architecture_decision_20260810.md) | 恢复 ordered-anchor/pure-motif 主表面，冻结 stereo-free identity + stereo-aware E3FP、anchor-endpoint 融合、开放 motif 词表与数据重物化边界 | 当前架构裁决；取代 GraphPorts 作为模型语言的主线，不启动正式训练 |
+| [68_motif_partition_chemical_biology_literature_and_freeze_decision_20260810.md](68_motif_partition_chemical_biology_literature_and_freeze_decision_20260810.md) | 逐项核验当前 motif 分区、CAMT5 官方差异及药化/化学生物学文献证据，冻结 ring/non-single-bond union 主线 | 文献与方法学裁决完成；不再要求非核心切分基线矩阵 |
+| [79_anchored_atom_reducer_screen_results_20260811.md](79_anchored_atom_reducer_screen_results_20260811.md) | 标准 QM9 上比较 fixed mean、L0/high scalar、linear、minimal phi 与 level-aware phi，并冻结正式 atom encoder | V5--V9 均未取代 V4；停止追加 reducer 变体，转入正式预训练合同 |
+| [80_final_pf1_atom_encoder_and_level_ablation_plan_20260811.md](80_final_pf1_atom_encoder_and_level_ablation_plan_20260811.md) | 在最终PF1门中将fixed mean、L0分流、L0分流+level严格配对，单独裁决level embedding | 六格全部PASS；fixed mean淘汰，V8/V9晋级PF10，level仍待10%与3D敏感任务裁决 |
+| [81_full_corpus_motif_vocabulary_budget_and_chebi_policy_20260811.md](81_full_corpus_motif_vocabulary_budget_and_chebi_policy_20260811.md) | Phase-I/II/ChEBI及下游任务的宏词表规模、覆盖率和训练域政策 | 18k general与20,325 all-ChEBI仍是遍历规范化前候选 |
+| [82_motif_traversal_canonicalization_and_compositional_macro_issues_20260811.md](82_motif_traversal_canonicalization_and_compositional_macro_issues_20260811.md) | 区分遍历别名与稀有宏训练问题，冻结port-labelled图规范化及整分子往返门 | v2局部原型通过；待全语料重计数后重选K |
+| [83_fragsmiles_adoption_and_preflight_plan_20260811.md](83_fragsmiles_adoption_and_preflight_plan_20260811.md) | 评估以官方fragSMILES替代自研GraphPorts/anchor字符串，并导出原子、connector与离散立体sidecar | 三语料census零拒绝；18,427个macro身份已冻结，待union tokenizer、行初始化与exposure合同发布 |
+| [84_current_architecture_cache_and_downstream_freeze_20260811.md](84_current_architecture_cache_and_downstream_freeze_20260811.md) | 正式E3FP输入、fragSMILES/几何sidecar、训练缓存和下游数据冻结 | 用户认可的工作冻结；仍待最终数据产物与实现闭合 |
+| [85_QM9_e3fp_correspondence_and_downstream_atom_mapping_gate_20260812.md](85_QM9_e3fp_correspondence_and_downstream_atom_mapping_gate_20260812.md) | QM9发布E3FP数值对应与全部下游逐原子映射准入门 | QM9 PASS；正式预训练启动后并行全量核验各下游，逐数据集通过后方可训练 |
+| [86_PCQM_stereo_2D3D_divergence_recovery_20260812.md](86_PCQM_stereo_2D3D_divergence_recovery_20260812.md) | PCQM 12,978条strict stereo差异的全量分类、stereo-free身份裁决与SDF/E3FP supplement重算 | 分类12,978/12,978，supplement 12,978/12,978 PASS；旧strict release不变 |
+| [87_PCQM_phase1_membership_restoration_20260812.md](87_PCQM_phase1_membership_restoration_20260812.md) | 恢复历史下游保护排除5,510条，并将production-v2与stereo supplement闭合为当前Phase-I成员源 | 恢复5,510/5,510、LMDB全量核验PASS；统一3,378,555，剩余真实reject 51 |
 
 ## 当前结论摘要
 
@@ -119,7 +130,18 @@ MoSt-T5 的研究方向具有明确合理性：它试图把分子 motif 序列�
 
 2026-08-08 G3a 结果与数据边界更新：998 个 PF-1 train identities、5,547 个 RDKit 构象对的连续关系门未通过。frozen G1b baseline 的 dev Pearson/Spearman 为 0.066/0.099；两层 motif-topology adapter 为 0.182/0.224，而 train 达 0.921/0.913，说明 E3FP 不应被强行解释为跨分子的连续距离。但 PCQM 主数据没有真实多构象集合，ETKDG 只能作压力测试；该阴性结果不否定 E3FP 承担离散3D状态。主线保留 motif identity + E3FP categorical state，改为独立 state masking/head、同分子内部 correspondence corruption 与 topology-aware cross-attention；连续 SchNet/PaiNN 仅作为 GEOM/QMugs 等高质量构象集上的外部对照。详见文档 64。
 
+2026-08-10 架构纠偏：重新核对初版 tokenizer 后确认，ordered anchors 与 pure motif 中保留的 slot 顺序可以支持多锚点确定性回填；`RemoveStereochemistry` 与 E3FP `stereo=True` 是有意的身份--状态职责分离，而非数据缺陷。GraphPorts/isomeric identity 同时向文本和 E3FP 暴露立体信息，未干净检验原假设，故降为离线审计层。现行模型表面冻结为 stereo-free pure motif + ordered anchors；所有 anchors 与其 pure motif 构成不可跨越、内部顺序固定的 local motif phrase。高频 motif 使用 macro，长尾使用零 `<unk>` 的可逆 chemical lexer/subword；anchor occurrence 直接融合其 attachment atom E3FP。现有成员、坐标、motif partition、atom mapping 与 E3FP 全部复用，仅重新派生 tokenizer、token surface、tensor cache 和 union-init。初版正式 Phase I/II（motif/anchor 语法与结构基础 -> 跨模态和表征提升）保留：它综合了 3D-MolT5 的 E3FP/跨视图任务与 FineMolTex 的 atom-to-motif/细粒度图文对齐思想，但不是对任一论文训练日程的复刻；后来的 S-stage -> G-stage 只作机制诊断。`G-only -> identity` 不再作为主目标或3D证据，L0/L3 是否进入正式 atom memory 记录为待确定消融问题，固定任务比例撤回。详见文档 67。
+
+2026-08-11 原子状态边界更新：Anchored V4 的 `l0_l123_mean + role/presence + MLP` 保留为历史复杂度上界，不直接冻结为正式atom encoder。最终PF1门只比较3D-MolT5式固定四槽均值、无level的L0/high最小phi、只增加level embedding的同构phi；`atom_is_attachment`仅作ordered-anchor endpoint路由与验证，presence/role不进入三格。PF1只负责淘汰，两个候选再进入PF10正式架构门。创新焦点仍是stereo-free semantic motif phrase、atom-to-motif carrier和attachment-specific endpoint。详见文档78、80。
+
+2026-08-11 E3FP层级语义补充：L0正式表述为原子初始身份/局部二维上下文，L1--L3表述为继承身份且经空间排序增强的环境状态，不称为纯空间状态。正式预训练训练集的逐atom/逐molecule/逐motif `Lmax=3`覆盖率、train/dev漂移与L3-present/absent下游分层纳入低优先级CPU审计；该审计在正式预训练启动后利用空闲CPU读取既有tensor cache完成，不阻塞主线、不重算构象、不改变训练成员。详见文档78第6节。
+
 ## 维护约定
+
+2026-08-13 source-control checkpoint: see
+[88_code_architecture_and_artifact_version_registry_20260813.md](88_code_architecture_and_artifact_version_registry_20260813.md)
+for the active anchored-V10 contract, the historical architecture map, and
+the rule that every new remote run must bind one clean Git commit.
 
 - 远端实际训练资产是运行证据的权威来源。
 - 本地源码便于逐行阅读，但关键文件与远端并非全部一致；涉及历史训练时必须标注使用的是“远端版本”还是“本地版本”。

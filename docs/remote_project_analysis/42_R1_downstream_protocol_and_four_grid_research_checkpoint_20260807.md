@@ -24,7 +24,7 @@ MoleculeNet 只保留四个支撑任务：BACE、BBBP、HIV、ClinTox。它们�
 |---|---|---|---|
 | QM9 HOMO/LUMO/gap | 3D-MolT5 HF revision `bfe5509...` 的 E3FP/SELFIES/instruction artifact | `qm9-3dmolt5-idgroup-110k10k-rest-s42-v1`；strict canonical-isomeric group 切分，non-isomeric connectivity 只用于去污染 | 源文件名、bytes、SHA-256 与预期 census 已写入生产门禁；待高 CPU 物化 |
 | BACE/BBBP/ClinTox | [KPGT 官方仓库](https://github.com/lihan97/KPGT)指向的 Figshare 发布包 | 官方 `scaffold-0/1/2` membership replicas，8:1:1 | 当前三套远端文件仅为 internally-valid candidate；nmb1 对 Figshare 返回 HTTP 403，待可访问地区取得官方归档并核验 |
-| HIV | DeepChem 2.8.0 官方 `HIV.csv` | `HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v1` | 源已冻结：2,193,844 bytes、41,127 rows、SHA-256 `9ffa7fe57dc86c342627ee1d5255e937e2ab812393c73c4d16c697022f6e1d22`；待物化 membership |
+| HIV | MoleculeNet 例外：DeepChem 2.8.0 官方 `HIV.csv` | `HIV-MoleculeNet/DeepChem-Murcko-8:1:1-derived-v1` | KPGT 不发布 HIV，因此不得将 KPGT 写成 HIV 来源；源已冻结：2,193,844 bytes、41,127 rows、SHA-256 `9ffa7fe57dc86c342627ee1d5255e937e2ab812393c73c4d16c697022f6e1d22` |
 | PubChem caption | 3D-MolT5 发布/现有 LMDB 证据 | reported-protocol 与 connectivity-clean 两个视图 | 待 reconciliation 与 clean membership |
 | ChEBI-20 | 3D-MolT5 HF revision `9949fae...` | reported-protocol 与 connectivity-clean 两个视图 | 待 canonical-connectivity proof 与 codec adapter |
 | Controlled Motif Editing | MoleculeSTM 发布的 200 molecules + FineMolTex 12 prompts | 200 molecules 为 sealed compatibility test；从其余 ZINC250K 冻结 disjoint dev | test 源已冻结；dev membership 与 runner 待完成 |
@@ -35,6 +35,12 @@ KPGT 的论文协议是 scaffold 8:1:1，并报告三次独立运行；`scaffold
 - 同一 membership 内 training-seed variation。
 
 KPGT 发布的 11-task 集不含 HIV。3D-MolT5 官方仓库完整 dataset 表及作者公开 HF dataset inventory 也没有可追溯 HIV members/split，所以 HIV 不再保持“来源待选择”，而是固定回退至 DeepChem 权威成员；新派生 membership 不冒称 3D-MolT5、KPGT 或 DeepChem released exact split。
+
+2026-08-12 来源政策更新：除 MoleculeNet 外，所有与 3D-MolT5 对齐的下游
+任务统一使用作者 `QizhiPei/*` Hugging Face 数据集并固定完整 revision。旧表中的
+legacy LMDB 只可在证明其为该 revision 的逐记录缓存后继续使用，不能再作为独立
+来源。MoleculeNet 继续走 KPGT/权威 HIV 例外；3D-MolT5 未发布对应 HF 数据的
+zero-shot retrieval 继续 deferred。精确仓库与 revision 见文档 84 的版本化来源合同。
 
 ## 3. 已完成的可执行实现
 

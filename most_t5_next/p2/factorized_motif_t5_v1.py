@@ -72,6 +72,26 @@ class FactorizedMotifT5V1(nn.Module):
         max_identity_span_length: int = 128,
     ) -> None:
         super().__init__()
+        hidden_size = self._bind_t5_boundary(
+            t5_model=t5_model,
+            state_level2_weight=state_level2_weight,
+        )
+        self.adapter = MotifGeometryAdapterV1(
+            num_e3fp_embeddings=num_e3fp_embeddings,
+            hidden_size=hidden_size,
+            state_embedding_dim=state_embedding_dim,
+            atom_memory_dim=atom_memory_dim,
+            max_identity_span_length=max_identity_span_length,
+        )
+
+    def _bind_t5_boundary(
+        self,
+        *,
+        t5_model: nn.Module,
+        state_level2_weight: float,
+    ) -> int:
+        """Validate and bind T5 without allocating an adapter or consuming RNG."""
+
         if not isinstance(t5_model, nn.Module):
             raise FactorizedMotifT5Error("t5_model must be a torch module")
         if (
@@ -104,13 +124,7 @@ class FactorizedMotifT5V1(nn.Module):
 
         self.t5 = t5_model
         self.state_level2_weight = float(state_level2_weight)
-        self.adapter = MotifGeometryAdapterV1(
-            num_e3fp_embeddings=num_e3fp_embeddings,
-            hidden_size=hidden_size,
-            state_embedding_dim=state_embedding_dim,
-            atom_memory_dim=atom_memory_dim,
-            max_identity_span_length=max_identity_span_length,
-        )
+        return hidden_size
 
     @property
     def config(self) -> Any:
@@ -265,6 +279,7 @@ class FactorizedMotifT5V1(nn.Module):
         state_target_ids: Tensor | None = None,
         state_target_mask: Tensor | None = None,
         state_corruption_mask: Tensor | None = None,
+        state_memory_mode: str = "aligned",
         **t5_kwargs: Any,
     ) -> FactorizedMotifT5Output:
         if objective_mode not in OBJECTIVE_MODES:
@@ -301,6 +316,7 @@ class FactorizedMotifT5V1(nn.Module):
             motif_to_carrier=motif_to_carrier,
             identity_span_bounds=identity_span_bounds,
             atom_is_attachment=atom_is_attachment,
+            state_memory_mode=state_memory_mode,
         )
 
         if objective_mode in ("grammar", "cross_view"):
@@ -346,6 +362,10 @@ class FactorizedMotifT5V1(nn.Module):
         if labels is not None:
             raise FactorizedMotifT5Error(
                 "state batches keep identity visible and do not carry decoder labels"
+            )
+        if state_memory_mode != "aligned":
+            raise FactorizedMotifT5Error(
+                "state objective requires aligned state memory"
             )
         if t5_kwargs:
             raise FactorizedMotifT5Error(

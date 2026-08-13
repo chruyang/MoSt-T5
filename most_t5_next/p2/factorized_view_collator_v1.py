@@ -49,6 +49,7 @@ class FactorizedMotifViewBatch:
     input_ids: Tensor
     attention_mask: Tensor
     labels: Tensor | None
+    label_to_motif: Tensor | None
     e3fp_input_ids: Tensor
     atom_mask: Tensor
     atom_to_motif: Tensor
@@ -149,6 +150,7 @@ def collate_factorized_motif_view(
 
     input_rows: list[tuple[int, ...]] = []
     label_rows: list[tuple[int, ...]] = []
+    label_owner_rows: list[tuple[int, ...]] = []
     spans_by_row: list[tuple[tuple[int, int], ...]] = []
     carriers_by_row: list[tuple[int, ...]] = []
     e3fp_by_row: list[Tensor] = []
@@ -255,6 +257,16 @@ def collate_factorized_motif_view(
         )
         input_rows.append(example.input_ids)
         label_rows.append(example.labels)
+        label_owners: list[int] = []
+        for motif_id in example.selected_logical_motif_ids_in_input_order:
+            span = record.identity_spans[motif_id]
+            label_owners.extend((-1, *([motif_id] * (span.stop - span.start))))
+        label_owners.extend((-1, -1))
+        if len(label_owners) != len(example.labels):
+            raise FactorizedViewCollatorError(
+                "decoder label-to-motif ownership disagrees with labels"
+            )
+        label_owner_rows.append(tuple(label_owners))
         spans_by_row.append(
             tuple((span.start, span.stop) for span in example.identity_input_spans)
         )
@@ -292,10 +304,16 @@ def collate_factorized_motif_view(
         device=device,
     )
     labels: Tensor | None = None
+    label_to_motif: Tensor | None = None
     if objective_mode != "state":
         label_width = max(len(row) for row in label_rows)
         labels = torch.as_tensor(
             _pad_rows(label_rows, width=label_width, pad_value=-100),
+            dtype=torch.long,
+            device=device,
+        )
+        label_to_motif = torch.as_tensor(
+            _pad_rows(label_owner_rows, width=label_width, pad_value=-1),
             dtype=torch.long,
             device=device,
         )
@@ -384,6 +402,7 @@ def collate_factorized_motif_view(
         input_ids=input_tensor,
         attention_mask=attention,
         labels=labels,
+        label_to_motif=label_to_motif,
         e3fp_input_ids=e3fp_input,
         atom_mask=atom_mask,
         atom_to_motif=atom_to_motif,

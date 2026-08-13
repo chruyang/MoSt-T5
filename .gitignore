@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tmp/
+dataset/
+paper/
+reference_repos/
+p0_validation/
+literature_3dmotif_innovation_audit_*/
+pf10_overlay_test_*/
+most_t5_next/p1/support/pf1_atom_selfies_211_ineligible_groups_v1.jsonl
+*.tar.gz
+*.zip

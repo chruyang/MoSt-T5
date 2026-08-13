@@ -330,8 +330,14 @@ class MotifGeometryAdapterV1(nn.Module):
         motif_to_carrier: Tensor,
         identity_span_bounds: Tensor,
         atom_is_attachment: Tensor | None = None,
+        state_memory_mode: str = "aligned",
     ) -> MotifGeometryEncoding:
         """Build atom memory, perform one owned-atom attention, and write carriers."""
+
+        if state_memory_mode not in {"aligned", "zero"}:
+            raise MotifGeometryAdapterError(
+                "state_memory_mode must be aligned or zero"
+            )
 
         batch_size, token_width, atom_width, motif_width = self._validate_common(
             token_hidden=input_embeddings,
@@ -351,6 +357,23 @@ class MotifGeometryAdapterV1(nn.Module):
             motif_mask,
             identity_span_bounds,
         )
+
+        if state_memory_mode == "zero":
+            # Parameter-matched geometry ablation: retain the same adapter and
+            # validated ownership tensors, but remove atom-state memory before
+            # either carrier fusion or the downstream grammar encoder.  This
+            # is stronger than replacing IDs by padding, which would retain
+            # atom-role and encoder-bias information.
+            return MotifGeometryEncoding(
+                fused_embeddings=input_embeddings,
+                atom_memory=torch.zeros_like(atom_memory),
+                pre_t5_motif_context=input_embeddings.new_zeros(
+                    (batch_size, motif_width, self.hidden_size)
+                ),
+                cross_attention_weights=input_embeddings.new_zeros(
+                    (batch_size, motif_width, atom_width)
+                ),
+            )
 
         keys = self.atom_key(atom_memory)
         values = self.atom_value(atom_memory)
@@ -373,7 +396,10 @@ class MotifGeometryAdapterV1(nn.Module):
         safe_carriers = motif_to_carrier.clamp_min(0).to(torch.long)
         offsets = torch.arange(batch_size, device=input_embeddings.device).unsqueeze(1) * token_width
         flat_carriers = (safe_carriers + offsets)[motif_mask]
-        flat_delta = delta[motif_mask]
+        # Autocast may produce a BF16 adapter delta while T5's embedding
+        # residual stream remains FP32.  index_add_ requires exact dtype
+        # equality, so accumulate in the established residual-stream dtype.
+        flat_delta = delta[motif_mask].to(input_embeddings.dtype)
         flat_updates = input_embeddings.new_zeros((batch_size * token_width, self.hidden_size))
         flat_updates.index_add_(0, flat_carriers, flat_delta)
         fused = input_embeddings + flat_updates.view(batch_size, token_width, self.hidden_size)

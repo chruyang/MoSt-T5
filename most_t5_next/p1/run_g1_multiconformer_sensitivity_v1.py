@@ -49,6 +49,52 @@ def _attachment_roles(mol, groups: Sequence[Sequence[int]]) -> Tuple[bool, ...]:
     return tuple(roles)
 
 
+def _motif_edges(mol, atom_to_group: Sequence[int]) -> Tuple[Tuple[int, int], ...]:
+    """Return the undirected motif graph induced by cross-motif bonds."""
+
+    edges = set()
+    for bond in mol.GetBonds():
+        left = int(atom_to_group[int(bond.GetBeginAtomIdx())])
+        right = int(atom_to_group[int(bond.GetEndAtomIdx())])
+        if left == right:
+            continue
+        edges.add((min(left, right), max(left, right)))
+    return tuple(sorted(edges))
+
+
+def _distance_matrix_rms(left_mol, right_mol) -> float:
+    """RMS change of heavy-atom pair distances under frozen atom rows.
+
+    Unlike aligned RMSD this target is directly invariant to rigid motion and
+    does not require an atom permutation or an alignment algorithm.
+    """
+
+    if left_mol.GetNumAtoms() != right_mol.GetNumAtoms():
+        raise G1MulticonformerError("distance matrices have different atom counts")
+    atom_count = int(left_mol.GetNumAtoms())
+    if atom_count < 2:
+        return 0.0
+    left = left_mol.GetConformer(0)
+    right = right_mol.GetConformer(0)
+    squared = 0.0
+    pairs = 0
+    for first in range(atom_count):
+        for second in range(first + 1, atom_count):
+            lp = left.GetAtomPosition(first)
+            lq = left.GetAtomPosition(second)
+            rp = right.GetAtomPosition(first)
+            rq = right.GetAtomPosition(second)
+            left_distance = math.sqrt(
+                sum((float(lp[axis]) - float(lq[axis])) ** 2 for axis in range(3))
+            )
+            right_distance = math.sqrt(
+                sum((float(rp[axis]) - float(rq[axis])) ** 2 for axis in range(3))
+            )
+            squared += (left_distance - right_distance) ** 2
+            pairs += 1
+    return math.sqrt(squared / float(pairs))
+
+
 def _generate_candidate(task: Mapping[str, Any]) -> dict:
     candidate = dict(task["candidate"])
     runtime = _load_runtime(str(task["e3fp_source"]))
@@ -68,6 +114,7 @@ def _generate_candidate(task: Mapping[str, Any]) -> dict:
         for group_index, group in enumerate(groups):
             for atom_index in group:
                 atom_to_group[atom_index] = group_index
+        motif_edges = _motif_edges(base, atom_to_group)
         with_h = Chem.AddHs(Chem.Mol(base), addCoords=False)
         parameters = AllChem.ETKDGv3() if hasattr(AllChem, "ETKDGv3") else AllChem.ETKDGv2()
         parameters.randomSeed = int(
@@ -116,6 +163,9 @@ def _generate_candidate(task: Mapping[str, Any]) -> dict:
                         "rmsd": _aligned_rmsd_same_atom_rows(
                             Chem.Mol(geometries[left]), Chem.Mol(geometries[right])
                         ),
+                        "distance_matrix_rms": _distance_matrix_rms(
+                            Chem.Mol(geometries[left]), Chem.Mol(geometries[right])
+                        ),
                     }
                 )
         return {
@@ -130,6 +180,18 @@ def _generate_candidate(task: Mapping[str, Any]) -> dict:
             "atom_is_attachment": roles,
             "atom_to_motif": tuple(atom_to_group),
             "motif_count": len(groups),
+            "motif_edges": motif_edges,
+            "atomic_numbers": tuple(int(atom.GetAtomicNum()) for atom in base.GetAtoms()),
+            "conformer_positions": tuple(
+                tuple(
+                    tuple(
+                        float(geometry.GetConformer(0).GetAtomPosition(atom_index)[axis])
+                        for axis in range(3)
+                    )
+                    for atom_index in range(geometry.GetNumAtoms())
+                )
+                for geometry in geometries
+            ),
             "rmsds": rmsds,
         }
     except Exception as exc:

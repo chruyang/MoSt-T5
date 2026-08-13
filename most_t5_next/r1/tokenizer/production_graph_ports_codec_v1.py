@@ -1254,6 +1254,22 @@ class ProductionGraphPortsCodecV1:
             atom_ref: atom_index_by_global_map[global_map]
             for atom_ref, global_map in global_map_by_atom_ref.items()
         }
+        # ``molzip`` has already translated payload tetrahedral tags onto the
+        # reconnected neighbour order.  Preserve that full-graph-relative tag
+        # across the preliminary clean assignment below.  Some valid centres
+        # are distinguishable only after cut-supported C=N/C=C stereo is
+        # restored; cleaning before that restoration otherwise clears them as
+        # temporarily unspecified.  The final clean assignment remains the
+        # authority and will still discard any tag invalid in the completed
+        # molecular graph.
+        reconnected_tetrahedral_tags = {
+            atom_ref: str(
+                rebuilt.GetAtomWithIdx(atom_index).GetChiralTag()
+            )
+            for atom_ref, atom_index in atom_index_by_ref.items()
+            if str(rebuilt.GetAtomWithIdx(atom_index).GetChiralTag())
+            in {"CHI_TETRAHEDRAL_CW", "CHI_TETRAHEDRAL_CCW"}
+        }
 
         for connection in encoding.connections:
             left_port = port_record_by_ref.get(connection.endpoint_a)
@@ -1357,6 +1373,10 @@ class ProductionGraphPortsCodecV1:
         # RDKit choose one globally consistent set of neighbour directions,
         # including adjacent double bonds that share a single-bond support.
         Chem.SetDoubleBondNeighborDirections(rebuilt)
+        for atom_ref, tag_name in reconnected_tetrahedral_tags.items():
+            rebuilt.GetAtomWithIdx(atom_index_by_ref[atom_ref]).SetChiralTag(
+                getattr(Chem.ChiralType, tag_name)
+            )
         Chem.AssignStereochemistry(rebuilt, cleanIt=True, force=True)
         # Close the fully reconnected graph at the same independent SMILES
         # boundary used by encoding.  Besides making strict comparison

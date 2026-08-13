@@ -136,6 +136,89 @@ class ProductionMotifRecord:
     model_to_source_atom_index: tuple[int, ...]
     atom_to_logical_motif: tuple[int, ...]
     atom_is_attachment: tuple[bool, ...] = ()
+    # V3 geometry sidecar on the uncorrupted token axis.  Connection endpoint
+    # markers map to their local attachment atom; every other token is -1.
+    # The field is optional for historical/synthetic records, while the V3
+    # collator requires a complete row.
+    connection_token_to_atom: tuple[int, ...] = ()
+
+
+def _connection_token_to_atom_from_document(
+    document: Mapping[str, object],
+) -> tuple[int, ...]:
+    """Retain the validated GraphPorts endpoint-to-attachment relation.
+
+    GraphPorts writes exactly two connection markers per ordered cross-motif
+    bond.  The vNext document already binds each ordered endpoint to a model
+    atom; this projection merely keeps that relation on the token axis.  It is
+    not part of the record artifact digest and does not change the wire format.
+    """
+
+    token_domain = document["token_domain"]
+    motif_domain = document["logical_motif_domain"]
+    atom_domain = document["atom_domain"]
+    if not all(isinstance(value, Mapping) for value in (token_domain, motif_domain, atom_domain)):
+        raise ProductionBridgeError("production document domains are malformed")
+
+    input_ids = token_domain["input_ids"]
+    roles = token_domain["token_role"]
+    token_owners = token_domain["token_to_logical_motif"]
+    grouped_indices = motif_domain["connection_token_indices"]
+    cross_bonds = motif_domain["cross_motif_bonds"]
+    atom_owners = atom_domain["atom_to_logical_motif"]
+    if not all(isinstance(value, list) for value in (
+        input_ids,
+        roles,
+        token_owners,
+        grouped_indices,
+        cross_bonds,
+        atom_owners,
+    )):
+        raise ProductionBridgeError("GraphPorts endpoint domains are malformed")
+
+    connection_positions = sorted(
+        int(position) for row in grouped_indices for position in row
+    )
+    # Historical synthetic fixtures may carry abstract connection tokens but
+    # no structural cross-bond table.  Preserve their old loader behavior;
+    # V3 rejects the absent sidecar at its own boundary.
+    if not cross_bonds:
+        return tuple(-1 for _ in input_ids) if not connection_positions else ()
+    ordered_bonds = sorted(cross_bonds, key=lambda row: int(row["edge_id"]))
+    if len(connection_positions) != 2 * len(ordered_bonds):
+        # The pre-GraphPorts HybridMotif codec labels a multi-token connection
+        # span with the same role.  It remains a valid V1 production record but
+        # has no one-token endpoint address and is intentionally ineligible for
+        # V3 rather than being reinterpreted here.
+        return ()
+
+    mapping = [-1] * len(input_ids)
+    for edge_index, bond in enumerate(ordered_bonds):
+        if not isinstance(bond, Mapping) or int(bond.get("edge_id", -1)) != edge_index:
+            raise ProductionBridgeError("cross-motif bond IDs are not dense and ordered")
+        for side_offset, side_name in enumerate(("left", "right")):
+            endpoint = bond.get(side_name)
+            if not isinstance(endpoint, Mapping):
+                raise ProductionBridgeError("cross-motif endpoint is malformed")
+            token_index = connection_positions[2 * edge_index + side_offset]
+            motif_id = int(endpoint["logical_motif_index"])
+            atom_index = int(endpoint["atom_index"])
+            if not 0 <= token_index < len(input_ids) or roles[token_index] != "connection":
+                raise ProductionBridgeError("endpoint token is outside the connection domain")
+            if int(token_owners[token_index]) != motif_id:
+                raise ProductionBridgeError("endpoint token motif owner is inconsistent")
+            if not 0 <= atom_index < len(atom_owners) or int(atom_owners[atom_index]) != motif_id:
+                raise ProductionBridgeError("endpoint atom motif owner is inconsistent")
+            mapping[token_index] = atom_index
+
+    if any(
+        (role == "connection") != (mapping[index] >= 0)
+        for index, role in enumerate(roles)
+    ):
+        raise ProductionBridgeError(
+            "connection roles and endpoint-to-atom mapping do not form one partition"
+        )
+    return tuple(mapping)
 
 
 def _validate_sentinel_contract(
@@ -210,6 +293,7 @@ def load_production_motif_record(
         model_to_source_atom_index=tuple(atom_domain["model_to_source_atom_index"]),
         atom_to_logical_motif=tuple(atom_domain["atom_to_logical_motif"]),
         atom_is_attachment=tuple(atom_domain["atom_is_attachment"]),
+        connection_token_to_atom=_connection_token_to_atom_from_document(document),
     )
 
 
@@ -311,7 +395,15 @@ def collate_production_motif_record(
         start = transform_boundary(original_span.start)
         stop = start + 1 if mask[motif_id] else transform_boundary(original_span.stop)
         identity_input_spans.append(Span(start, stop))
-        logical_to_carrier.append(start)
+        if mask[motif_id]:
+            logical_to_carrier.append(start)
+        else:
+            original_carrier = record.logical_to_carrier[motif_id]
+            if not original_span.start <= original_carrier < original_span.stop:
+                raise ProductionBridgeError(
+                    "logical carrier is outside its original identity span"
+                )
+            logical_to_carrier.append(transform_boundary(original_carrier))
 
     connection_input_indices = tuple(
         tuple(transform_boundary(position) for position in row)
@@ -412,12 +504,13 @@ def _validate_collated_example(
     ):
         raise ProductionBridgeError("corrupted token-domain arrays disagree")
     for motif_id, span in enumerate(example.identity_input_spans):
-        if example.logical_to_carrier[motif_id] != span.start:
-            raise ProductionBridgeError("logical carrier changed after corruption")
-        if example.input_token_to_logical_motif[span.start] != motif_id:
+        carrier = example.logical_to_carrier[motif_id]
+        if not span.start <= carrier < span.stop:
+            raise ProductionBridgeError("logical carrier left its identity span")
+        if example.input_token_to_logical_motif[carrier] != motif_id:
             raise ProductionBridgeError("logical carrier maps to another motif")
         expected_role = IDENTITY_SENTINEL_ROLE if example.identity_recovery_mask[motif_id] else "identity"
-        if example.input_token_role[span.start] != expected_role:
+        if example.input_token_role[carrier] != expected_role:
             raise ProductionBridgeError("identity carrier role changed after corruption")
 
     original_ids = record.input_ids

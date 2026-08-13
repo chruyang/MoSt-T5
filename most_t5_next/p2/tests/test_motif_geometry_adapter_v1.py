@@ -163,6 +163,22 @@ class MotifGeometryAdapterV1Test(unittest.TestCase):
         self.assertIsNotNone(self.adapter.atom_encoder[0].weight.grad)
         self.assertGreater(float(self.adapter.atom_encoder[0].weight.grad.abs().sum()), 0.0)
 
+    def test_autocast_keeps_residual_stream_dtype(self) -> None:
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            encoded = self.encode()
+        self.assertEqual(encoded.fused_embeddings.dtype, self.input_embeddings.dtype)
+
+    def test_zero_memory_mode_removes_the_complete_geometry_path(self) -> None:
+        aligned = self.encode()
+        zero = self.encode(state_memory_mode="zero")
+        torch.testing.assert_close(zero.fused_embeddings, self.input_embeddings)
+        self.assertEqual(int(torch.count_nonzero(zero.atom_memory)), 0)
+        self.assertEqual(int(torch.count_nonzero(zero.pre_t5_motif_context)), 0)
+        self.assertEqual(int(torch.count_nonzero(zero.cross_attention_weights)), 0)
+        self.assertEqual(aligned.fused_embeddings.shape, zero.fused_embeddings.shape)
+        with self.assertRaisesRegex(MotifGeometryAdapterError, "state_memory_mode"):
+            self.encode(state_memory_mode="padding_like")
+
     def test_invalid_span_and_atom_owner_are_rejected(self) -> None:
         bad_spans = self.identity_span_bounds.clone()
         bad_spans[0, 0] = torch.tensor([2, 2])

@@ -366,6 +366,66 @@ def test_four_distinguishable_ports_on_one_chiral_atom() -> None:
     assert [label for _atom, label in Chem.FindMolChiralCenters(rebuilt)] == ["S"]
 
 
+@pytest.mark.parametrize(
+    ("ordinal", "smiles", "groups"),
+    [
+        (
+            442310,
+            "CC/N=C(/O)O[C@@H](O/C(O)=N/CC)N(C)C",
+            (
+                (2, 3), (1,), (0,), (4,), (5,), (6,), (7,), (8, 10),
+                (9,), (11,), (12,), (13,), (14,), (15,),
+            ),
+        ),
+        (
+            2822098,
+            "C=C/C(O)=N/C[C@H](CC)C/N=C(/O)C=C",
+            (
+                (2, 4), (0, 1), (3,), (5,), (6,), (7,), (8,), (9,),
+                (10, 11), (12,), (13, 14),
+            ),
+        ),
+        (
+            2995617,
+            "C/C=C(/C)[C@@](O)(CN(C)C)/C(C)=C/C",
+            (
+                (4,), (1, 2), (0,), (3,), (5,), (6,), (7,), (8,), (9,),
+                (10, 12), (11,), (13,),
+            ),
+        ),
+    ],
+)
+def test_pf10_stereo_dependent_tetrahedral_centres_survive_preliminary_cleaning(
+    ordinal: int,
+    smiles: str,
+    groups: tuple[tuple[int, ...], ...],
+) -> None:
+    """PF-10 rejects whose R/S identity depends on cut-supported E/Z state."""
+
+    del ordinal  # The parameter documents the exact rejected PCQM row.
+    codec = ProductionGraphPortsCodecV1()
+    mol = _mol(smiles)
+    encoded = codec.encode(mol, groups, _cross_edges(mol, groups))
+    rebuilt = codec.reconstruct(encoded)
+
+    assert (
+        Chem.MolToSmiles(rebuilt, canonical=True, isomericSmiles=True)
+        == encoded.strict_isomeric_identity
+    )
+    def assigned_labels(candidate: Chem.Mol) -> list[str]:
+        return sorted(
+            label
+            for _atom_index, label in Chem.FindMolChiralCenters(
+                candidate,
+                includeUnassigned=True,
+                includeCIP=True,
+                useLegacyImplementation=False,
+            )
+        )
+
+    assert assigned_labels(rebuilt) == assigned_labels(mol) == ["R"]
+
+
 def test_cam_t5_partition_rejects_cross_motif_double_bond() -> None:
     codec = ProductionGraphPortsCodecV1()
     mol = _mol("F/C=C/Cl")

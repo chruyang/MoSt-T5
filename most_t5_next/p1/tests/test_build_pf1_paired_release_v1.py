@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import pickle
+import sys
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest import mock
 
 from most_t5_next.p1 import build_pf1_paired_release_v1 as subject
 from most_t5_next.p1 import freeze_pf1_connectivity_sample_v1 as selection
@@ -88,6 +91,24 @@ class FakeLMDB:
 
 
 class PF1PairedReleaseTest(unittest.TestCase):
+    def test_pf10_release_profile_freezes_count_and_scope(self) -> None:
+        profile_id, profile, expected = subject.resolve_release_profile(
+            SimpleNamespace(
+                release_profile=subject.PF10_RELEASE_PROFILE,
+                expected_members=None,
+            )
+        )
+        self.assertEqual(profile_id, subject.PF10_RELEASE_PROFILE)
+        self.assertEqual(expected, 336_006)
+        self.assertEqual(profile["scope"], "pf10_ten_percent_causal_gate")
+        with self.assertRaisesRegex(subject.PF1PairedReleaseError, "forbids"):
+            subject.resolve_release_profile(
+                SimpleNamespace(
+                    release_profile=subject.PF10_RELEASE_PROFILE,
+                    expected_members=1024,
+                )
+            )
+
     def test_formal_cli_accepts_28_workers_and_84_pending(self) -> None:
         args = subject.build_parser().parse_args(
             [
@@ -107,10 +128,31 @@ class PF1PairedReleaseTest(unittest.TestCase):
                 "28",
                 "--max-pending",
                 "84",
+                "--prepared-spool",
+                "complete.sqlite3",
             ]
         )
         self.assertEqual((args.workers, args.max_pending), (28, 84))
+        self.assertEqual(
+            (args.phase_b_workers, args.phase_b_max_pending), (28, 84)
+        )
+        self.assertEqual(args.prepared_spool, "complete.sqlite3")
         self.assertEqual(args.lmdb_map_size_gib, 4)
+
+    def test_public_resume_api_binds_explicit_spool(self) -> None:
+        args = SimpleNamespace(output_dir="new-output", prepared_spool=None)
+        with tempfile.TemporaryDirectory() as temporary:
+            spool = Path(temporary) / "complete.sqlite3"
+            with mock.patch.object(
+                subject, "run", return_value={"status": "pass"}
+            ) as run:
+                observed = subject.run_phase_b_resume(
+                    args, prepared_spool=spool
+                )
+        self.assertEqual(observed, {"status": "pass"})
+        passed = run.call_args.args[0]
+        self.assertEqual(passed.prepared_spool, str(spool.resolve()))
+        self.assertIsNone(args.prepared_spool)
 
     def test_selfies_syntax_registry_covers_cohort_and_reports_split_provenance(self) -> None:
         coverage = subject.split_selfies_coverage(
@@ -186,6 +228,172 @@ class PF1PairedReleaseTest(unittest.TestCase):
             self.assertEqual(spool.get(0).frozen, first)
             self.assertEqual(spool.get(1).frozen, second)
             spool.close()
+
+            readonly = subject._PreparedSpool(
+                Path(temporary) / "spool.sqlite3",
+                create=False,
+                immutable=True,
+            )
+            self.assertEqual(readonly.dense_selection_span(), (2, 0, 1))
+            self.assertEqual(readonly.get(0).frozen, first)
+            with self.assertRaisesRegex(subject.PF1PairedReleaseError, "read only"):
+                readonly.commit()
+            readonly.close()
+
+    def test_prepared_spool_loads_python_m_main_dataclasses(self) -> None:
+        frozen = subject.FrozenMember(0, 0, "member-0", 0, "group-a", "train")
+        prepared = subject.PreparedMember(
+            frozen=frozen,
+            storage_key="000000000",
+            source_atom_count=2,
+            model_to_source_atom_index=(0, 1),
+            inherited_e3fp=((1, 2), (3, 4)),
+            base_record_content_sha256="a" * 64,
+            effective_geometry_content_sha256="b" * 64,
+            prepared_surfaces="test-only",  # type: ignore[arg-type]
+            atom_count=2,
+            motif_count=1,
+            edge_count=0,
+            inheritance_summary={"slots_populated": 4},
+        )
+        main_module = sys.modules["__main__"]
+        old_frozen = getattr(main_module, "FrozenMember", None)
+        old_prepared = getattr(main_module, "PreparedMember", None)
+        old_modules = (subject.FrozenMember.__module__, subject.PreparedMember.__module__)
+        try:
+            subject.FrozenMember.__module__ = "__main__"
+            subject.PreparedMember.__module__ = "__main__"
+            setattr(main_module, "FrozenMember", subject.FrozenMember)
+            setattr(main_module, "PreparedMember", subject.PreparedMember)
+            payload = pickle.dumps(prepared, protocol=pickle.HIGHEST_PROTOCOL)
+        finally:
+            subject.FrozenMember.__module__, subject.PreparedMember.__module__ = old_modules
+            if old_frozen is None:
+                delattr(main_module, "FrozenMember")
+            else:
+                setattr(main_module, "FrozenMember", old_frozen)
+            if old_prepared is None:
+                delattr(main_module, "PreparedMember")
+            else:
+                setattr(main_module, "PreparedMember", old_prepared)
+
+        loaded = subject._load_prepared_pickle(payload)
+        self.assertIsInstance(loaded, subject.PreparedMember)
+        self.assertEqual(loaded, prepared)
+
+    def test_phase_b_helper_preserves_canonical_wire_bytes_and_fields(self) -> None:
+        frozen = subject.FrozenMember(3, 2, "member-7", 7, "group-a", "train")
+        prepared = subject.PreparedMember(
+            frozen=frozen,
+            storage_key="000000007",
+            source_atom_count=2,
+            model_to_source_atom_index=(0, 1),
+            inherited_e3fp=((1, 2), (3, 4)),
+            base_record_content_sha256="a" * 64,
+            effective_geometry_content_sha256="b" * 64,
+            prepared_surfaces="surfaces",  # type: ignore[arg-type]
+            atom_count=2,
+            motif_count=1,
+            edge_count=0,
+            inheritance_summary={"slots_populated": 4},
+        )
+        runtime = SimpleNamespace(
+            tokenizer_contract_sha256="c" * 64,
+            tokenizer_snapshot_sha256="d" * 64,
+        )
+        loaded = SimpleNamespace(
+            atom_record=SimpleNamespace(input_ids=(1, 2, 3)),
+            motif_record=SimpleNamespace(input_ids=(4, 5)),
+            surface_summary=SimpleNamespace(motif_identity_modes=("macro",)),
+        )
+        canonical = b"canonical-wire-row"
+        binding_base = {
+            "release_id": "release",
+            "data_release_manifest_sha256": "1" * 64,
+            "geometry_record_schema_sha256": "2" * 64,
+            "membership_manifest_sha256": "3" * 64,
+            "identity_codec_sha256": "4" * 64,
+            "connection_codec_sha256": "5" * 64,
+        }
+        with mock.patch.object(
+            subject.paired,
+            "build_production_paired_identity_records_from_prepared",
+            return_value="pair",
+        ) as build, mock.patch.object(
+            subject.paired_wire,
+            "encode_paired_training_record",
+            return_value=canonical,
+        ) as encode, mock.patch.object(
+            subject.paired_wire,
+            "decode_paired_training_record",
+            return_value=loaded,
+        ), mock.patch.object(
+            subject,
+            "_output_donor_atom_map_row",
+            return_value={"selection_index": 3},
+        ):
+            result = subject._materialize_prepared_member(
+                prepared,
+                union_tokenizer="tokenizer",
+                tokenizer_binding=runtime,
+                binding_base=binding_base,
+                macro_by_identity={"C": "<m:C>"},
+            )
+
+        self.assertEqual(result["payload"], canonical)
+        self.assertEqual(result["frozen"], frozen)
+        self.assertEqual(result["motif_identity_modes"], ("macro",))
+        self.assertEqual(result["membership"]["wire_bytes"], len(canonical))
+        self.assertEqual(result["membership"]["atom_input_token_count"], 3)
+        self.assertEqual(result["membership"]["motif_input_token_count"], 2)
+        build.assert_called_once()
+        encode.assert_called_once_with(
+            "pair", schedule_index=3, sdf_record_index=7
+        )
+
+    def test_prepared_member_publishes_graphports_donor_atom_map_row(self) -> None:
+        frozen = subject.FrozenMember(
+            0,
+            0,
+            "ogb_pcqm4mv2_train_row_index:7",
+            7,
+            "group-dev",
+            "dev",
+        )
+        graph_encoding = SimpleNamespace(
+            format_version="most-t5-r1/graph-ports/v1",
+            motifs=(
+                SimpleNamespace(
+                    motif_id=0,
+                    source_atom_map=((1, 1), (2, 0)),
+                ),
+            ),
+        )
+        prepared = subject.PreparedMember(
+            frozen=frozen,
+            storage_key="000000007",
+            source_atom_count=2,
+            model_to_source_atom_index=(0, 1),
+            inherited_e3fp=((1, 2, 3, 4), (5, 6, 7, 8)),
+            base_record_content_sha256="a" * 64,
+            effective_geometry_content_sha256="b" * 64,
+            prepared_surfaces=SimpleNamespace(graph_encoding=graph_encoding),
+            atom_count=2,
+            motif_count=1,
+            edge_count=0,
+            inheritance_summary={"slots_populated": 8},
+        )
+
+        row = subject._output_donor_atom_map_row(prepared)
+
+        self.assertEqual(row["selection_index"], 0)
+        self.assertEqual(row["storage_key"], "000000007")
+        self.assertEqual(
+            row["overlay_planning_sidecar"][  # type: ignore[index]
+                "canonical_local_atom_to_model_atom"
+            ],
+            [[[1, 1], [2, 0]]],
+        )
 
     def test_reader_replays_frozen_split_order_and_dev_tail(self) -> None:
         train_rows = [

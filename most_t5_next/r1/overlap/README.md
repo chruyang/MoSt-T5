@@ -40,6 +40,23 @@ The original pretraining payload remains the only payload store. A training
 dataset joins its original records to `permitted_member_ids.jsonl`; this
 offline derivation is not part of the per-batch model path.
 
+For the frozen Phase-II policy, use the narrower wrapper rather than the
+generic command:
+
+```bash
+python -m most_t5_next.r1.overlap.derive_phase2_chebi20_clean_membership_v1 \
+  --pretrain-manifest /path/to/phase2/collection_manifest.json \
+  --chebi-validation-manifest /path/to/chebi20-validation/collection_manifest.json \
+  --chebi-test-manifest /path/to/chebi20-test/collection_manifest.json \
+  --output-dir /path/to/p2-clean-membership-chebi20-only-v1
+```
+
+That entry point accepts only the frozen 301,655-record Phase-II source and
+the official ChEBI-20 validation/test identity collections. Every matching
+connectivity removes the complete Phase-II record; it has no objective-specific
+exceptions and refuses extra downstream collections. It adds
+`phase2_chebi20_policy_receipt.json` to the generic membership artifacts.
+
 ## QM9 molecule-group-disjoint split
 
 `build_qm9_identity_split.py` derives the clean HOMO/LUMO/gap view from the
@@ -208,3 +225,17 @@ or text-pair identity is invented.  The `n=400` binomial half-width recorded in
 the summary is a membership-size precision heuristic for a future
 one-result-per-molecule Bernoulli metric, not a power guarantee for multi-prompt
 or stratified analyses.
+
+## Restoring historical Phase-I downstream exclusions
+
+`restore_phase1_downstream_exclusions_v1.py` reverses the historical final-v4
+paper-scope filter for Phase I only. It binds each of the 5,510 old exclusion
+rows back to its already-admitted production-v2 shard membership, payload
+index, and LMDB wire bytes. It neither recomputes chemistry nor copies payloads.
+The output is an explicit restoration ledger plus a segmented source manifest:
+immutable production-v2 followed by the independent stereo-recovery
+supplement. The old final-v4 artifacts remain unchanged and auditable.
+
+This restoration must not be reused as a Phase-II decontamination policy.
+Phase II continues to use `derive_phase2_chebi20_clean_membership_v1.py`, whose
+frozen scope is ChEBI-20 test connectivity only.

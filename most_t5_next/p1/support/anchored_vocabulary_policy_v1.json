@@ -1,0 +1,95 @@
+{
+  "schema_version": "most-t5-next/anchored-vocabulary-policy/v1",
+  "status": "phase1_phase2_joint_base_plus_all_chebi_train_candidate_fixed",
+  "scope": "single_mainline_tokenizer_frozen_before_phase_i",
+  "grammar": {
+    "boundary_mode": "fallback_single_suffix",
+    "fallback_suffix": "<MOST:FALLBACK_END>"
+  },
+  "macro": {
+    "general_base_budget": 18000,
+    "default_total_budget": 20325,
+    "budget_is_final": false,
+    "budget_role": "candidate_for_equal_token_10pct_training_comparison",
+    "general_ranking_source": "phase_i_and_phase_ii_train_only",
+    "general_ranking": "equal_stage_mass_then_utf8_identity",
+    "equal_stage_mass_formula": "count_phase1/24152754 + count_phase2/4626550",
+    "raw_pooled_ranking_is_sensitivity_only": true,
+    "chebi20_train_extension_policy": "all_identities_absent_from_general_base",
+    "chebi20_train_extension_rows": 2325,
+    "validation_or_test_influences_ranking": false,
+    "phase2_text_or_labels_influence_ranking": false,
+    "phase1_registry_sha256": "0643484deee707bf23d6d39fa56c764a73f999dd7f9b74665853fdadf4db36b1",
+    "phase2_registry_sha256": "c37871fa420ad22e67d0a49c872ea1813b57d1c76cc9e8b1deb35b55604a0d85",
+    "pf1_registry_is_sample_bound_evidence_not_final_registry": true
+  },
+  "fallback": {
+    "chemical_lexer_is_lossless_for_unselected_motifs": true,
+    "unknown_motif_token_is_not_used": true,
+    "role": "trained_second_lexical_surface_not_emergency_only",
+    "single_suffix_carrier": "<MOST:FALLBACK_END>",
+    "whole_span_is_one_logical_motif": true,
+    "atom_anchor_endpoint_and_e3fp_mapping_are_preserved": true,
+    "phase_i_auxiliary_registered_macro_decomposition_required": true,
+    "decomposition_probability_is_frequency_aware": true,
+    "text_to_molecule_canonical_target_remains_deterministic": true
+  },
+  "chebi20_all_train_extension": {
+    "enters_mainline_tokenizer": true,
+    "selected_from_train_only": true,
+    "total_train_unique_motifs": 5774,
+    "already_in_general_base": 3449,
+    "additional_rows": 2325,
+    "total_macro_rows": 20325,
+    "additional_untied_parameters_over_18k": 3571200,
+    "total_untied_macro_row_parameters": 31219200,
+    "added_singleton_rows": 1963,
+    "added_rows_with_count_below_8": 2325,
+    "added_rows_absent_from_both_general_pretraining_stages": 317,
+    "requires_lossless_lexer_derived_input_and_output_row_initialization": true,
+    "requires_macro_fallback_equivalence_exposure": true,
+    "requires_chebi_train_only_auxiliary_exposure_before_evaluation": true,
+    "random_cold_row_policy_is_admissible": false,
+    "chebi20_train_fully_macro_tokenized_rate": 1.0,
+    "chebi20_validation_fully_macro_tokenized_rate": 0.9351711602544683,
+    "chebi20_validation_occurrence_coverage": 0.9964159473900535,
+    "chebi20_test_fully_macro_tokenized_rate": 0.9290909090909091,
+    "chebi20_test_occurrence_coverage": 0.9960509872531867
+  },
+  "other_downstream_policy": {
+    "task_populations_do_not_select_rows_by_default": true,
+    "pubchem_semantic_and_caption_population_is_already_represented_by_phase_ii": true,
+    "qm9_moleculenet_and_retrieval_are_input_side_tasks": true,
+    "input_side_long_tail_uses_lossless_chemical_lexer": true,
+    "uspto50k_is_optional_and_does_not_expand_mainline_until_retrosynthesis_is_admitted": true,
+    "coverage_is_reported_separately_from_training_sufficiency": true
+  },
+  "equivalent_surface_policy": {
+    "registered_macro_is_current_canonical_encoder_surface": true,
+    "every_macro_identity_has_a_lossless_lexer_expansion": true,
+    "hard_embedding_tying_is_final": false,
+    "single_atom_macro_to_atom_lexeme_binding_is_final": false,
+    "candidate_policies": [
+      "macro_initialized_from_pooled_fallback_phrase",
+      "macro_to_pooled_fallback_representation_alignment",
+      "hard_parameter_tying_where_semantically_valid"
+    ]
+  },
+  "tokenizer_freeze_prerequisites": {
+    "all_registered_training_corpora_anchor_domains_censused": true,
+    "phase1_current_surface_registry_built": true,
+    "phase2_current_surface_registry_built": true,
+    "chebi20_train_current_surface_census_built": true,
+    "surface_snapshot_training_admission": false,
+    "pending_equal_token_10pct_training_comparison": true
+  },
+  "evidence": {
+    "phase2_census_manifest": "tmp/phase2_anchored_pure_motif_census_v1_b0693bb_manifest.json",
+    "joint_vocab_analysis": "tmp/multistage_anchored_vocab_analysis_v1_b0693bb.json",
+    "joint_vocab_pareto_analysis": "tmp/multistage_anchored_vocab_pareto_v1_b0693bb.json",
+    "k18_all_chebi_analysis": "tmp/multistage_anchored_vocab_k18_all_chebi_v1_b0693bb.json",
+    "k18_all_chebi_split_analysis": "tmp/multistage_chebi_split_k18_all_v1_b0693bb.json",
+    "multistage_downstream_coverage": "tmp/multistage_downstream_motif_coverage_k18_all_chebi_v1_b0693bb.json",
+    "frozen_candidate_registry": "tmp/multistage_anchored_macro_registry_k18_all_chebi_v1_b0693bb/manifest.json"
+  }
+}

@@ -42,6 +42,32 @@ def _verified_tokenizer(base_size: int, union_size: int) -> SimpleNamespace:
     )
 
 
+class UnionInitTokenizerLoaderBoundaryTest(unittest.TestCase):
+    def test_custom_verified_loader_is_used_without_changing_dimensions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "base"
+            union = root / "union"
+            base.mkdir()
+            union.mkdir()
+            calls = []
+
+            def loader(**kwargs):
+                calls.append(kwargs)
+                return _verified_tokenizer(10, 15)
+
+            _, base_size, union_size, contract, snapshot = (
+                subject._verified_tokenizer_and_dimensions(
+                    base_tokenizer_snapshot=base,
+                    union_tokenizer_dir=union,
+                    verified_tokenizer_loader=loader,
+                )
+            )
+            self.assertEqual(calls, [{"base_snapshot": base, "output_dir": union}])
+            self.assertEqual((base_size, union_size), (10, 15))
+            self.assertEqual((contract, snapshot), ("contract-v1", "snapshot-v1"))
+
+
 @unittest.skipIf(torch is None, "PyTorch and Transformers are required")
 class UnionInitCheckpointTest(unittest.TestCase):
     BASE_TOKENIZER_SIZE = 10

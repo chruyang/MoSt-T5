@@ -91,19 +91,31 @@ def load_molecule_collection(connection, manifest_path):
     }
 
 
-def require_collection_roles_and_specs(pretrain, protected):
+def require_collection_roles_and_specs(
+    pretrain, protected, exclusion_dimension="connectivity_identity"
+):
     if pretrain["role"] not in PRETRAIN_ROLES:
         raise ValueError("pretrain collection role is not a pretraining role")
     seen_ids = {pretrain["collection_id"]}
-    connectivity_spec = pretrain["identity_specs"]["connectivity_identity_spec_sha256"]
+    spec_key = {
+        "connectivity_identity": "connectivity_identity_spec_sha256",
+        "stereo_identity": "stereo_identity_spec_sha256",
+    }.get(exclusion_dimension)
+    if spec_key is None:
+        raise ValueError("unsupported exclusion dimension: {}".format(exclusion_dimension))
+    exclusion_spec = pretrain["identity_specs"][spec_key]
     for collection in protected:
         if collection["role"] not in PROTECTED_ROLES:
             raise ValueError("protected collection role must be downstream_validation or downstream_test")
         if collection["collection_id"] in seen_ids:
             raise ValueError("collection IDs must be unique")
         seen_ids.add(collection["collection_id"])
-        if collection["identity_specs"]["connectivity_identity_spec_sha256"] != connectivity_spec:
-            raise ValueError("connectivity identity specifications must match before exclusion")
+        if collection["identity_specs"][spec_key] != exclusion_spec:
+            raise ValueError(
+                "{} specifications must match before exclusion".format(
+                    exclusion_dimension.replace("_", " ")
+                )
+            )
 
 
 def compact_artifact_observation(observation):
@@ -194,21 +206,33 @@ def protected_sort_key(collection):
     return tuple(item.encode("utf-8") for item in (collection["task_family"], collection["split"], collection["collection_id"]))
 
 
-def write_membership_artifacts(connection, pretrain, protected, output_dir):
+def write_membership_artifacts(
+    connection,
+    pretrain,
+    protected,
+    output_dir,
+    exclusion_dimension="connectivity_identity",
+):
+    exclusion_column = {
+        "connectivity_identity": "connectivity_sha256",
+        "stereo_identity": "stereo_sha256",
+    }.get(exclusion_dimension)
+    if exclusion_column is None:
+        raise ValueError("unsupported exclusion dimension: {}".format(exclusion_dimension))
     protected_ids = [collection["collection_id"] for collection in protected]
     placeholders = ",".join("?" for _ in protected_ids)
     query = """
-        SELECT p.member_id, p.connectivity_sha256, d.collection_id
+        SELECT p.member_id, p.connectivity_sha256, p.stereo_sha256, d.collection_id
         FROM molecules AS p
         LEFT JOIN (
-            SELECT collection_id, connectivity_sha256
+            SELECT collection_id, {column} AS exclusion_sha256
             FROM molecules
             WHERE collection_id IN ({})
-            GROUP BY collection_id, connectivity_sha256
-        ) AS d ON d.connectivity_sha256=p.connectivity_sha256
+            GROUP BY collection_id, {column}
+        ) AS d ON d.exclusion_sha256=p.{column}
         WHERE p.collection_id=?
         ORDER BY p.member_id COLLATE BINARY, d.collection_id COLLATE BINARY
-    """.format(placeholders)
+    """.format(placeholders, column=exclusion_column)
     rows = connection.execute(query, tuple(protected_ids) + (pretrain["collection_id"],))
     by_id = {collection["collection_id"]: collection for collection in protected}
     permitted = CanonicalJsonlWriter(output_dir / PERMITTED_FILENAME)
@@ -216,6 +240,7 @@ def write_membership_artifacts(connection, pretrain, protected, output_dir):
     excluded_multiple = 0
     current_member = None
     current_connectivity = None
+    current_stereo = None
     current_collection_ids = []
 
     def emit_current():
@@ -232,8 +257,7 @@ def write_membership_artifacts(connection, pretrain, protected, output_dir):
         matches.sort(key=protected_sort_key)
         if len(matches) > 1:
             excluded_multiple += 1
-        excluded.write(
-            {
+        excluded_row = {
                 "schema_version": EXCLUDED_ROW_SCHEMA,
                 "member_id": current_member,
                 "connectivity_identity_sha256": current_connectivity,
@@ -245,16 +269,18 @@ def write_membership_artifacts(connection, pretrain, protected, output_dir):
                     }
                     for collection in matches
                 ],
-            },
-            current_member,
-        )
+            }
+        if exclusion_dimension == "stereo_identity":
+            excluded_row["stereo_identity_sha256"] = current_stereo
+        excluded.write(excluded_row, current_member)
 
     try:
-        for member_id, connectivity_sha256, collection_id in rows:
+        for member_id, connectivity_sha256, stereo_sha256, collection_id in rows:
             if member_id != current_member:
                 emit_current()
                 current_member = member_id
                 current_connectivity = connectivity_sha256
+                current_stereo = stereo_sha256
                 current_collection_ids = []
             if collection_id is not None and collection_id not in current_collection_ids:
                 current_collection_ids.append(collection_id)
@@ -272,6 +298,7 @@ def derive_clean_membership(
     pretrain_manifest_path,
     protected_manifest_paths,
     output_dir,
+    exclusion_dimension="connectivity_identity",
 ):
     if not protected_manifest_paths:
         raise ValueError("at least one protected validation/test manifest is required")
@@ -288,7 +315,9 @@ def derive_clean_membership(
         ]
         protected_pairs.sort(key=lambda pair: protected_sort_key(pair[0]))
         protected = [pair[0] for pair in protected_pairs]
-        require_collection_roles_and_specs(pretrain, protected)
+        require_collection_roles_and_specs(
+            pretrain, protected, exclusion_dimension=exclusion_dimension
+        )
         connection.commit()
         connection.executescript(
             """
@@ -307,60 +336,88 @@ def derive_clean_membership(
 
         output_dir.mkdir(parents=True, exist_ok=False)
         permitted_artifact, excluded_artifact, excluded_multiple = write_membership_artifacts(
-            connection, pretrain, protected, output_dir
+            connection,
+            pretrain,
+            protected,
+            output_dir,
+            exclusion_dimension=exclusion_dimension,
         )
         pretrain_member_count = proof.scalar(
             connection,
             "SELECT COUNT(*) FROM molecules WHERE collection_id=?",
             (pretrain["collection_id"],),
         )
-        excluded_unique_connectivity_count = proof.scalar(
+        exclusion_column = {
+            "connectivity_identity": "connectivity_sha256",
+            "stereo_identity": "stereo_sha256",
+        }[exclusion_dimension]
+        excluded_unique_identity_count = proof.scalar(
             connection,
             """
-            SELECT COUNT(DISTINCT p.connectivity_sha256)
+            SELECT COUNT(DISTINCT p.{column})
             FROM molecules AS p
             WHERE p.collection_id=? AND EXISTS (
                 SELECT 1 FROM molecules AS d
                 WHERE d.collection_id IN ({})
-                  AND d.connectivity_sha256=p.connectivity_sha256
+                  AND d.{column}=p.{column}
             )
-            """.format(",".join("?" for _ in protected)),
+            """.format(",".join("?" for _ in protected), column=exclusion_column),
             (pretrain["collection_id"],) + tuple(item["collection_id"] for item in protected),
         )
         protected_reports = []
         for collection, observation in protected_pairs:
-            connectivity_counts = named_dimension_counts(
+            exclusion_counts = named_dimension_counts(
                 proof.dimension_counts(
                     connection,
                     pretrain["collection_id"],
                     collection["collection_id"],
-                    "connectivity_identity",
-                    left_unique_count=pretrain_unique_counts["connectivity_identity"],
+                    exclusion_dimension,
+                    left_unique_count=pretrain_unique_counts[exclusion_dimension],
                 )
             )
-            protected_reports.append(
-                {
+            report = {
                     "source": source_binding(collection, observation),
-                    "hard_exclusion_connectivity": {
+                    "hard_exclusion_{}".format(
+                        "connectivity"
+                        if exclusion_dimension == "connectivity_identity"
+                        else "stereo"
+                    ): {
                         "used_for_exclusion": True,
-                        "counts": connectivity_counts,
+                        "counts": exclusion_counts,
                     },
-                    "report_only_stereo": report_stereo(
+                    "report_only_text": report_text(pretrain, collection),
+                }
+            if exclusion_dimension == "connectivity_identity":
+                report["report_only_stereo"] = report_stereo(
                         connection,
                         pretrain,
                         collection,
                         pretrain_unique_counts["stereo_identity"],
+                    )
+            else:
+                report["report_only_connectivity"] = {
+                    "used_for_exclusion": False,
+                    "status": "compared_report_only",
+                    "counts": named_dimension_counts(
+                        proof.dimension_counts(
+                            connection,
+                            pretrain["collection_id"],
+                            collection["collection_id"],
+                            "connectivity_identity",
+                            left_unique_count=pretrain_unique_counts[
+                                "connectivity_identity"
+                            ],
+                        )
                     ),
-                    "report_only_text": report_text(pretrain, collection),
                 }
-            )
+            protected_reports.append(report)
 
         source_observations = {
             "pretrain_manifest_sha256": pretrain_observation["manifest_sha256"],
             "protected_manifest_sha256": [
                 observation["manifest_sha256"] for _, observation in protected_pairs
             ],
-            "policy": "exclude_on_connectivity_identity_sha256_union_only",
+            "policy": "exclude_on_{}_sha256_union_only".format(exclusion_dimension),
         }
         binding_sha256 = proof.sha256_bytes(proof.canonical_json_bytes(source_observations))
         manifest = {
@@ -369,10 +426,15 @@ def derive_clean_membership(
             "derivation_binding_sha256": binding_sha256,
             "status": "complete",
             "policy": {
-                "hard_exclusion_key": "connectivity_identity_sha256",
-                "protected_roles": sorted(PROTECTED_ROLES),
+                "hard_exclusion_key": "{}_sha256".format(exclusion_dimension),
+                "protected_roles": sorted({item["role"] for item in protected}),
+                "allowed_protected_roles": sorted(PROTECTED_ROLES),
                 "match_semantics": "exclude_if_present_in_any_protected_collection",
-                "report_only_dimensions": ["stereo_identity_sha256", "text_identity"],
+                "report_only_dimensions": (
+                    ["stereo_identity_sha256", "text_identity"]
+                    if exclusion_dimension == "connectivity_identity"
+                    else ["connectivity_identity_sha256", "text_identity"]
+                ),
             },
             "release_handling": {
                 "source_releases_preserved": True,
@@ -385,7 +447,9 @@ def derive_clean_membership(
                 "semantic_admission_basis": [
                     "collection schema and role",
                     "referenced molecule-row closure",
-                    "compatible connectivity identity specification",
+                    "compatible {} specification".format(
+                        exclusion_dimension.replace("_", " ")
+                    ),
                 ],
             },
             "pretrain_source": source_binding(pretrain, pretrain_observation),
@@ -394,7 +458,12 @@ def derive_clean_membership(
                 "pretrain_member_count": pretrain_member_count,
                 "permitted_member_count": permitted_artifact["row_count"],
                 "excluded_member_count": excluded_artifact["row_count"],
-                "excluded_unique_connectivity_count": excluded_unique_connectivity_count,
+                "excluded_unique_exclusion_identity_count": excluded_unique_identity_count,
+                "excluded_unique_connectivity_count": (
+                    excluded_unique_identity_count
+                    if exclusion_dimension == "connectivity_identity"
+                    else None
+                ),
                 "excluded_members_matching_multiple_protected_collections": excluded_multiple,
             },
             "artifacts": {

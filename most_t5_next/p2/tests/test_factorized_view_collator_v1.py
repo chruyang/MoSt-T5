@@ -93,6 +93,7 @@ class FactorizedViewCollatorTest(unittest.TestCase):
             num_e3fp_embeddings=16,
         )
         self.assertIsNone(batch.labels)
+        self.assertIsNone(batch.label_to_motif)
         self.assertTrue(torch.equal(batch.input_ids[0], torch.tensor(self.record.input_ids)))
         self.assertTrue(bool(batch.state_target_mask.any()))
         self.assertTrue(
@@ -143,6 +144,10 @@ class FactorizedViewCollatorTest(unittest.TestCase):
             num_e3fp_embeddings=16,
         )
         self.assertIsNotNone(batch.labels)
+        self.assertEqual(
+            tuple(batch.label_to_motif[0].tolist()),
+            (-1, 0, 0, -1, 1, 1, -1, -1),
+        )
         self.assertTrue(
             torch.equal(
                 batch.e3fp_input_ids[0],

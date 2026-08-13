@@ -15,11 +15,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+from most_t5_next.r1.adapter.graphports_donor_atom_map_sidecar_v1 import (
+    SIDECAR_SCHEMA as DONOR_ATOM_MAP_SIDECAR_SCHEMA,
+    build_graphports_donor_atom_map_sidecar,
+)
+
 
 DONOR_PLAN_ID = "most-t5-p2/matched-motif-state-donor-plan/v1"
-DONOR_ATOM_MAP_SIDECAR_SCHEMA = (
-    "most-t5-p2/graphports-donor-atom-map-sidecar/v1"
-)
 
 
 class MatchedMotifDonorError(ValueError):
@@ -67,57 +69,6 @@ class MatchedStateOverlay:
     state_by_record_id: Mapping[str, tuple[tuple[int, int, int, int], ...]]
     changed_motifs_by_record_id: Mapping[str, tuple[int, ...]]
     changed_state_slot_count: int
-
-
-def build_graphports_donor_atom_map_sidecar(graph_encoding: object) -> dict[str, object]:
-    """Serialize ``MotifRecord.source_atom_map`` for overlay planning only.
-
-    GraphPorts v1 freezes canonical, one-based motif-local atom IDs while the
-    second coordinate is the projected molecule/model atom row.  This map is
-    necessary for a cross-molecule donor; equal motif identity hashes alone do
-    not establish an atom isomorphism.
-    """
-
-    try:
-        motifs = tuple(graph_encoding.motifs)  # type: ignore[attr-defined]
-        format_version = str(graph_encoding.format_version)  # type: ignore[attr-defined]
-    except (AttributeError, TypeError) as exc:
-        raise MatchedMotifDonorError("GraphPorts encoding fields are malformed") from exc
-    if not motifs or tuple(int(motif.motif_id) for motif in motifs) != tuple(  # type: ignore[attr-defined]
-        range(len(motifs))
-    ):
-        raise MatchedMotifDonorError(
-            "GraphPorts motifs must be in contiguous frozen-logical order"
-        )
-    rows: list[list[list[int]]] = []
-    for motif in motifs:
-        try:
-            source_map = tuple(
-                (int(local_id), int(model_atom))
-                for local_id, model_atom in motif.source_atom_map  # type: ignore[attr-defined]
-            )
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise MatchedMotifDonorError(
-                "GraphPorts motif source_atom_map is malformed"
-            ) from exc
-        if tuple(local_id for local_id, _model_atom in source_map) != tuple(
-            range(1, len(source_map) + 1)
-        ):
-            raise MatchedMotifDonorError(
-                "GraphPorts canonical local atom IDs must be contiguous"
-            )
-        if len({model_atom for _local_id, model_atom in source_map}) != len(
-            source_map
-        ):
-            raise MatchedMotifDonorError(
-                "GraphPorts source_atom_map repeats a model atom"
-            )
-        rows.append([[local_id, model_atom] for local_id, model_atom in source_map])
-    return {
-        "schema_version": DONOR_ATOM_MAP_SIDECAR_SCHEMA,
-        "source_codec_format_version": format_version,
-        "canonical_local_atom_to_model_atom": rows,
-    }
 
 
 def _document_fields(document: Mapping[str, object]):

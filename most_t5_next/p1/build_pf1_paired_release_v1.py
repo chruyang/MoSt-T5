@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Materialize the frozen PF-1 paired A/M training release.
+"""Materialize a frozen PF-1/PF-10 paired A/M training release.
 
 The builder is deliberately two-phase.  Phase A scans the locked PCQM SDF
 member once, keeps at most ``max_pending`` molecule/production-record tasks in
 flight, and spools tokenizer-independent paired surfaces to one temporary
 SQLite file.  Phase B freezes the shared union tokenizer and motif macro
 registry, then the parent process alone writes ``paired_records.lmdb``.
+An externally supplied, complete Phase-A spool can restart Phase B in a new
+staging directory without rescanning the SDF or reusing any partial LMDB.
 
 No molecule or decoded production record is retained for the full 33,600-row
 run.  Every frozen member must be represented exactly once; a chemistry reject
@@ -29,6 +31,7 @@ import sqlite3
 import sys
 import tarfile
 import hashlib
+import io
 import threading
 import time
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
@@ -38,6 +41,7 @@ from most_t5_next.p1.runtime_bridge import P1ArtifactBindings, P1MemberRef
 from most_t5_next.r1.adapter import build_p1_inherited_e3fp_overlay_v1 as overlay
 from most_t5_next.r1.adapter import build_p1_paired_canary_v1 as canary
 from most_t5_next.r1.adapter import build_pcqm_p1_geometry_production_v1 as production
+from most_t5_next.r1.adapter import graphports_donor_atom_map_sidecar_v1 as donor_atom_map
 from most_t5_next.r1.adapter import mol_linearizer
 from most_t5_next.r1.adapter import paired_record_wire_v1 as paired_wire
 from most_t5_next.r1.adapter import p1_topology_augmentation_v1 as topology
@@ -63,18 +67,58 @@ MACRO_REGISTRY_NAME = "macro_registry.json"
 MANIFEST_NAME = "manifest.json"
 TOKENIZER_DIRECTORY = "union_tokenizer"
 LMDB_DIRECTORY = "paired_records.lmdb"
+DONOR_ATOM_MAP_NAME = "donor_atom_maps.jsonl"
 STAGING_SUFFIX = ".staging"
 DEFAULT_WORKERS = 16
 DEFAULT_MAX_PENDING = 24
+DEFAULT_PHASE_B_WORKERS = 28
+DEFAULT_PHASE_B_MAX_PENDING = 84
 DEFAULT_MAP_SIZE_GIB = 4
 DEFAULT_COMMIT_EVERY = 512
 MAX_SEQUENCE_LENGTH = 512
+PF1_RELEASE_PROFILE = "pf1-one-percent-failure-screen-v1"
+PF10_RELEASE_PROFILE = "pf10-ten-percent-causal-gate-v1"
+RELEASE_PROFILES = {
+    PF1_RELEASE_PROFILE: {
+        "expected_members": selection.TARGET_MEMBERS,
+        "scope": "pf1_one_percent_failure_screen",
+        "macro_scope": "pf1_sample_bound_provisional",
+        "syntax_registry_scope": "complete_frozen_unlabeled_pf1_cohort",
+        "binding_suffix": "pf1-inherited-e3fp-v1",
+    },
+    PF10_RELEASE_PROFILE: {
+        "expected_members": selection.PF10_TARGET_MEMBERS,
+        "scope": "pf10_ten_percent_causal_gate",
+        "macro_scope": "pf10_sample_bound_provisional",
+        "syntax_registry_scope": "complete_frozen_unlabeled_pf10_cohort",
+        "binding_suffix": "pf10-inherited-e3fp-v1",
+    },
+}
 
 _WORKER_STATE: dict[str, Any] = {}
 
 
 class PF1PairedReleaseError(RuntimeError):
     """The frozen PF-1 paired release could not be materialized exactly."""
+
+
+def resolve_release_profile(
+    args: argparse.Namespace,
+) -> tuple[str, Mapping[str, object], int]:
+    """Freeze profile-sensitive counts and scientific scope before I/O."""
+
+    profile_id = getattr(args, "release_profile", PF1_RELEASE_PROFILE)
+    try:
+        profile = RELEASE_PROFILES[profile_id]
+    except KeyError as exc:
+        raise PF1PairedReleaseError("unknown paired-release profile") from exc
+    expected = int(profile["expected_members"])
+    requested = getattr(args, "expected_members", None)
+    if requested is not None and requested != expected:
+        raise PF1PairedReleaseError(
+            "named paired-release profile forbids a different expected member count"
+        )
+    return profile_id, profile, expected
 
 
 def _decode_paired_wire_cache_worker(
@@ -283,9 +327,25 @@ def load_frozen_membership(
 class _PreparedSpool:
     """One-file, parent-written phase boundary keyed by selection index."""
 
-    def __init__(self, path: Path, *, create: bool) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        create: bool,
+        immutable: bool = False,
+    ) -> None:
         self.path = Path(path)
-        self.connection = sqlite3.connect(str(self.path))
+        self.read_only = not create
+        if create:
+            self.connection = sqlite3.connect(str(self.path))
+        else:
+            if not self.path.is_file():
+                raise PF1PairedReleaseError("prepared spool is absent")
+            query = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+            self.connection = sqlite3.connect(
+                "{}{}".format(self.path.resolve().as_uri(), query),
+                uri=True,
+            )
         if create:
             self.connection.execute("PRAGMA journal_mode=OFF")
             self.connection.execute("PRAGMA synchronous=OFF")
@@ -294,6 +354,8 @@ class _PreparedSpool:
             )
 
     def put(self, member: PreparedMember) -> None:
+        if self.read_only:
+            raise PF1PairedReleaseError("prepared spool is read only")
         self.connection.execute(
             "INSERT INTO prepared(selection_index,payload) VALUES (?,?)",
             (
@@ -303,6 +365,8 @@ class _PreparedSpool:
         )
 
     def commit(self) -> None:
+        if self.read_only:
+            raise PF1PairedReleaseError("prepared spool is read only")
         self.connection.commit()
 
     def get(self, selection_index: int) -> PreparedMember:
@@ -314,7 +378,7 @@ class _PreparedSpool:
             raise PF1PairedReleaseError(
                 "prepared spool lacks selection index {}".format(selection_index)
             )
-        value = pickle.loads(bytes(row[0]))
+        value = _load_prepared_pickle(bytes(row[0]))
         if not isinstance(value, PreparedMember):
             raise PF1PairedReleaseError("prepared spool contains an unknown value")
         return value
@@ -322,8 +386,31 @@ class _PreparedSpool:
     def count(self) -> int:
         return int(self.connection.execute("SELECT COUNT(*) FROM prepared").fetchone()[0])
 
+    def dense_selection_span(self) -> tuple[int, int, int]:
+        row = self.connection.execute(
+            "SELECT COUNT(*), MIN(selection_index), MAX(selection_index) FROM prepared"
+        ).fetchone()
+        if row is None or row[1] is None or row[2] is None:
+            return (0, -1, -1)
+        return (int(row[0]), int(row[1]), int(row[2]))
+
     def close(self) -> None:
         self.connection.close()
+
+
+class _PreparedMemberUnpickler(pickle.Unpickler):
+    """Map spools produced by ``python -m`` back to canonical dataclasses."""
+
+    def find_class(self, module: str, name: str) -> Any:
+        if module == "__main__" and name == "FrozenMember":
+            return FrozenMember
+        if module == "__main__" and name == "PreparedMember":
+            return PreparedMember
+        return super().find_class(module, name)
+
+
+def _load_prepared_pickle(payload: bytes) -> object:
+    return _PreparedMemberUnpickler(io.BytesIO(payload)).load()
 
 
 class _ProductionBindingStream:
@@ -709,13 +796,14 @@ def _binding_base(
     production_manifest: Mapping[str, object],
     production_manifest_path: Path,
     frozen_membership: Path,
+    binding_suffix: str,
 ) -> dict[str, str]:
     graph_source = Path(graph_codec.__file__).resolve()
     atom_source = Path(atom_codec.__file__).resolve()
     paired_source = Path(paired.__file__).resolve()
     return {
-        "release_id": "{}:pf1-inherited-e3fp-v1".format(
-            production_manifest["release_id"]
+        "release_id": "{}:{}".format(
+            production_manifest["release_id"], binding_suffix
         ),
         "data_release_manifest_sha256": release_reader.sha256_file(
             production_manifest_path
@@ -771,6 +859,216 @@ def _output_membership_row(
         "effective_geometry_content_sha256": (
             prepared.effective_geometry_content_sha256
         ),
+    }
+
+
+def _output_donor_atom_map_row(prepared: PreparedMember) -> dict[str, object]:
+    """Persist the GraphPorts atom isomorphism needed only by F3D planning."""
+
+    frozen = prepared.frozen
+    row = donor_atom_map.build_release_row(
+        selection_index=frozen.selection_index,
+        member_id=frozen.member_id,
+        sdf_record_index=frozen.sdf_record_index,
+        split=frozen.split,
+        storage_key=prepared.storage_key,
+        graph_encoding=prepared.prepared_surfaces.graph_encoding,
+    )
+    if row["motif_count"] != prepared.motif_count:
+        raise PF1PairedReleaseError(
+            "donor atom-map motif count differs from prepared surfaces"
+        )
+    return row
+
+
+def _materialize_prepared_member(
+    prepared: PreparedMember,
+    *,
+    union_tokenizer: Any,
+    tokenizer_binding: Any,
+    binding_base: Mapping[str, str],
+    macro_by_identity: Mapping[str, str],
+) -> dict[str, object]:
+    """Build one canonical paired row without performing any release writes."""
+
+    frozen = prepared.frozen
+    bindings = P1ArtifactBindings(
+        **binding_base,
+        geometry_record_content_sha256=prepared.effective_geometry_content_sha256,
+        tokenizer_contract_sha256=tokenizer_binding.tokenizer_contract_sha256,
+        tokenizer_snapshot_sha256=tokenizer_binding.tokenizer_snapshot_sha256,
+    )
+    pair = paired.build_production_paired_identity_records_from_prepared(
+        prepared=prepared.prepared_surfaces,
+        member=P1MemberRef(frozen.member_id, prepared.storage_key),
+        bindings=bindings,
+        base_geometry_record_content_sha256=prepared.base_record_content_sha256,
+        effective_inherited_overlay_content_sha256=(
+            prepared.effective_geometry_content_sha256
+        ),
+        source_atom_count=prepared.source_atom_count,
+        model_to_source_atom_index=prepared.model_to_source_atom_index,
+        inherited_e3fp=prepared.inherited_e3fp,
+        union_tokenizer=union_tokenizer,
+        tokenizer_binding=tokenizer_binding,
+        macro_by_identity=macro_by_identity,
+    )
+    payload = paired_wire.encode_paired_training_record(
+        pair,
+        schedule_index=frozen.selection_index,
+        sdf_record_index=frozen.sdf_record_index,
+    )
+    loaded = paired_wire.decode_paired_training_record(payload)
+    if (
+        len(loaded.atom_record.input_ids) > MAX_SEQUENCE_LENGTH
+        or len(loaded.motif_record.input_ids) > MAX_SEQUENCE_LENGTH
+    ):
+        raise PF1PairedReleaseError(
+            "A or M input exceeds 512; truncation is forbidden"
+        )
+    return {
+        "status": "pass",
+        "frozen": frozen,
+        "storage_key": prepared.storage_key,
+        "payload": payload,
+        "membership": _output_membership_row(
+            prepared, loaded, payload, split_index=0
+        ),
+        "donor_atom_map": _output_donor_atom_map_row(prepared),
+        "motif_identity_modes": tuple(
+            loaded.surface_summary.motif_identity_modes
+        ),
+    }
+
+
+def _init_phase_b_worker(
+    spool_path: str,
+    base_tokenizer: str,
+    tokenizer_directory: str,
+    binding_base: Mapping[str, str],
+    macro_by_identity: Mapping[str, str],
+) -> None:
+    tokenizer_build = union_builder.load_verified_canary_union_tokenizer(
+        base_snapshot=Path(base_tokenizer),
+        output_dir=Path(tokenizer_directory),
+    )
+    _WORKER_STATE["phase_b_spool"] = _PreparedSpool(
+        Path(spool_path), create=False, immutable=True
+    )
+    _WORKER_STATE["phase_b_tokenizer"] = tokenizer_build.tokenizer
+    _WORKER_STATE["phase_b_tokenizer_binding"] = tokenizer_build.runtime
+    _WORKER_STATE["phase_b_binding_base"] = dict(binding_base)
+    _WORKER_STATE["phase_b_macro_by_identity"] = dict(macro_by_identity)
+
+
+def _materialize_spooled_member(frozen: FrozenMember) -> dict[str, object]:
+    """Phase-B worker: read one immutable spool row and emit canonical bytes."""
+
+    try:
+        spool = _WORKER_STATE["phase_b_spool"]
+        prepared = spool.get(frozen.selection_index)
+        if prepared.frozen != frozen:
+            raise PF1PairedReleaseError(
+                "prepared spool order/binding differs from frozen membership"
+            )
+        return _materialize_prepared_member(
+            prepared,
+            union_tokenizer=_WORKER_STATE["phase_b_tokenizer"],
+            tokenizer_binding=_WORKER_STATE["phase_b_tokenizer_binding"],
+            binding_base=_WORKER_STATE["phase_b_binding_base"],
+            macro_by_identity=_WORKER_STATE["phase_b_macro_by_identity"],
+        )
+    except Exception as exc:
+        return {
+            "status": "reject",
+            "reject": _reject_row(
+                frozen,
+                stage="PAIRED_BUILD",
+                reason="{}: {}".format(type(exc).__name__, exc),
+            ),
+        }
+
+
+def _ordered_phase_b_map(
+    members: Iterable[FrozenMember],
+    *,
+    workers: int,
+    max_pending: int,
+    initargs: tuple[object, ...],
+) -> Iterator[dict[str, object]]:
+    """Bound a spawn pool while yielding Phase-B results in selection order."""
+
+    if workers < 1 or max_pending < workers:
+        raise PF1PairedReleaseError(
+            "phase-b-workers must be positive and phase-b-max-pending >= workers"
+        )
+    if workers == 1:
+        _init_phase_b_worker(*initargs)  # type: ignore[arg-type]
+        for frozen in members:
+            yield _materialize_spooled_member(frozen)
+        return
+    context = multiprocessing.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=context,
+        initializer=_init_phase_b_worker,
+        initargs=initargs,
+    ) as executor:
+        pending: deque[concurrent.futures.Future[dict[str, object]]] = deque()
+        for frozen in members:
+            pending.append(executor.submit(_materialize_spooled_member, frozen))
+            if len(pending) >= max_pending:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+
+
+def _replay_donor_atom_map_sidecar(
+    path: Path, members: Sequence[FrozenMember]
+) -> dict[str, int | bool]:
+    """Stream-replay the sidecar in frozen order without retaining its rows."""
+
+    rows = donor_atom_map.iter_release_rows(path)
+    motif_count = 0
+    atom_mapping_count = 0
+    for expected in members:
+        try:
+            row = next(rows)
+        except StopIteration as exc:
+            raise PF1PairedReleaseError(
+                "donor atom-map sidecar ends before frozen membership"
+            ) from exc
+        if not all(
+            (
+                row["selection_index"] == expected.selection_index,
+                row["member_id"] == expected.member_id,
+                row["sdf_record_index"] == expected.sdf_record_index,
+                row["split"] == expected.split,
+            )
+        ):
+            raise PF1PairedReleaseError(
+                "donor atom-map sidecar lineage differs from frozen membership"
+            )
+        motif_count += int(row["motif_count"])
+        planning = row["overlay_planning_sidecar"]
+        atom_mapping_count += sum(
+            len(atom_map)
+            for atom_map in planning["canonical_local_atom_to_model_atom"]  # type: ignore[index]
+        )
+    try:
+        next(rows)
+    except StopIteration:
+        pass
+    else:
+        raise PF1PairedReleaseError(
+            "donor atom-map sidecar contains rows outside frozen membership"
+        )
+    return {
+        "rows_replayed": len(members),
+        "motifs_replayed": motif_count,
+        "atom_mappings_replayed": atom_mapping_count,
+        "selection_order_preserved": True,
+        "full_rows_retained_in_memory": False,
     }
 
 
@@ -905,6 +1203,9 @@ def _write_failure(
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
+    release_profile_id, release_profile, expected_members = resolve_release_profile(
+        args
+    )
     frozen_path = Path(args.frozen_membership).expanduser().resolve()
     release_root = Path(args.release_root).expanduser().resolve()
     source_archive = Path(args.source_archive).expanduser().resolve()
@@ -912,6 +1213,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     base_tokenizer = Path(args.base_tokenizer).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     staging_root = output_dir.with_name(output_dir.name + STAGING_SUFFIX)
+    prepared_spool_arg = getattr(args, "prepared_spool", None)
+    external_spool_path = (
+        Path(prepared_spool_arg).expanduser().resolve()
+        if prepared_spool_arg is not None
+        else None
+    )
     if not frozen_path.is_file():
         raise PF1PairedReleaseError("frozen membership is absent")
     if not release_root.is_dir() or not source_archive.is_file():
@@ -920,8 +1227,17 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         raise PF1PairedReleaseError("E3FP source or base tokenizer is absent")
     if output_dir.exists() or staging_root.exists():
         raise PF1PairedReleaseError("output and sibling staging paths must be new")
+    if external_spool_path is not None and not external_spool_path.is_file():
+        raise PF1PairedReleaseError("external prepared spool is absent")
     if args.workers < 1 or args.max_pending < args.workers:
         raise PF1PairedReleaseError("workers must be positive and max-pending >= workers")
+    if (
+        args.phase_b_workers < 1
+        or args.phase_b_max_pending < args.phase_b_workers
+    ):
+        raise PF1PairedReleaseError(
+            "phase-b-workers must be positive and phase-b-max-pending >= workers"
+        )
     if args.commit_every < 1 or args.lmdb_map_size_gib < 1:
         raise PF1PairedReleaseError("LMDB commit/map-size settings must be positive")
 
@@ -936,13 +1252,22 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         ) from exc
 
     members = load_frozen_membership(
-        frozen_path, expected_members=args.expected_members
+        frozen_path, expected_members=expected_members
     )
     by_ordinal = {row.sdf_record_index: row for row in members}
     staging_root.parent.mkdir(parents=True, exist_ok=True)
     staging_root.mkdir()
-    spool_path = staging_root / "prepared_spool.sqlite3"
-    spool = _PreparedSpool(spool_path, create=True)
+    spool_owned_by_builder = external_spool_path is None
+    spool_path = (
+        staging_root / "prepared_spool.sqlite3"
+        if external_spool_path is None
+        else external_spool_path
+    )
+    spool = _PreparedSpool(
+        spool_path,
+        create=spool_owned_by_builder,
+        immutable=not spool_owned_by_builder,
+    )
     rejects: list[dict[str, object]] = []
     train_selfies_symbols: set[str] = set()
     dev_selfies_symbols: set[str] = set()
@@ -976,6 +1301,24 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 
     linearizer_sha = release_reader.sha256_file(Path(mol_linearizer.__file__).resolve())
 
+    def observe_prepared(prepared: PreparedMember) -> None:
+        if prepared.frozen.split == "train":
+            train_selfies_symbols.update(
+                prepared.prepared_surfaces.atom_surface.selfies_symbols
+            )
+            train_identity_counts.update(
+                motif.identity_smiles
+                for motif in prepared.prepared_surfaces.graph_encoding.motifs
+            )
+        else:
+            dev_selfies_symbols.update(
+                prepared.prepared_surfaces.atom_surface.selfies_symbols
+            )
+        structure["atoms"].append(prepared.atom_count)
+        structure["motifs"].append(prepared.motif_count)
+        structure["cross_motif_edges"].append(prepared.edge_count)
+        structure["e3fp_levels"].append(len(prepared.inherited_e3fp[0]))
+
     def tasks() -> Iterator[
         tuple[FrozenMember, bytes | None, str | None, Mapping[str, object]]
     ]:
@@ -996,49 +1339,60 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             )
 
     try:
-        results = production.ordered_bounded_map(
-            _prepare_one,
-            tasks(),
-            args.workers,
-            args.max_pending,
-            initializer=_init_prepare_worker,
-            initargs=(str(e3fp_source), linearizer_sha),
-        )
-        for result in results:
-            if result.get("status") != "pass":
-                reject = result.get("reject")
-                if not isinstance(reject, dict):
-                    raise PF1PairedReleaseError("worker reject row is absent")
-                rejects.append(reject)
-                continue
-            prepared = result.get("prepared")
-            if not isinstance(prepared, PreparedMember):
-                raise PF1PairedReleaseError("worker prepared row has an unknown type")
-            spool.put(prepared)
-            if prepared.frozen.split == "train":
-                train_selfies_symbols.update(
-                    prepared.prepared_surfaces.atom_surface.selfies_symbols
+        if spool_owned_by_builder:
+            results = production.ordered_bounded_map(
+                _prepare_one,
+                tasks(),
+                args.workers,
+                args.max_pending,
+                initializer=_init_prepare_worker,
+                initargs=(str(e3fp_source), linearizer_sha),
+            )
+            for result in results:
+                if result.get("status") != "pass":
+                    reject = result.get("reject")
+                    if not isinstance(reject, dict):
+                        raise PF1PairedReleaseError("worker reject row is absent")
+                    rejects.append(reject)
+                    continue
+                prepared = result.get("prepared")
+                if not isinstance(prepared, PreparedMember):
+                    raise PF1PairedReleaseError(
+                        "worker prepared row has an unknown type"
+                    )
+                spool.put(prepared)
+                observe_prepared(prepared)
+            spool.commit()
+        else:
+            dense_span = spool.dense_selection_span()
+            if dense_span != (len(members), 0, len(members) - 1):
+                raise PF1PairedReleaseError(
+                    "external prepared spool is not a complete dense selection"
                 )
-                train_identity_counts.update(
-                    motif.identity_smiles
-                    for motif in prepared.prepared_surfaces.graph_encoding.motifs
-                )
-            else:
-                dev_selfies_symbols.update(
-                    prepared.prepared_surfaces.atom_surface.selfies_symbols
-                )
-            structure["atoms"].append(prepared.atom_count)
-            structure["motifs"].append(prepared.motif_count)
-            structure["cross_motif_edges"].append(prepared.edge_count)
-            structure["e3fp_levels"].append(len(prepared.inherited_e3fp[0]))
-        spool.commit()
+            for frozen in members:
+                prepared = spool.get(frozen.selection_index)
+                if prepared.frozen != frozen:
+                    raise PF1PairedReleaseError(
+                        "external prepared spool differs from frozen membership"
+                    )
+                observe_prepared(prepared)
+            sdf_observation.update(
+                {
+                    "scan_performed_this_invocation": False,
+                    "reason": "reused_complete_prepared_spool",
+                    "expected_source_record_count": source_record_count,
+                }
+            )
+    except Exception:
+        spool.close()
+        raise
     finally:
         binding_stream.close()
 
     if rejects or spool.count() != len(members):
         spool.close()
         _write_failure(staging_root, rejects, expected_members=len(members))
-        raise PF1PairedReleaseError("surface discovery rejected frozen PF-1 members")
+        raise PF1PairedReleaseError("surface discovery rejected frozen paired members")
     phase_a_spool_bytes = int(spool_path.stat().st_size)
 
     robust_selfies_symbols = set(sf.get_semantic_robust_alphabet())
@@ -1075,7 +1429,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 "minimum_occurrences": canary.MACRO_MIN_OCCURRENCES,
                 "frequency_and_rank_source_split": "train",
                 "fallback_is_lossless_gports_byte_surface": True,
-                "scope": "pf1_sample_bound_provisional",
+                "scope": str(release_profile["macro_scope"]),
                 "final_pretraining_k": False,
             },
             "summary": macro_summary,
@@ -1087,7 +1441,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         production_manifest=binding_stream.manifest,
         production_manifest_path=binding_stream.manifest_path,
         frozen_membership=frozen_path,
+        binding_suffix=str(release_profile["binding_suffix"]),
     )
+    spool.close()
     lmdb_path = staging_root / LMDB_DIRECTORY
     environment = lmdb.open(
         str(lmdb_path),
@@ -1101,109 +1457,119 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     train_path = staging_root / TRAIN_MEMBERSHIP_NAME
     dev_path = staging_root / DEV_MEMBERSHIP_NAME
+    donor_atom_map_path = staging_root / DONOR_ATOM_MAP_NAME
     split_counts = {"train": 0, "dev": 0}
+    donor_atom_map_rows = 0
+    donor_atom_map_payload_bytes = 0
     materialized_modes: Counter[str] = Counter()
     materialized_modes_by_split: dict[str, Counter[str]] = {
         "train": Counter(),
         "dev": Counter(),
     }
     pair_rejects: list[dict[str, object]] = []
+    phase_b_results = _ordered_phase_b_map(
+        members,
+        workers=args.phase_b_workers,
+        max_pending=args.phase_b_max_pending,
+        initargs=(
+            str(spool_path),
+            str(base_tokenizer),
+            str(staging_root / TOKENIZER_DIRECTORY),
+            binding_base,
+            macro_by_identity,
+        ),
+    )
     try:
-        with train_path.open("x", encoding="utf-8", newline="\n") as train_handle, dev_path.open(
+        with train_path.open(
             "x", encoding="utf-8", newline="\n"
-        ) as dev_handle:
+        ) as train_handle, dev_path.open(
+            "x", encoding="utf-8", newline="\n"
+        ) as dev_handle, donor_atom_map_path.open(
+            "x", encoding="utf-8", newline="\n"
+        ) as donor_atom_map_handle:
             for start in range(0, len(members), args.commit_every):
                 chunk = members[start : start + args.commit_every]
                 with environment.begin(write=True) as transaction:
                     for frozen in chunk:
-                        prepared = spool.get(frozen.selection_index)
-                        if prepared.frozen != frozen:
-                            raise PF1PairedReleaseError(
-                                "prepared spool order/binding differs from frozen membership"
-                            )
-                        try:
-                            bindings = P1ArtifactBindings(
-                                **binding_base,
-                                geometry_record_content_sha256=(
-                                    prepared.effective_geometry_content_sha256
-                                ),
-                                tokenizer_contract_sha256=(
-                                    tokenizer_build.runtime.tokenizer_contract_sha256
-                                ),
-                                tokenizer_snapshot_sha256=(
-                                    tokenizer_build.runtime.tokenizer_snapshot_sha256
-                                ),
-                            )
-                            pair = paired.build_production_paired_identity_records_from_prepared(
-                                prepared=prepared.prepared_surfaces,
-                                member=P1MemberRef(frozen.member_id, prepared.storage_key),
-                                bindings=bindings,
-                                base_geometry_record_content_sha256=(
-                                    prepared.base_record_content_sha256
-                                ),
-                                effective_inherited_overlay_content_sha256=(
-                                    prepared.effective_geometry_content_sha256
-                                ),
-                                source_atom_count=prepared.source_atom_count,
-                                model_to_source_atom_index=(
-                                    prepared.model_to_source_atom_index
-                                ),
-                                inherited_e3fp=prepared.inherited_e3fp,
-                                union_tokenizer=tokenizer_build.tokenizer,
-                                tokenizer_binding=tokenizer_build.runtime,
-                                macro_by_identity=macro_by_identity,
-                            )
-                            payload = paired_wire.encode_paired_training_record(
-                                pair,
-                                schedule_index=frozen.selection_index,
-                                sdf_record_index=frozen.sdf_record_index,
-                            )
-                            loaded = paired_wire.decode_paired_training_record(payload)
-                            if (
-                                len(loaded.atom_record.input_ids) > MAX_SEQUENCE_LENGTH
-                                or len(loaded.motif_record.input_ids) > MAX_SEQUENCE_LENGTH
-                            ):
+                        result = next(phase_b_results)
+                        if result.get("status") != "pass":
+                            reject = result.get("reject")
+                            if not isinstance(reject, dict):
                                 raise PF1PairedReleaseError(
-                                    "A or M input exceeds 512; truncation is forbidden"
+                                    "phase-B worker reject row is absent"
                                 )
-                            if not transaction.put(
-                                prepared.storage_key.encode("ascii"), payload, overwrite=False
-                            ):
-                                raise PF1PairedReleaseError("paired LMDB key collision")
-                        except Exception as exc:
-                            pair_rejects.append(
-                                _reject_row(
-                                    frozen,
-                                    stage="PAIRED_BUILD",
-                                    reason="{}: {}".format(type(exc).__name__, exc),
-                                )
+                            pair_rejects.append(reject)
+                            raise PF1PairedReleaseError(
+                                "phase-B stopped at the first rejected member"
                             )
-                            continue
+                        if result.get("frozen") != frozen:
+                            raise PF1PairedReleaseError(
+                                "phase-B result order differs from frozen membership"
+                            )
+                        storage_key = result.get("storage_key")
+                        payload = result.get("payload")
+                        row_value = result.get("membership")
+                        donor_value = result.get("donor_atom_map")
+                        modes = result.get("motif_identity_modes")
+                        if not (
+                            isinstance(storage_key, str)
+                            and isinstance(payload, bytes)
+                            and isinstance(row_value, dict)
+                            and isinstance(donor_value, dict)
+                            and isinstance(modes, tuple)
+                        ):
+                            raise PF1PairedReleaseError(
+                                "phase-B worker returned an invalid materialized row"
+                            )
+                        if not transaction.put(
+                            storage_key.encode("ascii"), payload, overwrite=False
+                        ):
+                            raise PF1PairedReleaseError("paired LMDB key collision")
                         split_index = split_counts[frozen.split]
-                        row = _output_membership_row(
-                            prepared, loaded, payload, split_index=split_index
-                        )
+                        row = dict(row_value)
+                        row["split_index"] = split_index
                         _write_jsonl_row(
                             train_handle if frozen.split == "train" else dev_handle,
                             row,
                         )
+                        donor_atom_map_payload_bytes += donor_atom_map.write_release_row(
+                            donor_atom_map_handle, donor_value
+                        )
+                        donor_atom_map_rows += 1
                         split_counts[frozen.split] += 1
-                        materialized_modes.update(
-                            loaded.surface_summary.motif_identity_modes
-                        )
-                        materialized_modes_by_split[frozen.split].update(
-                            loaded.surface_summary.motif_identity_modes
-                        )
+                        materialized_modes.update(modes)
+                        materialized_modes_by_split[frozen.split].update(modes)
+            try:
+                next(phase_b_results)
+            except StopIteration:
+                pass
+            else:
+                raise PF1PairedReleaseError(
+                    "phase-B produced rows outside frozen membership"
+                )
         environment.sync(True)
+    except Exception:
+        if pair_rejects:
+            _write_failure(
+                staging_root, pair_rejects, expected_members=len(members)
+            )
+        raise
     finally:
+        phase_b_results.close()
         environment.close()
-        spool.close()
 
     if pair_rejects or sum(split_counts.values()) != len(members):
         _write_failure(
             staging_root, pair_rejects, expected_members=len(members)
         )
-        raise PF1PairedReleaseError("paired materialization rejected frozen PF-1 members")
+        raise PF1PairedReleaseError("paired materialization rejected frozen paired members")
+    if donor_atom_map_rows != len(members):
+        raise PF1PairedReleaseError(
+            "donor atom-map sidecar count differs from paired records"
+        )
+    donor_atom_map_replay = _replay_donor_atom_map_sidecar(
+        donor_atom_map_path, members
+    )
 
     with (staging_root / REJECTS_NAME).open(
         "x", encoding="utf-8", newline="\n"
@@ -1222,6 +1588,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             lmdb_data_bytes,
             int(train_path.stat().st_size),
             int(dev_path.stat().st_size),
+            int(donor_atom_map_path.stat().st_size),
             int((staging_root / REJECTS_NAME).stat().st_size),
             int((staging_root / MACRO_REGISTRY_NAME).stat().st_size),
             _tree_file_bytes(staging_root / TOKENIZER_DIRECTORY),
@@ -1230,20 +1597,42 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     peak_materialization_artifact_bytes = (
         phase_a_spool_bytes + published_data_bytes_before_manifest
     )
-    # The spool is one explicit temporary file; the published release contains
-    # only model-consumed records and scientific lineage artifacts.
-    spool_path.unlink()
+    # A builder-owned spool is temporary.  An explicitly supplied Phase-A
+    # boundary is immutable input and is never removed or modified.
+    if spool_owned_by_builder:
+        spool_path.unlink()
+
+    phase_a_resume = {
+        "phase_a_mode": (
+            "fresh_sdf_scan"
+            if spool_owned_by_builder
+            else "reused_complete_spool"
+        ),
+        "prepared_spool_path": str(spool_path),
+        "prepared_spool_bytes": phase_a_spool_bytes,
+        "prepared_spool_owned_by_builder": spool_owned_by_builder,
+        "external_spool_preserved": not spool_owned_by_builder,
+        "dense_selection_rows_validated": len(members),
+        "frozen_member_rows_fully_revalidated": len(members),
+        "aggregates_recomputed_from_spool": not spool_owned_by_builder,
+        "sdf_rescanned": spool_owned_by_builder,
+        "phase_b_started_from_selection_index": 0,
+        "prior_partial_lmdb_reused": False,
+        "new_output_staging": str(staging_root),
+    }
 
     manifest: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "status": "pass",
         "created_utc": _utc_now(),
-        "scope": "pf1_one_percent_failure_screen",
+        "scope": str(release_profile["scope"]),
+        "release_profile": release_profile_id,
         "counts": {
             "scheduled_members": len(members),
             "train_members": split_counts["train"],
             "dev_members": split_counts["dev"],
             "paired_records": sum(split_counts.values()),
+            "donor_atom_map_rows": donor_atom_map_rows,
             "rejects": 0,
             "observed_selfies_symbols": len(
                 set(train_selfies_symbols).union(dev_selfies_symbols)
@@ -1264,12 +1653,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "train_dev_connectivity_group_disjoint": True,
             "no_replacement": True,
         },
+        "phase_a_resume": phase_a_resume,
         "structure": {
             key: _value_distribution(values) for key, values in structure.items()
         },
         "selfies_vocabulary_coverage": {
             "registry_role": "lossless_atom_selfies_syntax",
-            "registry_scope": "complete_frozen_unlabeled_pf1_cohort",
+            "registry_scope": str(release_profile["syntax_registry_scope"]),
             "labels_or_performance_signals_used": False,
             "frequency_or_rank_used": False,
             "robust_alphabet_always_included": True,
@@ -1285,7 +1675,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "dev_records_used_for_model_optimization": False,
         },
         "macro_policy": {
-            "scope": "pf1_sample_bound_provisional",
+            "scope": str(release_profile["macro_scope"]),
             "frequency_and_rank_source_split": "train",
             "minimum_occurrences": canary.MACRO_MIN_OCCURRENCES,
             "final_pretraining_k": False,
@@ -1297,8 +1687,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "dev_identity_absent_from_train_macro_uses_lossless_fallback": True,
         },
         "replay": replay,
+        "donor_atom_map_replay": donor_atom_map_replay,
         "disk_usage": {
-            "phase_a_temporary_spool_bytes": phase_a_spool_bytes,
+            "phase_a_spool_bytes": phase_a_spool_bytes,
+            "phase_a_temporary_spool_bytes": (
+                phase_a_spool_bytes if spool_owned_by_builder else 0
+            ),
+            "phase_a_spool_owned_by_builder": spool_owned_by_builder,
+            "external_phase_a_spool_preserved": not spool_owned_by_builder,
             "published_data_bytes_before_manifest": (
                 published_data_bytes_before_manifest
             ),
@@ -1306,7 +1702,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 peak_materialization_artifact_bytes
             ),
             "lmdb_map_size_gib_virtual_limit": args.lmdb_map_size_gib,
-            "temporary_spool_removed_before_publication": True,
+            "temporary_spool_removed_before_publication": (
+                spool_owned_by_builder
+            ),
         },
         "inputs": {
             "production_release_id": binding_stream.manifest["release_id"],
@@ -1316,6 +1714,15 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "production_shards_opened_read_only": binding_stream.shard_receipts,
             "source_archive_bytes": archive_lock["bytes"],
             "source_sdf": sdf_observation,
+            "prepared_spool": {
+                "path": str(spool_path),
+                "bytes": phase_a_spool_bytes,
+                "role": (
+                    "builder_temporary_phase_boundary"
+                    if spool_owned_by_builder
+                    else "external_complete_phase_a_boundary"
+                ),
+            },
         },
         "artifacts": {
             "paired_lmdb": {
@@ -1330,6 +1737,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "dev_membership": {
                 "relative_path": DEV_MEMBERSHIP_NAME,
                 "row_count": split_counts["dev"],
+            },
+            "donor_atom_maps": {
+                "relative_path": DONOR_ATOM_MAP_NAME,
+                "schema_version": donor_atom_map.ROW_SCHEMA,
+                "row_count": donor_atom_map_rows,
+                "payload_bytes": donor_atom_map_payload_bytes,
             },
             "rejects": {"relative_path": REJECTS_NAME, "row_count": 0},
             "macro_registry": {
@@ -1355,9 +1768,17 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "lmdb": getattr(lmdb, "__version__", "unknown"),
             "workers": args.workers,
             "max_pending": args.max_pending,
+            "phase_b_workers": args.phase_b_workers,
+            "phase_b_max_pending": args.phase_b_max_pending,
         },
         "method_boundary": {
-            "single_sdf_scan": True,
+            "single_sdf_scan": spool_owned_by_builder,
+            "phase_a_sdf_scan_performed_this_invocation": (
+                spool_owned_by_builder
+            ),
+            "external_complete_spool_replayed": not spool_owned_by_builder,
+            "phase_b_worker_reads_immutable_sqlite": True,
+            "phase_b_ordered_results": True,
             "production_release_read_only": True,
             "explicit_inherited_e3fp": True,
             "macro_fit_uses_train_split_only": True,
@@ -1369,6 +1790,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "second_pass_chemistry_recomputed": False,
             "sequence_truncation": False,
             "complete_lmdb_decode_replay": True,
+            "donor_atom_maps_published_as_separate_planning_sidecar": True,
+            "donor_atom_map_rows_streamed_without_release_residency": True,
         },
     }
     _write_json(staging_root / MANIFEST_NAME, manifest)
@@ -1431,6 +1854,120 @@ class PF1PairedReleaseReader:
             == self.train_member_count + self.dev_member_count
         ):
             raise PF1PairedReleaseError("PF-1 reader counts differ from manifest")
+
+    def iter_donor_atom_maps(
+        self,
+        *,
+        split: str | None = None,
+        max_rows: int | None = None,
+    ) -> Iterator[dict[str, object]]:
+        """Stream F3D planning maps; never cache the release-wide sidecar."""
+
+        if split not in {None, "train", "dev"}:
+            raise PF1PairedReleaseError("donor atom-map split must be train, dev or None")
+        if max_rows is not None and (
+            isinstance(max_rows, bool)
+            or not isinstance(max_rows, int)
+            or max_rows <= 0
+        ):
+            raise PF1PairedReleaseError("donor atom-map max_rows must be positive")
+        path = self.release_root / DONOR_ATOM_MAP_NAME
+        if not path.is_file():
+            raise PF1PairedReleaseError("donor atom-map planning sidecar is absent")
+        selected = 0
+        total = 0
+        rows = donor_atom_map.iter_release_rows(path)
+        try:
+            for row in rows:
+                total += 1
+                if split is not None and row["split"] != split:
+                    continue
+                yield row
+                selected += 1
+                if max_rows is not None and selected == max_rows:
+                    return
+        finally:
+            rows.close()
+        expected_total = self.train_member_count + self.dev_member_count
+        expected_selected = (
+            expected_total
+            if split is None
+            else self.train_member_count
+            if split == "train"
+            else self.dev_member_count
+        )
+        if total != expected_total or selected != expected_selected:
+            raise PF1PairedReleaseError(
+                "donor atom-map stream count differs from paired membership"
+            )
+
+    def iter_raw_motif_documents(
+        self,
+        *,
+        split: str,
+    ) -> Iterator[tuple[dict[str, object], dict[str, object]]]:
+        """Stream persisted motif documents in frozen split order.
+
+        This narrow planning interface is intentionally separate from the
+        training decoder.  It exposes fields such as cross-motif bonds and
+        slot atoms that are validated at release construction but omitted
+        from the compact in-memory training record.
+        """
+
+        if split == "train":
+            rows = self._train_rows
+        elif split == "dev":
+            rows = self._dev_rows
+        else:
+            raise PF1PairedReleaseError("raw motif-document split must be train or dev")
+        environment = self.lmdb_module.open(
+            str(self.lmdb_path),
+            subdir=True,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            max_readers=8,
+        )
+        try:
+            with environment.begin(write=False) as transaction:
+                for row in rows:
+                    storage_key = str(row["storage_key"])
+                    raw = transaction.get(storage_key.encode("ascii"))
+                    if raw is None:
+                        raise PF1PairedReleaseError(
+                            "paired LMDB row is absent during planning replay"
+                        )
+                    try:
+                        envelope = json.loads(bytes(raw))
+                        motif_document = envelope["motif_training_document"]
+                        member = motif_document["member"]
+                    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                        raise PF1PairedReleaseError(
+                            "paired LMDB planning document is malformed"
+                        ) from exc
+                    if not (
+                        isinstance(envelope, dict)
+                        and isinstance(motif_document, dict)
+                        and member["member_id"] == row["member_id"]
+                        and member["storage_key"] == storage_key
+                    ):
+                        raise PF1PairedReleaseError(
+                            "paired planning document differs from membership"
+                        )
+                    yield dict(row), motif_document
+        finally:
+            environment.close()
+
+    def benchmark_donor_atom_map_prefix(
+        self, *, max_rows: int = donor_atom_map.DEFAULT_BENCHMARK_ROWS
+    ) -> dict[str, int | float | bool]:
+        """Replay the bounded 1,024-row planning interface."""
+
+        path = self.release_root / DONOR_ATOM_MAP_NAME
+        if not path.is_file():
+            raise PF1PairedReleaseError("donor atom-map planning sidecar is absent")
+        return donor_atom_map.benchmark_release_prefix(path, max_rows=max_rows)
 
     @staticmethod
     def _validate_record_against_membership(
@@ -1672,6 +2209,138 @@ class PF1PairedReleaseReader:
     def iter_dev(self, *, batch_size: int) -> Iterator[tuple[Any, ...]]:
         yield from self._iter_batches(self._dev_rows, batch_size)
 
+    def iter_strict_parallel_split(
+        self,
+        *,
+        split: str,
+        max_rows: int | None = None,
+        workers: int = 4,
+        max_pending: int = 16,
+    ) -> Iterator[Any]:
+        """Strictly decode one ordered split stream without retaining it.
+
+        Unlike :meth:`warm_decoded_record_cache`, this interface is intended
+        for one-time derived-artifact compilation.  Only the selected rows are
+        submitted, workers return results in membership order, and no decoded
+        Python record is inserted into the process-local training cache.
+        """
+
+        if split not in {"train", "dev"}:
+            raise PF1PairedReleaseError("parallel decode split must be train or dev")
+        if (
+            max_rows is not None
+            and (
+                isinstance(max_rows, bool)
+                or not isinstance(max_rows, int)
+                or max_rows <= 0
+            )
+        ):
+            raise PF1PairedReleaseError("parallel decode max_rows must be positive")
+        if workers <= 0 or max_pending < workers:
+            raise PF1PairedReleaseError(
+                "parallel decode workers must be positive and bounded"
+            )
+        if not self._uses_canonical_decoder:
+            raise PF1PairedReleaseError(
+                "parallel split decode requires the canonical paired-wire decoder"
+            )
+        source = self._train_rows if split == "train" else self._dev_rows
+        rows = source if max_rows is None else source[:max_rows]
+        environment = self.lmdb_module.open(
+            str(self.lmdb_path),
+            subdir=True,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            max_readers=8,
+        )
+
+        def tasks() -> Iterator[tuple[str, bytes]]:
+            with environment.begin(write=False) as transaction:
+                for row in rows:
+                    storage_key = str(row["storage_key"])
+                    raw = transaction.get(storage_key.encode("ascii"))
+                    if raw is None:
+                        raise PF1PairedReleaseError(
+                            "paired LMDB row is absent during parallel split decode"
+                        )
+                    yield storage_key, bytes(raw)
+
+        executor: concurrent.futures.ProcessPoolExecutor | None = None
+        try:
+            if workers == 1:
+                results: Iterable[tuple[str, Any]] = (
+                    _decode_paired_wire_cache_worker(item) for item in tasks()
+                )
+            else:
+                executor = concurrent.futures.ProcessPoolExecutor(
+                    max_workers=workers,
+                    mp_context=multiprocessing.get_context("spawn"),
+                )
+
+                def bounded_results() -> Iterator[tuple[str, Any]]:
+                    pending: deque[concurrent.futures.Future] = deque()
+                    for item in tasks():
+                        pending.append(
+                            executor.submit(  # type: ignore[union-attr]
+                                _decode_paired_wire_cache_worker, item
+                            )
+                        )
+                        if len(pending) >= max_pending:
+                            yield pending.popleft().result()
+                    while pending:
+                        yield pending.popleft().result()
+
+                results = bounded_results()
+
+            decoded_count = 0
+            for expected_row, (storage_key, record) in zip(rows, results):
+                if storage_key != str(expected_row["storage_key"]):
+                    raise PF1PairedReleaseError(
+                        "parallel split decode changed membership order"
+                    )
+                self._validate_record_against_membership(record, expected_row)
+                decoded_count += 1
+                yield record
+            if decoded_count != len(rows):
+                raise PF1PairedReleaseError(
+                    "parallel split decode returned the wrong row count"
+                )
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True)
+            environment.close()
+
+    def iter_selected_split_indices(
+        self,
+        *,
+        split: str,
+        split_indices: Sequence[int],
+        batch_size: int,
+    ) -> Iterator[tuple[Any, ...]]:
+        """Decode an explicit ordered subset without scanning intervening rows."""
+
+        if split not in {"train", "dev"}:
+            raise PF1PairedReleaseError("selected split must be train or dev")
+        indices = tuple(split_indices)
+        if not indices or any(
+            isinstance(index, bool) or not isinstance(index, int) or index < 0
+            for index in indices
+        ):
+            raise PF1PairedReleaseError(
+                "selected split indices must be nonnegative integers"
+            )
+        if tuple(sorted(set(indices))) != indices:
+            raise PF1PairedReleaseError(
+                "selected split indices must be unique and increasing"
+            )
+        source = self._train_rows if split == "train" else self._dev_rows
+        if indices[-1] >= len(source):
+            raise PF1PairedReleaseError("selected split index is out of range")
+        rows = tuple(source[index] for index in indices)
+        yield from self._iter_batches(rows, batch_size)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1681,19 +2350,56 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--e3fp-source", required=True)
     parser.add_argument("--base-tokenizer", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--expected-members", type=int, default=selection.TARGET_MEMBERS)
+    parser.add_argument(
+        "--prepared-spool",
+        help=(
+            "complete Phase-A prepared_spool.sqlite3; skips the SDF scan and "
+            "restarts Phase B in a new output staging directory"
+        ),
+    )
+    parser.add_argument(
+        "--release-profile",
+        choices=tuple(RELEASE_PROFILES),
+        default=PF1_RELEASE_PROFILE,
+    )
+    parser.add_argument(
+        "--expected-members",
+        type=int,
+        help="optional assertion; must equal the named release profile",
+    )
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--max-pending", type=int, default=DEFAULT_MAX_PENDING)
+    parser.add_argument(
+        "--phase-b-workers", type=int, default=DEFAULT_PHASE_B_WORKERS
+    )
+    parser.add_argument(
+        "--phase-b-max-pending", type=int, default=DEFAULT_PHASE_B_MAX_PENDING
+    )
     parser.add_argument("--lmdb-map-size-gib", type=int, default=DEFAULT_MAP_SIZE_GIB)
     parser.add_argument("--commit-every", type=int, default=DEFAULT_COMMIT_EVERY)
     parser.add_argument("--progress-every", type=int, default=250_000)
     return parser
 
 
+def run_phase_b_resume(
+    args: argparse.Namespace,
+    *,
+    prepared_spool: Path,
+) -> dict[str, object]:
+    """Public API for restarting Phase B from one complete Phase-A spool."""
+
+    resumed = argparse.Namespace(**vars(args))
+    resumed.prepared_spool = str(Path(prepared_spool).expanduser().resolve())
+    return run(resumed)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.expected_members <= 0 or args.progress_every <= 0:
+    if (
+        args.expected_members is not None
+        and args.expected_members <= 0
+    ) or args.progress_every <= 0:
         parser.error("expected-members and progress-every must be positive")
     manifest = run(args)
     print(json.dumps(manifest["counts"], ensure_ascii=False, sort_keys=True))
@@ -1705,10 +2411,15 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "DONOR_ATOM_MAP_NAME",
+    "PF1_RELEASE_PROFILE",
+    "PF10_RELEASE_PROFILE",
     "PF1PairedReleaseError",
     "PF1PairedReleaseReader",
     "PreparedMember",
     "FrozenMember",
     "load_frozen_membership",
+    "resolve_release_profile",
     "run",
+    "run_phase_b_resume",
 ]

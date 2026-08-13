@@ -23,7 +23,9 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import statistics
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
@@ -588,6 +590,7 @@ def _replace_with_donor_e3fp(
         "record_ids",
         "e3fp_atom_mask",
         "e3fp_atom_to_token",
+        "e3fp_atom_is_attachment",
         "model_to_source_atom_index",
         "atom_lengths",
         "e3fp_level_count",
@@ -809,8 +812,7 @@ def write_pf1_checkpoint(
     cuda_rng_state = None
     if torch_module.cuda.is_available():
         cuda_rng_state = torch_module.cuda.get_rng_state_all()
-    torch_module.save(
-        {
+    payload = {
             "schema_version": CHECKPOINT_SCHEMA,
             "condition_id": condition_id,
             "completed_updates": update,
@@ -827,9 +829,34 @@ def write_pf1_checkpoint(
                 "cuda_all": cuda_rng_state,
             },
             "training_progress": dict(training_progress or {}),
-        },
-        checkpoint_dir / "training_state.pt",
-    )
+        }
+    destination = checkpoint_dir / "training_state.pt"
+    staging_root = os.environ.get("MOST_T5_CHECKPOINT_STAGING_DIR")
+    if staging_root:
+        staging_directory = Path(staging_root)
+        staging_directory.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f"{condition_id}-step-{update:04d}-",
+            suffix=".pt",
+            dir=str(staging_directory),
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        try:
+            torch_module.save(payload, temporary)
+            staged_bytes = temporary.stat().st_size
+            if staged_bytes <= 0:
+                raise PF1TrainingError("staged PF-1 checkpoint is empty")
+            # Network/file storage can reject the random seeks used by
+            # PyTorch's zip writer.  A completed local file is therefore
+            # transferred with one ordinary sequential copy.
+            shutil.copyfile(temporary, destination)
+            if destination.stat().st_size != staged_bytes:
+                raise PF1TrainingError("published checkpoint size differs from staging")
+        finally:
+            temporary.unlink(missing_ok=True)
+    else:
+        torch_module.save(payload, destination)
     return str(checkpoint_dir)
 
 

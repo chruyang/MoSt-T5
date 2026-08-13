@@ -32,7 +32,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Optional
 
 
 SCHEMA_VERSION = "most-t5-p1/union-init-checkpoint/v1"
@@ -545,12 +545,21 @@ def _verify_model_pair(
 
 
 def _verified_tokenizer_and_dimensions(
-    *, base_tokenizer_snapshot: Path, union_tokenizer_dir: Path
+    *,
+    base_tokenizer_snapshot: Path,
+    union_tokenizer_dir: Path,
+    verified_tokenizer_loader: Optional[Callable[..., Any]] = None,
 ) -> tuple[Any, int, int, str, str]:
-    verified = _load_verified_tokenizer(
-        base_tokenizer_snapshot=base_tokenizer_snapshot,
-        union_tokenizer_dir=union_tokenizer_dir,
-    )
+    if verified_tokenizer_loader is None:
+        verified = _load_verified_tokenizer(
+            base_tokenizer_snapshot=base_tokenizer_snapshot,
+            union_tokenizer_dir=union_tokenizer_dir,
+        )
+    else:
+        verified = verified_tokenizer_loader(
+            base_snapshot=base_tokenizer_snapshot,
+            output_dir=union_tokenizer_dir,
+        )
     base_size, union_size, contract_hash, snapshot_hash = _tokenizer_dimensions(verified)
     return verified, base_size, union_size, contract_hash, snapshot_hash
 
@@ -564,6 +573,7 @@ def build_union_init_checkpoint(
     seed: int,
     geometry_fusion_seed: int,
     num_e3fp_embeddings: int,
+    verified_tokenizer_loader: Optional[Callable[..., Any]] = None,
 ) -> VerifiedUnionInitCheckpoint:
     """Build, reload, verify, then publish the single four-grid initializer."""
 
@@ -585,6 +595,7 @@ def build_union_init_checkpoint(
         _verified_tokenizer_and_dimensions(
             base_tokenizer_snapshot=base_tokenizer_snapshot,
             union_tokenizer_dir=union_tokenizer_dir,
+            verified_tokenizer_loader=verified_tokenizer_loader,
         )
     )
     model = _load_raw_t5_from_pretrained(base_model_snapshot)
@@ -647,6 +658,7 @@ def load_verified_union_init_checkpoint(
     output_dir: Path,
     geometry_fusion_seed: int,
     num_e3fp_embeddings: int,
+    verified_tokenizer_loader: Optional[Callable[..., Any]] = None,
 ) -> VerifiedUnionInitCheckpoint:
     """Load one independent raw-T5 copy after replaying the init contract."""
 
@@ -670,6 +682,7 @@ def load_verified_union_init_checkpoint(
         _verified_tokenizer_and_dimensions(
             base_tokenizer_snapshot=base_tokenizer_snapshot,
             union_tokenizer_dir=union_tokenizer_dir,
+            verified_tokenizer_loader=verified_tokenizer_loader,
         )
     )
     tokenizer_manifest = manifest.get("tokenizer")
@@ -728,6 +741,7 @@ def load_verified_four_grid_wrapper(
     output_dir: Path,
     geometry_fusion_seed: int,
     num_e3fp_embeddings: int,
+    verified_tokenizer_loader: Optional[Callable[..., Any]] = None,
 ) -> Any:
     """Construct one grid cell with deterministic, shared fusion parameters.
 
@@ -749,6 +763,7 @@ def load_verified_four_grid_wrapper(
         output_dir=output_dir,
         geometry_fusion_seed=geometry_fusion_seed,
         num_e3fp_embeddings=num_e3fp_embeddings,
+        verified_tokenizer_loader=verified_tokenizer_loader,
     )
     from most_t5_next.p1.four_grid_t5_wrapper import FourGridT5Wrapper
 
