@@ -1,0 +1,80 @@
+seed: 42
+
+model:
+  backbone: initialized_union_checkpoint
+  vocabulary_size: 53368
+  dropout_rate: 0.0
+  input_length: 512
+  target_length: 114
+  e3fp_bits: 4096
+  e3fp_embedding_dim: 768
+  geometry_fraction: 0.5
+
+corruption:
+  noise_density: 0.15
+  mean_span_length: 3.0
+  molecule_sampling: heavy_atom_weighted
+  motif_unit: fragment_with_owned_explicit_endpoints
+
+data:
+  pretraining_validation_split: false
+  paired_text:
+    source: 3D-MoLM/PubChem
+    text_column: enriched_description
+    downstream_reference_column: description
+  txt:
+    dataset: MedRAG/pubmed
+    revision: 33da3593d5756bc04c8909f170003c0b14197957
+    parquet_ref: refs/convert/parquet
+    text_column: contents
+    parquet_export_partial: true
+    training_shards: [train, dev]
+    pretraining_holdout_documents: 0
+
+curriculum:
+  phase_one:
+    tasks: [M, MG]
+    ratios: [0.5, 0.5]
+    total_updates: null
+  phase_two:
+    tasks: [SYN, TXT, CAP, T2M]
+    ratios: [0.25, 0.25, 0.25, 0.25]
+    total_updates: null
+  restart_optimizer_at_phase_two: true
+
+optimization:
+  name: adamwscale
+  scheduler: linear_warmup_cosine
+  warmup_start_factor: null
+  beta1: 0.9
+  beta2: 0.999
+  epsilon: 1.0e-6
+  phase_one:
+    base_learning_rate: null
+    warmup_updates: 10000
+  phase_two:
+    base_learning_rate: null
+    warmup_updates: 10000
+  final_learning_rate: null
+  gradient_clip_norm: 1.0
+  weight_decay: 0.0
+  precision: bf16
+
+# Hardware-sensitive defaults preserve the tested effective batch of 128.
+batching:
+  micro_batch_size: 8
+  gradient_accumulation_steps: 16
+  effective_batch_size: 128
+
+dataloader:
+  num_workers: 8
+  prefetch_factor: 5
+  pin_memory: true
+  persistent_workers: true
+  drop_last: false
+
+monitoring:
+  log_every_updates: 10
+  pretraining_evaluation: false
+  checkpoint_every_updates: null
+  tensorboard_root: /root/tf-logs

@@ -1,0 +1,135 @@
+from copy import deepcopy
+from pathlib import Path
+import unittest
+
+from most_t5_next.configuration import (
+    ConfigurationError,
+    apply_overrides,
+    load_pretraining_config,
+    validate_pretraining_config,
+)
+
+
+CONFIG_PATH = Path(__file__).parents[2] / "configs" / "pretrain.yaml"
+
+
+class ConfigurationTest(unittest.TestCase):
+    def test_existing_public_parameters_can_be_overridden(self) -> None:
+        original = load_pretraining_config(CONFIG_PATH)
+        updated = apply_overrides(
+            original,
+            (
+                "seed=7",
+                "model.dropout_rate=0.1",
+                "batching.micro_batch_size=4",
+                "batching.gradient_accumulation_steps=32",
+            ),
+        )
+        self.assertEqual(updated["seed"], 7)
+        self.assertEqual(updated["model"]["dropout_rate"], 0.1)
+        self.assertEqual(updated["batching"]["micro_batch_size"], 4)
+        self.assertEqual(original["seed"], 42)
+
+    def test_unknown_override_fails_instead_of_becoming_a_noop(self) -> None:
+        config = load_pretraining_config(CONFIG_PATH)
+        with self.assertRaisesRegex(ConfigurationError, "unknown configuration key"):
+            apply_overrides(config, ("model.dropuot_rate=0.1",))
+
+    def test_frozen_semantic_defaults_are_not_repository_style_options(self) -> None:
+        config = load_pretraining_config(CONFIG_PATH)
+        self.assertEqual(config["seed"], 42)
+        self.assertNotIn("adapter_seed", config["model"])
+        self.assertNotIn("max_identity_span_length", config["model"])
+        self.assertNotIn("max_fragment_tokens", config["model"])
+        self.assertIsNone(config["optimization"]["warmup_start_factor"])
+        self.assertIsNone(config["optimization"]["final_learning_rate"])
+        self.assertEqual(config["curriculum"]["phase_one"]["tasks"], ["M", "MG"])
+        self.assertEqual(
+            config["curriculum"]["phase_two"]["tasks"],
+            ["SYN", "TXT", "CAP", "T2M"],
+        )
+        self.assertTrue(config["curriculum"]["restart_optimizer_at_phase_two"])
+        self.assertEqual(config["optimization"]["phase_one"]["warmup_updates"], 10_000)
+        self.assertEqual(config["optimization"]["phase_two"]["warmup_updates"], 10_000)
+        self.assertFalse(config["data"]["pretraining_validation_split"])
+        self.assertEqual(config["data"]["txt"]["dataset"], "MedRAG/pubmed")
+        self.assertEqual(config["data"]["txt"]["text_column"], "contents")
+        self.assertTrue(config["data"]["txt"]["parquet_export_partial"])
+        self.assertEqual(config["data"]["txt"]["training_shards"], ["train", "dev"])
+        self.assertEqual(config["data"]["txt"]["pretraining_holdout_documents"], 0)
+        self.assertFalse(config["monitoring"]["pretraining_evaluation"])
+        self.assertNotIn("evaluate_every_updates", config["monitoring"])
+        self.assertEqual(
+            config["data"]["paired_text"]["text_column"],
+            "enriched_description",
+        )
+        self.assertEqual(
+            config["data"]["paired_text"]["downstream_reference_column"],
+            "description",
+        )
+        self.assertEqual(config["corruption"]["molecule_sampling"], "heavy_atom_weighted")
+        self.assertEqual(
+            config["corruption"]["motif_unit"],
+            "fragment_with_owned_explicit_endpoints",
+        )
+        self.assertEqual(
+            config["batching"]["micro_batch_size"]
+            * config["batching"]["gradient_accumulation_steps"],
+            config["batching"]["effective_batch_size"],
+        )
+
+    def test_public_config_is_valid_but_intentionally_not_launchable(self) -> None:
+        config = load_pretraining_config(CONFIG_PATH)
+        with self.assertRaisesRegex(ConfigurationError, "unresolved"):
+            validate_pretraining_config(config, require_launch_values=True)
+
+    def test_phase_local_launch_values_close_balanced_task_cycles(self) -> None:
+        config = deepcopy(load_pretraining_config(CONFIG_PATH))
+        for phase_name, updates in (("phase_one", 20_000), ("phase_two", 40_000)):
+            config["curriculum"][phase_name]["total_updates"] = updates
+            config["optimization"][phase_name]["base_learning_rate"] = 1.0e-3
+        config["optimization"]["warmup_start_factor"] = 0.5
+        config["optimization"]["final_learning_rate"] = 1.0e-5
+        config["monitoring"]["checkpoint_every_updates"] = 500
+        validate_pretraining_config(config, require_launch_values=True)
+
+    def test_phase_warmup_cannot_drift_from_10000_updates(self) -> None:
+        config = deepcopy(load_pretraining_config(CONFIG_PATH))
+        config["optimization"]["phase_two"]["warmup_updates"] = 1_000
+        with self.assertRaisesRegex(ConfigurationError, "must remain 10000"):
+            validate_pretraining_config(config)
+
+    def test_txt_source_cannot_silently_revert_to_c4(self) -> None:
+        config = deepcopy(load_pretraining_config(CONFIG_PATH))
+        config["data"]["txt"]["dataset"] = "c4"
+        with self.assertRaisesRegex(ConfigurationError, "TXT dataset has drifted"):
+            validate_pretraining_config(config)
+
+    def test_seed_is_open_but_must_be_reproducible(self) -> None:
+        config = deepcopy(load_pretraining_config(CONFIG_PATH))
+        config["seed"] = 7
+        validate_pretraining_config(config)
+        config["seed"] = -1
+        with self.assertRaisesRegex(ConfigurationError, "seed"):
+            validate_pretraining_config(config)
+
+    def test_pretraining_cannot_reserve_a_dev_population(self) -> None:
+        config = deepcopy(load_pretraining_config(CONFIG_PATH))
+        config["data"]["pretraining_validation_split"] = True
+        with self.assertRaisesRegex(ConfigurationError, "every admitted task record"):
+            validate_pretraining_config(config)
+
+        config = deepcopy(load_pretraining_config(CONFIG_PATH))
+        config["data"]["txt"]["training_shards"] = ["train"]
+        config["data"]["txt"]["pretraining_holdout_documents"] = 2_389_870
+        with self.assertRaisesRegex(ConfigurationError, "all physical TXT shards"):
+            validate_pretraining_config(config)
+
+        config = deepcopy(load_pretraining_config(CONFIG_PATH))
+        config["monitoring"]["pretraining_evaluation"] = True
+        with self.assertRaisesRegex(ConfigurationError, "must not run an evaluation"):
+            validate_pretraining_config(config)
+
+
+if __name__ == "__main__":
+    unittest.main()
