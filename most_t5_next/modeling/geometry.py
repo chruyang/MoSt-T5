@@ -178,18 +178,29 @@ class GeometryAdapter(nn.Module):
             raise GeometryInputError(f"unknown geometry mode: {geometry_mode}")
 
         if fragments:
-            bad_owner = atom_mask & (
+            row_has_fragments = fragment_mask.any(dim=1, keepdim=True)
+            fragmented_atoms = atom_mask & row_has_fragments
+            fallback_atoms = atom_mask & ~row_has_fragments
+            bad_owner = fragmented_atoms & (
                 atom_to_fragment.lt(0) | atom_to_fragment.ge(fragments)
             )
             if bool(bad_owner.any()):
                 raise GeometryInputError("active atom lies outside the fragment axis")
+            if bool((fallback_atoms & atom_to_fragment.ne(-1)).any()):
+                raise GeometryInputError(
+                    "whole-molecule fallback atoms must be unowned"
+                )
             safe_owners = atom_to_fragment.clamp_min(0).to(torch.long)
-            if bool((atom_mask & ~fragment_mask.gather(1, safe_owners)).any()):
+            if bool(
+                (fragmented_atoms & ~fragment_mask.gather(1, safe_owners)).any()
+            ):
                 raise GeometryInputError("active atom owns a padded fragment")
             atom_counts = torch.zeros(
                 (batch, fragments), dtype=torch.long, device=atom_mask.device
             )
-            atom_counts.scatter_add_(1, safe_owners, atom_mask.to(torch.long))
+            atom_counts.scatter_add_(
+                1, safe_owners, fragmented_atoms.to(torch.long)
+            )
             if bool((fragment_mask & atom_counts.eq(0)).any()):
                 raise GeometryInputError("active fragment has no owned atom")
         elif bool((atom_mask & atom_to_fragment.ne(-1)).any()):

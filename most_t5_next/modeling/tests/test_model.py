@@ -8,6 +8,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from most_t5_next.modeling import GeometryAdapter, MoStT5
+from most_t5_next.modeling.geometry import GeometryInputError
 from most_t5_next.modeling.model import MoStT5Error
 
 
@@ -98,6 +99,17 @@ def _mixed_geometry_inputs() -> dict[str, torch.Tensor]:
         ),
         "atom_is_attachment": torch.tensor([[False, True], [False, False]]),
     }
+
+
+def _mixed_fallback_geometry_inputs() -> dict[str, torch.Tensor]:
+    """One fragmented row followed by one whole-molecule fallback row."""
+
+    inputs = _mixed_geometry_inputs()
+    inputs["e3fp_ids"][1] = torch.tensor(
+        [[7, 8, 9, -1], [10, 11, 12, 13]]
+    )
+    inputs["atom_mask"][1] = True
+    return inputs
 
 
 class GeometryAdapterTest(unittest.TestCase):
@@ -224,6 +236,35 @@ class MoStT5Test(unittest.TestCase):
         )
         self.assertFalse(torch.equal(lexical.logits[0], mixed.logits[0]))
         torch.testing.assert_close(lexical.logits[1], mixed.logits[1], rtol=0, atol=0)
+
+    def test_mixed_batch_accepts_unowned_whole_molecule_fallback_atoms(self) -> None:
+        torch.manual_seed(14)
+        model = MoStT5(_Backbone(), fp_bits=16, atom_embedding_dim=8)
+        input_ids = torch.tensor([[2, 3, 4, 5], [6, 7, 8, 9]])
+        attention_mask = torch.ones((2, 4), dtype=torch.long)
+        labels = torch.tensor([[3, 4, 5, 6], [7, 8, 9, 10]])
+        lexical = model(input_ids, attention_mask, labels=labels)
+        mixed = model(
+            input_ids,
+            attention_mask,
+            labels=labels,
+            **_mixed_fallback_geometry_inputs(),
+        )
+        self.assertFalse(torch.equal(lexical.logits[0], mixed.logits[0]))
+        torch.testing.assert_close(lexical.logits[1], mixed.logits[1], rtol=0, atol=0)
+
+    def test_whole_molecule_fallback_rejects_fragment_ownership(self) -> None:
+        adapter = GeometryAdapter(8, fp_bits=16, atom_embedding_dim=8)
+        inputs = _mixed_fallback_geometry_inputs()
+        inputs["atom_to_fragment"][1, 0] = 0
+        with self.assertRaisesRegex(
+            GeometryInputError, "whole-molecule fallback atoms must be unowned"
+        ):
+            adapter(
+                torch.randn(2, 4, 8),
+                attention_mask=torch.ones((2, 4), dtype=torch.bool),
+                **inputs,
+            )
 
     def test_all_minus_one_payload_has_zero_geometry_gradient(self) -> None:
         torch.manual_seed(13)

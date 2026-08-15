@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--paired-text-cache", type=Path, required=True)
     parser.add_argument("--pubmed-cache", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--workers", type=int, default=24)
     parser.add_argument("--chunksize", type=int, default=64)
     parser.add_argument("--set", action="append", default=[], dest="overrides")
     return parser
