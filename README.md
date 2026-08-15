@@ -64,8 +64,13 @@ python -m scripts.freeze_pretraining_populations \
   --pubchem-cache /path/to/pubchem-cache \
   --paired-text-cache /path/to/enriched-description-cache \
   --pubmed-cache /path/to/pubmed-cache \
-  --output-dir /path/to/populations
+  --output-dir /path/to/populations \
+  --set curriculum.phase_one.total_updates=... \
+  --set curriculum.phase_two.total_updates=...
 ```
+
+Population membership depends on the finite update budgets and effective
+batch size, but not on optimizer or scheduler hyperparameters.
 
 ## Training
 

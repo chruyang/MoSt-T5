@@ -31,8 +31,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_pretraining_config(
-        args.config, overrides=args.overrides, require_launch_values=True
+        args.config, overrides=args.overrides, require_launch_values=False
     )
+    phase_one_updates = config["curriculum"]["phase_one"]["total_updates"]
+    phase_two_updates = config["curriculum"]["phase_two"]["total_updates"]
+    if phase_one_updates is None or phase_two_updates is None:
+        raise ValueError(
+            "population freezing requires curriculum.phase_one.total_updates "
+            "and curriculum.phase_two.total_updates"
+        )
     tokenizer = AutoTokenizer.from_pretrained(
         args.tokenizer_root / "tokenizer_snapshot",
         use_fast=False,
@@ -51,8 +58,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sentinels=sentinels,
         eos=int(tokenizer.eos_token_id),
         seed=int(config["seed"]),
-        phase_one_updates=int(config["curriculum"]["phase_one"]["total_updates"]),
-        phase_two_updates=int(config["curriculum"]["phase_two"]["total_updates"]),
+        phase_one_updates=int(phase_one_updates),
+        phase_two_updates=int(phase_two_updates),
         micro_batch_size=int(config["batching"]["micro_batch_size"]),
         accumulation_steps=int(config["batching"]["gradient_accumulation_steps"]),
         workers=args.workers,
