@@ -15,11 +15,22 @@ The formal recipe has two optimizer phases:
 | II | `SYN`, `TXT`, `CAP`, `T2M` | PCQM + PubChem, PubMed, and paired PubChem text | 1:1:1:1 |
 
 Phase II starts from the Phase-I model weights with a fresh optimizer and
-learning-rate scheduler.  Task selection occurs at optimizer-update level;
-all microbatches accumulated into one update belong to the same task.
-The sampler first selects the complete logical batch of 96 records and then
-applies the physical partition.  Thus `96 x 1`, `48 x 2`, and `32 x 3` share
-one deterministic record stream; `32 x 3` is the current safe baseline.
+learning-rate scheduler. Four synchronized ranks contribute task-homogeneous
+local batches to every optimizer update. Phase I binds ranks to
+`[M, M, MG, MG]`; Phase II uses `[SYN, TXT, CAP, T2M]`. Each rank first selects
+one deterministic logical batch of 96 records and then applies its physical
+partition, giving a global effective batch of 384.
+
+Phase I uses `96 x 1`. In Phase II, `SYN` uses `96 x 1`, while `TXT`, `CAP`,
+and `T2M` use `48 x 2`. Non-final accumulated microbatches use DDP `no_sync`,
+so every optimizer update performs one gradient reduction and one shared
+optimizer/scheduler step.
+
+The formal update budgets are frozen at **100,000 Phase-I updates** and
+**200,000 Phase-II updates**.  With the rank layouts above, each Phase-I task
+contributes `2 x 96 x 100,000 = 19.2M` records and each Phase-II task
+contributes `1 x 96 x 200,000 = 19.2M` records.  The 1:2 phase ratio therefore
+equalizes per-task record exposure; it is not an alternating-task schedule.
 
 `CAP` predicts `enriched_description`; `T2M` uses it as input.  The original
 `description` field remains the downstream reference used by 3D-MolT5-style
@@ -73,13 +84,14 @@ python -m scripts.freeze_pretraining_populations \
   --pubchem-cache /path/to/pubchem-cache \
   --paired-text-cache /path/to/enriched-description-cache \
   --pubmed-cache /path/to/pubmed-cache \
-  --output-dir /path/to/populations \
-  --set curriculum.phase_one.total_updates=... \
-  --set curriculum.phase_two.total_updates=...
+  --output-dir /path/to/populations
 ```
 
 Population membership depends on the finite update budgets and effective
-batch size, but not on optimizer or scheduler hyperparameters.
+batch size, but not on optimizer or scheduler hyperparameters. The current
+four-rank layout requires population schema `v2`; an older `v1` population is
+rejected and must be rebuilt so repeated Phase-I ranks are included in the
+corruption exposure scan.
 
 ## Training
 
@@ -88,7 +100,7 @@ Ordinary research parameters are exposed in
 keys.  Unknown keys fail rather than being ignored.
 
 ```bash
-python -m scripts.pretrain \
+torchrun --standalone --nproc-per-node=4 -m scripts.pretrain \
   --config most_t5_next/configs/pretrain.yaml \
   --checkpoint /path/to/initialized-union-checkpoint \
   --tokenizer-root /path/to/tokenizer \
@@ -97,20 +109,32 @@ python -m scripts.pretrain \
   --paired-text-cache /path/to/enriched-description-cache \
   --pubmed-cache /path/to/pubmed-cache \
   --population-root /path/to/populations \
-  --output-dir /root/autodl-tmp/most-t5-pretraining \
-  --set curriculum.phase_one.total_updates=... \
-  --set curriculum.phase_two.total_updates=... \
-  --set optimization.phase_one.base_learning_rate=... \
-  --set optimization.phase_two.base_learning_rate=... \
-  --set optimization.warmup_start_factor=... \
-  --set optimization.final_learning_rate=... \
-  --set monitoring.checkpoint_every_updates=...
+  --output-dir /root/autodl-tmp/most-t5-pretraining
 ```
 
 Formal pretraining uses BF16 computation with FP32 parameters and optimizer
-state, AdamWScale, 10,000 warmup updates per phase, dynamic padding, online
-corruption, and no pretraining validation/evaluation split.  TensorBoard events
-are written beneath `/root/tf-logs` by default.
+state, AdamWScale, 10,000 warmup updates per phase, a `0.5` warmup start
+factor, Phase-I/Phase-II peak learning rates of `2e-3`/`1e-3`, and cosine
+decay to `1e-5`.  It uses dynamic padding, online corruption, and no
+pretraining validation/evaluation split.  A full-state atomic checkpoint is
+written every 10,000 optimizer updates and at each phase end. TensorBoard
+events are written beneath `/root/tf-logs` by default.
+
+Resume the same output directory from the checkpoint named by
+`latest-checkpoint.json`:
+
+```bash
+torchrun --standalone --nproc-per-node=4 -m scripts.pretrain \
+  <the same data and configuration arguments> \
+  --output-dir /root/autodl-tmp/most-t5-pretraining \
+  --resume-checkpoint /root/autodl-tmp/most-t5-pretraining/phase-1-step-00010000.pt
+```
+
+Resume rejects changes to the resolved configuration, runtime, world size,
+optimizer protocol, population manifest, or source-cache identity manifests.
+`scripts/freeze_formal_populations.sh` freezes the budget-dependent schema-v2
+population first; after that gate and the four-GPU smoke pass,
+`scripts/start_formal_pretraining.sh` is the guarded formal launcher.
 
 ## Repository layout
 
@@ -122,6 +146,5 @@ are written beneath `/root/tf-logs` by default.
   builders and experiment-specific audits;
 - `scripts`: public command-line entry points and smoke checks.
 
-The unresolved update counts and learning rates are intentional: they are the
-remaining protocol values to be selected on the final training hardware before
-the population ledger and formal run are frozen.
+The formal optimizer-update budgets and learning-rate schedule are frozen in
+the public configuration. Shorter overrides are launch smokes only.

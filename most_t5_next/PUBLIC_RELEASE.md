@@ -13,11 +13,11 @@ audits, and historical baselines. They remain in the research workspace for
 reproducibility but are not part of the first public package. A release should
 be assembled from the active path instead of publishing the workspace tree.
 
-Before release, the unresolved values marked `null` in `configs/pretrain.yaml`
-must be replaced by the final two-phase update, phase-local learning-rate and
-warmup protocol, and checkpoint cadence. Formal pretraining has no validation
-split or evaluation loop. Launch validation refuses to run while any required
-value remains unresolved.
+The formal phase budgets in `configs/pretrain.yaml` are frozen at 100,000 and
+200,000 optimizer updates. Phase-I and Phase-II peak learning rates are `2e-3`
+and `1e-3`; both use 10,000 linear warmup updates from factor `0.5` followed by
+cosine decay to `1e-5`. Full-state checkpoints are written every 10,000 updates.
+Formal pretraining has no validation split or evaluation loop.
 
 The public input boundary is `MoStT5Processor` plus `MoStT5Collator`. It
 supports text-only, molecule-only, joint text-plus-molecule and mixed batches.
@@ -34,10 +34,20 @@ be written to its manifest and round-trip through checkpoint resume. Artifact-
 dependent dimensions remain strictly compatibility-checked, and mathematically
 derived tensor shapes remain derived rather than duplicated as free knobs.
 
-The release sampler selects a complete optimizer-update batch before physical
-microbatch splitting.  The current logical batch is 96, with `32 x 3` as the
-safe single-GPU baseline; other partitions must retain the same selected
-records and per-sample corruption epochs.  Whole-molecule fallback rows use
+Resume is phase-aware. Within a phase it restores the model, optimizer,
+scheduler, completed-update boundary, cumulative counters, and Python, NumPy,
+Torch CPU, and rank-local CUDA RNG states. A Phase-II resume requires the
+persisted Phase-I model-only boundary and admitted Phase-I manifest, but uses
+the Phase-II checkpoint's optimizer and scheduler. The checkpoint protocol
+rejects a different resolved configuration, distributed runtime, population,
+or source-cache identity.
+
+The release sampler selects a complete rank-local optimizer batch before
+physical microbatch splitting. Each of four task-homogeneous DDP ranks owns 96
+logical records, for a global effective batch of 384. Phase I uses `96 x 1`;
+Phase II uses `SYN=96 x 1` and `TXT/CAP/T2M=48 x 2`, with one gradient
+reduction per optimizer update. Alternative physical partitions must retain
+the same selected records and per-sample corruption epochs. Whole-molecule fallback rows use
 zero fragments and unowned atoms and remain lexical-only even in mixed padded
 batches.  These contracts are documented in `docs/training_contracts.md` and
 must be covered by the release test suite.

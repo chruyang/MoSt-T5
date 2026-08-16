@@ -27,8 +27,8 @@ valid; the former batch-level ownership check was not.
 ## Optimizer-update sampling
 
 The logical record batch is selected before it is divided into physical
-microbatches. The current single-GPU baseline uses 96 records per optimizer
-update (`32 x 3`). For a task update, the sampler:
+microbatches. Each distributed rank owns 96 records per optimizer update. For
+a task/rank update, the sampler:
 
 1. advances that task's deterministic shuffled stream by 96 records;
 2. crosses an epoch boundary when necessary without dropping a tail or
@@ -42,15 +42,95 @@ equal. This is a sample-stream guarantee, not a bitwise numerical-equivalence
 claim: BF16 reduction order, dynamic padding, dropout, and kernel selection can
 still change floating-point results across physical partitions.
 
-Population freezing uses the same exposure equation:
+Population freezing uses the same exposure equation. Here `task_rank_updates`
+is the phase optimizer-update budget multiplied by the number of ranks assigned
+to that task (two for Phase-I `M` and `MG`, one for every Phase-II task):
 
 ```text
-max_epoch = floor((task_updates * logical_batch_size - 1) / population_size)
+max_epoch = floor((task_rank_updates * logical_batch_size - 1) / population_size)
 ```
 
 The training manifest records the logical batch, physical partition, and
 `sample_before_microbatch_split=true`. The population manifest records the
 same contract.
+
+## Task-homogeneous distributed update
+
+Formal pretraining uses four synchronized ranks and one shared model,
+optimizer, scheduler, and global update clock. Phase I assigns ranks
+`[M, M, MG, MG]`; the two replicas of a task draw disjoint logical batches.
+Phase II assigns `[SYN, TXT, CAP, T2M]`. Every rank contributes one logical
+batch of 96 records, so the global effective batch is 384 and the frozen task
+weights are respectively `0.5/0.5` and `0.25/0.25/0.25/0.25`.
+
+The physical partitions are:
+
+```text
+Phase I:  M=96x1, MG=96x1
+Phase II: SYN=96x1, TXT=48x2, CAP=48x2, T2M=48x2
+```
+
+For accumulated tasks, all non-final forward/backward passes run under DDP
+`no_sync`; the final pass performs the only gradient reduction of the optimizer
+update. Losses are weighted by each microbatch's number of non-ignored target
+tokens, making `48 x 2` equivalent to one rank-local logical token-normalized
+batch rather than an unweighted mean of two variable-length losses. DDP then
+gives each rank equal weight. This preserves the explicit task balance instead
+of allowing a task with longer targets to dominate the global update. All ranks
+then clip the synchronized gradient and execute one optimizer and scheduler
+step.
+
+Every phase update contains every phase task through its rank layout, so a
+formal distributed phase budget need only be positive; it is not divided among
+an alternating task cycle. Population schema `v2` records rank multiplicities
+and rejects older `v1` populations at launch, forcing the exposure scan and
+length-action ledger to be regenerated for this layout.
+
+## Frozen optimizer-update budget
+
+Formal pretraining runs 100,000 Phase-I optimizer updates and 200,000 Phase-II
+optimizer updates.  This 1:2 ratio follows directly from rank multiplicity:
+
+```text
+Phase I per task:  2 ranks x 96 records x 100,000 updates = 19,200,000
+Phase II per task: 1 rank  x 96 records x 200,000 updates = 19,200,000
+```
+
+All six tasks therefore receive the same record-presentation budget.  These
+values are formal-recipe defaults; reduced values may be used only for launch
+or resume smokes and must be labelled as such in their manifests.
+
+Text-only ranks do not execute the geometry adapter, while molecular ranks do.
+The DDP wrapper therefore uses `find_unused_parameters=true`; this is a
+distributed execution requirement and does not change the public geometry-off
+semantics.
+
+## Checkpoint and resume boundary
+
+Each phase writes an atomic full-state checkpoint every 10,000 completed
+optimizer updates and at phase end. `latest-checkpoint.json` is updated only
+after the corresponding checkpoint rename succeeds, so an interruption during
+a new save leaves the previous checkpoint and pointer intact.
+
+A resumable checkpoint contains the model, AdamWScale state, scheduler state,
+completed update, per-rank task and loss counters, and Python, NumPy, Torch CPU,
+and rank-local CUDA random-number generator states. It also contains the
+resolved runtime and a compact identity contract for the configuration,
+tokenizer, model initialization, task populations, and four source caches.
+Resume refuses a different phase, world size, batching/runtime configuration,
+optimization schedule, or artifact identity.
+
+The data sampler has no hidden mutable cursor: `start_update` deterministically
+reconstructs the same task-replica stream, epoch labels, logical records, and
+online-corruption seeds. Consequently, recovery starts at the first update not
+included in the checkpoint. The release test suite compares an uninterrupted
+CPU run with an intentionally interrupted and resumed run, including exact
+model, optimizer, scheduler, progress, and RNG equality.
+
+At the Phase-I/Phase-II boundary the model weights are deliberately retained
+while optimizer and scheduler state are deliberately restarted. This is distinct
+from an accidental Phase-II interruption: resuming a Phase-II checkpoint restores
+the Phase-II optimizer and scheduler rather than restarting them.
 
 ## Version boundary
 

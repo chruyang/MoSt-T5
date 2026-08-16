@@ -27,10 +27,17 @@ TASKS = {
     "T2M": TaskSpec("T2M", 2, "pubchem_paired"),
 }
 
+
 class CurriculumSchedule:
     """Repeat one balanced task cycle at the optimizer-update boundary."""
 
-    def __init__(self, phase: int, total_updates: int) -> None:
+    def __init__(
+        self,
+        phase: int,
+        total_updates: int,
+        *,
+        require_complete_cycles: bool = True,
+    ) -> None:
         if phase not in PHASE_TASKS:
             raise ValueError("phase must be 1 or 2")
         if (
@@ -42,7 +49,7 @@ class CurriculumSchedule:
         self.phase = phase
         self.total_updates = int(total_updates)
         self.tasks = PHASE_TASKS[phase]
-        if self.total_updates % len(self.tasks):
+        if require_complete_cycles and self.total_updates % len(self.tasks):
             raise ValueError(
                 "total_updates must contain an integer number of balanced task cycles"
             )

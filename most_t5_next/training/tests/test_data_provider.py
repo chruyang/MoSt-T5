@@ -103,6 +103,109 @@ class CurriculumBatchSamplerTest(unittest.TestCase):
         self.assertEqual(len(first_syn_epoch), 101)
         self.assertEqual(set(first_syn_epoch), set(range(101)))
 
+    def test_tasks_can_use_distinct_physical_partitions_of_one_logical_batch(self) -> None:
+        sampler = CurriculumBatchSampler(
+            phase=2,
+            total_updates=4,
+            populations={task: range(200) for task in ("SYN", "TXT", "CAP", "T2M")},
+            micro_batch_size=96,
+            accumulation_steps=1,
+            effective_batch_size=96,
+            task_partitions={
+                "SYN": (96, 1),
+                "TXT": (48, 2),
+                "CAP": (48, 2),
+                "T2M": (48, 2),
+            },
+            seed=42,
+        )
+        batches = list(sampler)
+        self.assertEqual([len(batch) for batch in batches], [96, 48, 48, 48, 48, 48, 48])
+        by_update: dict[int, list[CurriculumIndex]] = {}
+        for batch in batches:
+            by_update.setdefault(batch[0].update, []).extend(batch)
+        self.assertEqual({update: len(rows) for update, rows in by_update.items()}, {0: 96, 1: 96, 2: 96, 3: 96})
+        self.assertEqual(sampler.partition_for_task("SYN"), (96, 1))
+        self.assertEqual(sampler.partition_for_task("T2M"), (48, 2))
+
+    def test_fixed_task_replicas_draw_disjoint_logical_batches(self) -> None:
+        common = {
+            "phase": 1,
+            "total_updates": 2,
+            "populations": {"M": range(1000)},
+            "micro_batch_size": 4,
+            "accumulation_steps": 1,
+            "effective_batch_size": 4,
+            "fixed_task": "M",
+            "task_replicas": 2,
+            "seed": 42,
+        }
+        rank_zero = list(
+            CurriculumBatchSampler(**common, task_replica_index=0)
+        )
+        rank_one = list(
+            CurriculumBatchSampler(**common, task_replica_index=1)
+        )
+        self.assertTrue(all(row.task == "M" for batch in rank_zero for row in batch))
+        self.assertTrue(all(row.task == "M" for batch in rank_one for row in batch))
+        self.assertEqual([batch[0].update for batch in rank_zero], [0, 1])
+        self.assertEqual([batch[0].update for batch in rank_one], [0, 1])
+        for update in range(2):
+            left = {row.source_index for row in rank_zero[update]}
+            right = {row.source_index for row in rank_one[update]}
+            self.assertFalse(left & right)
+
+        flattened = [
+            row.source_index
+            for update in range(2)
+            for batch in (rank_zero[update], rank_one[update])
+            for row in batch
+        ]
+        reference = list(
+            CurriculumBatchSampler(
+                phase=1,
+                total_updates=4,
+                populations={"M": range(1000)},
+                micro_batch_size=4,
+                accumulation_steps=1,
+                effective_batch_size=4,
+                fixed_task="M",
+                seed=42,
+            )
+        )
+        self.assertEqual(
+            flattened,
+            [row.source_index for batch in reference for row in batch],
+        )
+
+    def test_fixed_task_rejects_invalid_replica_coordinates(self) -> None:
+        with self.assertRaisesRegex(Exception, "replica coordinates"):
+            CurriculumBatchSampler(
+                phase=2,
+                total_updates=4,
+                populations={"SYN": range(10)},
+                micro_batch_size=2,
+                accumulation_steps=1,
+                fixed_task="SYN",
+                task_replica_index=2,
+                task_replicas=2,
+                seed=42,
+            )
+
+    def test_fixed_task_does_not_require_a_complete_legacy_task_cycle(self) -> None:
+        sampler = CurriculumBatchSampler(
+            phase=2,
+            total_updates=1,
+            populations={"TXT": range(10)},
+            micro_batch_size=2,
+            accumulation_steps=1,
+            fixed_task="TXT",
+            seed=42,
+        )
+        batches = list(sampler)
+        self.assertEqual(len(batches), 1)
+        self.assertTrue(all(row.task == "TXT" for row in batches[0]))
+
     def test_resume_preserves_logical_batches_across_epoch_wrap(self) -> None:
         kwargs = dict(
             phase=2,

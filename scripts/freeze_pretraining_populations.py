@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 from typing import Sequence
@@ -11,6 +12,7 @@ from transformers import AutoTokenizer
 
 from most_t5_next.configuration import load_pretraining_config
 from most_t5_next.training.freeze_populations import freeze_populations
+from most_t5_next.training.distributed import task_batch_partitions
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,8 +62,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=int(config["seed"]),
         phase_one_updates=int(phase_one_updates),
         phase_two_updates=int(phase_two_updates),
-        micro_batch_size=int(config["batching"]["micro_batch_size"]),
-        accumulation_steps=int(config["batching"]["gradient_accumulation_steps"]),
+        task_rank_counts=dict(
+            Counter(
+                [
+                    *config["distributed"]["rank_tasks"]["phase_one"],
+                    *config["distributed"]["rank_tasks"]["phase_two"],
+                ]
+            )
+        ),
+        task_partitions={
+            **task_batch_partitions(config, phase=1),
+            **task_batch_partitions(config, phase=2),
+        },
         workers=args.workers,
         chunksize=args.chunksize,
     )

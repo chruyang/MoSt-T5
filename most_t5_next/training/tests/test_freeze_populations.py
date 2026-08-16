@@ -32,6 +32,19 @@ class PopulationEpochTest(unittest.TestCase):
             expected,
         )
 
+    def test_replicated_task_ranks_extend_the_exposure_scan(self) -> None:
+        per_rank_updates = 10
+        task_replicas = 2
+        self.assertEqual(
+            required_max_epoch(
+                100,
+                task_updates=per_rank_updates * task_replicas,
+                micro_batch_size=96,
+                accumulation_steps=1,
+            ),
+            19,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -150,7 +150,7 @@ def validate_pretraining_config(
             _require(not require_launch_values, f"{phase_name}.total_updates is unresolved")
         else:
             updates = int(updates)
-            _require(updates > 0 and updates % len(tasks) == 0, f"{phase_name} budget is invalid")
+            _require(updates > 0, f"{phase_name} budget is invalid")
         phase_updates[phase_name] = updates
 
     optimization = config["optimization"]
@@ -210,6 +210,63 @@ def validate_pretraining_config(
         micro_batch_size * accumulation_steps == int(batching["effective_batch_size"]),
         "batching values do not produce effective_batch_size",
     )
+    distributed = config["distributed"]
+    _require(
+        distributed["strategy"] == "task_homogeneous_ddp",
+        "distributed strategy has drifted",
+    )
+    world_size = int(distributed["world_size"])
+    _require(world_size == 4, "formal pretraining requires four ranks")
+    _require(
+        distributed["gradient_sync"] == "once_per_optimizer_update",
+        "gradient synchronization contract has drifted",
+    )
+    _require(
+        distributed["loss_weighting"]
+        == "equal_rank_after_rank_local_token_normalization",
+        "distributed loss weighting contract has drifted",
+    )
+    _require(
+        distributed["find_unused_parameters"] is True,
+        "text-only ranks require unused-parameter discovery",
+    )
+    _require(
+        int(batching["global_effective_batch_size"])
+        == int(batching["effective_batch_size"]) * world_size,
+        "global batch does not equal rank-local batch times world size",
+    )
+    for phase_name, phase_number in (("phase_one", 1), ("phase_two", 2)):
+        rank_tasks = tuple(distributed["rank_tasks"][phase_name])
+        _require(
+            len(rank_tasks) == world_size,
+            "rank-task layout does not cover the world",
+        )
+        _require(
+            all(task in PHASE_TASKS[phase_number] for task in rank_tasks),
+            "rank-task layout contains an unknown task",
+        )
+        multiplicities = [
+            rank_tasks.count(task) for task in PHASE_TASKS[phase_number]
+        ]
+        _require(
+            len(set(multiplicities)) == 1,
+            "rank-task layout must balance phase tasks",
+        )
+        rows = batching["task_partitions"][phase_name]
+        _require(
+            set(rows) == set(PHASE_TASKS[phase_number]),
+            f"{phase_name} task partitions have drifted",
+        )
+        for task, row in rows.items():
+            task_micro = int(row["micro_batch_size"])
+            task_accumulation = int(row["gradient_accumulation_steps"])
+            _require(
+                task_micro > 0
+                and task_accumulation > 0
+                and task_micro * task_accumulation
+                == int(batching["effective_batch_size"]),
+                f"{phase_name}.{task} does not produce the rank-local batch",
+            )
     dataloader = config["dataloader"]
     _require(int(dataloader["num_workers"]) >= 0, "num_workers must be nonnegative")
     _require(int(dataloader["prefetch_factor"]) > 0, "prefetch_factor must be positive")

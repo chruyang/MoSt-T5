@@ -146,8 +146,29 @@ class CurriculumBatchSampler(Sampler):
         seed: int,
         start_update: int = 0,
         effective_batch_size: int | None = None,
+        task_partitions: Mapping[str, tuple[int, int]] | None = None,
+        fixed_task: str | None = None,
+        task_replica_index: int = 0,
+        task_replicas: int = 1,
     ) -> None:
-        self.curriculum = CurriculumSchedule(phase, total_updates)
+        self.curriculum = CurriculumSchedule(
+            phase,
+            total_updates,
+            require_complete_cycles=fixed_task is None,
+        )
+        if fixed_task is not None and fixed_task not in self.curriculum.tasks:
+            raise DataProviderError("fixed task does not belong to the phase")
+        self.fixed_task = fixed_task
+        self.task_replica_index = int(task_replica_index)
+        self.task_replicas = int(task_replicas)
+        if not 0 < self.task_replicas or not (
+            0 <= self.task_replica_index < self.task_replicas
+        ):
+            raise DataProviderError("invalid fixed-task replica coordinates")
+        if self.fixed_task is None and (
+            self.task_replica_index != 0 or self.task_replicas != 1
+        ):
+            raise DataProviderError("task replicas require a fixed task")
         self.populations = {}
         for task, indices in populations.items():
             if isinstance(indices, range):
@@ -179,27 +200,74 @@ class CurriculumBatchSampler(Sampler):
             )
         if not 0 <= self.start_update <= total_updates:
             raise DataProviderError("start_update is outside the phase")
-        required = set(self.curriculum.tasks)
+        required = {
+            self.fixed_task
+        } if self.fixed_task is not None else set(self.curriculum.tasks)
         if any(
             task not in self.populations or not len(self.populations[task])
             for task in required
         ):
             raise DataProviderError("a curriculum task has no admitted population")
+        requested = {} if task_partitions is None else dict(task_partitions)
+        unknown = sorted(set(requested) - required)
+        if unknown:
+            raise DataProviderError(
+                "task batch partitions contain unknown tasks: " + ", ".join(unknown)
+            )
+        self.task_partitions: dict[str, tuple[int, int]] = {}
+        for task in required:
+            micro, accumulation = requested.get(
+                task, (self.micro_batch_size, self.accumulation_steps)
+            )
+            micro, accumulation = int(micro), int(accumulation)
+            if micro <= 0 or accumulation <= 0:
+                raise DataProviderError("task batch partitions must be positive")
+            if micro * accumulation != self.effective_batch_size:
+                raise DataProviderError(
+                    f"{task} partition does not produce the effective batch size"
+                )
+            self.task_partitions[task] = (micro, accumulation)
 
     def __len__(self) -> int:
-        return (
-            self.curriculum.total_updates - self.start_update
-        ) * self.accumulation_steps
+        if self.fixed_task is not None:
+            return (
+                self.curriculum.total_updates - self.start_update
+            ) * self.task_partitions[self.fixed_task][1]
+        return sum(
+            self.task_partitions[self.curriculum.task_at(update).name][1]
+            for update in range(self.start_update, self.curriculum.total_updates)
+        )
+
+    def partition_for_task(self, task: str) -> tuple[int, int]:
+        try:
+            return self.task_partitions[task]
+        except KeyError as exc:
+            raise DataProviderError(f"unknown curriculum task: {task}") from exc
 
     def __iter__(self) -> Iterator[list[CurriculumIndex]]:
-        task_updates = {task: 0 for task in self.curriculum.tasks}
-        for previous in range(self.start_update):
-            task_updates[self.curriculum.task_at(previous).name] += 1
+        task_updates = {task: 0 for task in self.task_partitions}
+        if self.fixed_task is not None:
+            task_updates[self.fixed_task] = self.start_update
+        else:
+            for previous in range(self.start_update):
+                task_updates[self.curriculum.task_at(previous).name] += 1
         order_cache: dict[tuple[str, int], np.ndarray] = {}
         for update in range(self.start_update, self.curriculum.total_updates):
-            task = self.curriculum.task_at(update).name
+            task = (
+                self.fixed_task
+                if self.fixed_task is not None
+                else self.curriculum.task_at(update).name
+            )
             population = self.populations[task]
-            logical_start = task_updates[task] * self.effective_batch_size
+            micro_batch_size, accumulation_steps = self.task_partitions[task]
+            task_update = task_updates[task]
+            if self.fixed_task is None:
+                logical_batch_index = task_update
+            else:
+                logical_batch_index = (
+                    task_update * self.task_replicas + self.task_replica_index
+                )
+            logical_start = logical_batch_index * self.effective_batch_size
             task_updates[task] += 1
             logical_batch: list[tuple[int, int]] = []
             cursor = logical_start
@@ -222,9 +290,9 @@ class CurriculumBatchSampler(Sampler):
                 logical_batch.extend((int(value), epoch) for value in chosen)
                 cursor += take
                 remaining -= take
-            for microbatch in range(self.accumulation_steps):
-                start = microbatch * self.micro_batch_size
-                stop = start + self.micro_batch_size
+            for microbatch in range(accumulation_steps):
+                start = microbatch * micro_batch_size
+                stop = start + micro_batch_size
                 yield [
                     CurriculumIndex(task, source_index, epoch, update, microbatch)
                     for source_index, epoch in logical_batch[start:stop]
@@ -303,8 +371,15 @@ class CurriculumDataLoaderProvider:
         runtime: TrainingRuntimeConfig,
         populations: Mapping[str, Sequence[int]] | None = None,
         start_update: int = 0,
+        task_partitions: Mapping[str, tuple[int, int]] | None = None,
+        fixed_task: str | None = None,
+        task_replica_index: int = 0,
+        task_replicas: int = 1,
     ) -> None:
         self.runtime = runtime
+        self.fixed_task = fixed_task
+        self.task_replica_index = int(task_replica_index)
+        self.task_replicas = int(task_replicas)
         self.dataset = CurriculumDataset(
             pcqm_cache=pcqm_cache,
             pubchem_cache=pubchem_cache,
@@ -326,7 +401,12 @@ class CurriculumDataLoaderProvider:
             effective_batch_size=runtime.effective_batch_size,
             seed=runtime.seed,
             start_update=start_update,
+            task_partitions=task_partitions,
+            fixed_task=fixed_task,
+            task_replica_index=task_replica_index,
+            task_replicas=task_replicas,
         )
+        self.sampler = sampler
         loader_kwargs: dict[str, Any] = {
             "dataset": self.dataset,
             "batch_sampler": sampler,
@@ -351,9 +431,10 @@ class CurriculumDataLoaderProvider:
         self.iterator = iter(self.loader)
 
     def __call__(self, task: TaskSpec, update: int) -> tuple[Mapping[str, Any], ...]:
+        _micro_batch_size, accumulation_steps = self.partition_for_task(task.name)
         batches = tuple(
             next(self.iterator)
-            for _ in range(self.runtime.gradient_accumulation_steps)
+            for _ in range(accumulation_steps)
         )
         for microbatch, batch in enumerate(batches):
             if (
@@ -363,6 +444,9 @@ class CurriculumDataLoaderProvider:
             ):
                 raise DataProviderError("prefetched batch differs from runner schedule")
         return batches
+
+    def partition_for_task(self, task: str) -> tuple[int, int]:
+        return self.sampler.partition_for_task(task)
 
     def close(self) -> None:
         shutdown = getattr(self.iterator, "_shutdown_workers", None)

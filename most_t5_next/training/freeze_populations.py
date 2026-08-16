@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -21,7 +21,7 @@ from most_t5_next.p2.fragsmiles_training_tensor_cache_v1 import (
 from most_t5_next.p2.pf10_text_denoising_cache_v1 import PF10PackedTextTrainingCorpus
 
 
-SCHEMA_VERSION = "most-t5/pretraining-populations/v1"
+SCHEMA_VERSION = "most-t5/pretraining-populations/v2"
 _CACHE: FragSmilesTrainingTensorCache | None = None
 _SENTINELS: tuple[int, ...] = ()
 _EOS = -1
@@ -181,8 +181,8 @@ def freeze_populations(
     seed: int,
     phase_one_updates: int,
     phase_two_updates: int,
-    micro_batch_size: int,
-    accumulation_steps: int,
+    task_rank_counts: Mapping[str, int],
+    task_partitions: Mapping[str, tuple[int, int]],
     workers: int,
     chunksize: int = 64,
 ) -> dict[str, object]:
@@ -199,15 +199,18 @@ def freeze_populations(
             ("pcqm", pcqm_cache, 0, pcqm_size),
             ("pubchem", pubchem_cache, pcqm_size, pubchem_size),
         )
-        task_updates_one = phase_one_updates // 2
-        task_updates_two = phase_two_updates // 4
+        task_updates = {
+            "M": phase_one_updates * int(task_rank_counts["M"]),
+            "MG": phase_one_updates * int(task_rank_counts["MG"]),
+            "SYN": phase_two_updates * int(task_rank_counts["SYN"]),
+        }
         m, m_excluded, m_epoch = molecular_population(
             union,
             task="M",
             view="P2-M",
-            task_updates=task_updates_one,
-            micro_batch_size=micro_batch_size,
-            accumulation_steps=accumulation_steps,
+            task_updates=task_updates["M"],
+            micro_batch_size=task_partitions["M"][0],
+            accumulation_steps=task_partitions["M"][1],
             sentinels=sentinels,
             eos=eos,
             seed=seed,
@@ -218,9 +221,9 @@ def freeze_populations(
             (("pcqm", pcqm_cache, 0, pcqm_size),),
             task="MG",
             view="P2-MG",
-            task_updates=task_updates_one,
-            micro_batch_size=micro_batch_size,
-            accumulation_steps=accumulation_steps,
+            task_updates=task_updates["MG"],
+            micro_batch_size=task_partitions["MG"][0],
+            accumulation_steps=task_partitions["MG"][1],
             sentinels=sentinels,
             eos=eos,
             seed=seed,
@@ -231,9 +234,9 @@ def freeze_populations(
             union,
             task="SYN",
             view="P1-SYN",
-            task_updates=task_updates_two,
-            micro_batch_size=micro_batch_size,
-            accumulation_steps=accumulation_steps,
+            task_updates=task_updates["SYN"],
+            micro_batch_size=task_partitions["SYN"][0],
+            accumulation_steps=task_partitions["SYN"][1],
             sentinels=sentinels,
             eos=eos,
             seed=seed,
@@ -273,6 +276,19 @@ def freeze_populations(
         "T2M": np.asarray(supervised, dtype="<i4"),
         "TXT": np.arange(txt_size, dtype="<i4"),
     }
+    logical_batch_sizes = {
+        int(micro) * int(accumulation)
+        for micro, accumulation in task_partitions.values()
+    }
+    if len(logical_batch_sizes) != 1:
+        raise PopulationError("task partitions do not share one logical batch size")
+    rank_local_batch_size = next(iter(logical_batch_sizes))
+    phase_one_ranks = sum(int(task_rank_counts[task]) for task in ("M", "MG"))
+    phase_two_ranks = sum(
+        int(task_rank_counts[task]) for task in ("SYN", "TXT", "CAP", "T2M")
+    )
+    if phase_one_ranks != phase_two_ranks:
+        raise PopulationError("phase rank layouts use different world sizes")
     staging.mkdir(parents=True)
     descriptors: dict[str, object] = {}
     for task, values in arrays.items():
@@ -290,9 +306,17 @@ def freeze_populations(
         "seed": seed,
         "phase_updates": {"phase_one": phase_one_updates, "phase_two": phase_two_updates},
         "batching": {
-            "micro_batch_size": micro_batch_size,
-            "gradient_accumulation_steps": accumulation_steps,
-            "effective_batch_size": micro_batch_size * accumulation_steps,
+            "rank_local_effective_batch_size": rank_local_batch_size,
+            "global_effective_batch_size": rank_local_batch_size * phase_one_ranks,
+            "task_rank_counts": dict(sorted(task_rank_counts.items())),
+            "task_rank_update_budget": dict(sorted(task_updates.items())),
+            "task_partitions": {
+                task: {
+                    "micro_batch_size": partition[0],
+                    "gradient_accumulation_steps": partition[1],
+                }
+                for task, partition in sorted(task_partitions.items())
+            },
             "sample_before_microbatch_split": True,
         },
         "arrays": descriptors,

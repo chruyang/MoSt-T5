@@ -35,36 +35,58 @@ curriculum:
   phase_one:
     tasks: [M, MG]
     ratios: [0.5, 0.5]
-    total_updates: null
+    # Formal recipe. Overrides are reserved for execution smokes, not tuning.
+    total_updates: 100000
   phase_two:
     tasks: [SYN, TXT, CAP, T2M]
     ratios: [0.25, 0.25, 0.25, 0.25]
-    total_updates: null
+    total_updates: 200000
   restart_optimizer_at_phase_two: true
 
 optimization:
   name: adamwscale
   scheduler: linear_warmup_cosine
-  warmup_start_factor: null
+  warmup_start_factor: 0.5
   beta1: 0.9
   beta2: 0.999
   epsilon: 1.0e-6
   phase_one:
-    base_learning_rate: null
+    base_learning_rate: 2.0e-3
     warmup_updates: 10000
   phase_two:
-    base_learning_rate: null
+    base_learning_rate: 1.0e-3
     warmup_updates: 10000
-  final_learning_rate: null
+  final_learning_rate: 1.0e-5
   gradient_clip_norm: 1.0
   weight_decay: 0.0
   precision: bf16
 
-# Safe single-GPU baseline; task-specific physical partitions remain unresolved.
+# Each distributed rank owns one task-homogeneous logical batch.  The four
+# rank-local batches form one synchronized optimizer update.
 batching:
-  micro_batch_size: 32
-  gradient_accumulation_steps: 3
+  micro_batch_size: 96
+  gradient_accumulation_steps: 1
   effective_batch_size: 96
+  global_effective_batch_size: 384
+  task_partitions:
+    phase_one:
+      M: {micro_batch_size: 96, gradient_accumulation_steps: 1}
+      MG: {micro_batch_size: 96, gradient_accumulation_steps: 1}
+    phase_two:
+      SYN: {micro_batch_size: 96, gradient_accumulation_steps: 1}
+      TXT: {micro_batch_size: 48, gradient_accumulation_steps: 2}
+      CAP: {micro_batch_size: 48, gradient_accumulation_steps: 2}
+      T2M: {micro_batch_size: 48, gradient_accumulation_steps: 2}
+
+distributed:
+  strategy: task_homogeneous_ddp
+  world_size: 4
+  gradient_sync: once_per_optimizer_update
+  loss_weighting: equal_rank_after_rank_local_token_normalization
+  find_unused_parameters: true
+  rank_tasks:
+    phase_one: [M, M, MG, MG]
+    phase_two: [SYN, TXT, CAP, T2M]
 
 dataloader:
   num_workers: 8
@@ -76,5 +98,5 @@ dataloader:
 monitoring:
   log_every_updates: 10
   pretraining_evaluation: false
-  checkpoint_every_updates: null
+  checkpoint_every_updates: 10000
   tensorboard_root: /root/tf-logs
