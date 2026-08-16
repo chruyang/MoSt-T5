@@ -292,6 +292,8 @@ def freeze_populations(
         "batching": {
             "micro_batch_size": micro_batch_size,
             "gradient_accumulation_steps": accumulation_steps,
+            "effective_batch_size": micro_batch_size * accumulation_steps,
+            "sample_before_microbatch_split": True,
         },
         "arrays": descriptors,
         "counts": {task: len(values) for task, values in arrays.items()},

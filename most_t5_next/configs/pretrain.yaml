@@ -60,11 +60,11 @@ optimization:
   weight_decay: 0.0
   precision: bf16
 
-# Hardware-sensitive defaults preserve the tested effective batch of 128.
+# Safe single-GPU baseline; task-specific physical partitions remain unresolved.
 batching:
-  micro_batch_size: 8
-  gradient_accumulation_steps: 16
-  effective_batch_size: 128
+  micro_batch_size: 32
+  gradient_accumulation_steps: 3
+  effective_batch_size: 96
 
 dataloader:
   num_workers: 8

@@ -27,7 +27,7 @@ class RuntimeTest(unittest.TestCase):
         runtime = runtime_from_config(config)
         self.assertEqual(runtime.seed, 42)
         self.assertEqual(runtime.precision, "bf16")
-        self.assertEqual(runtime.effective_batch_size, 128)
+        self.assertEqual(runtime.effective_batch_size, 96)
         self.assertEqual(runtime.num_workers, 8)
 
     def test_phase_optimization_consumes_launch_values(self) -> None:

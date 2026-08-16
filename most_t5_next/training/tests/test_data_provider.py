@@ -95,6 +95,13 @@ class CurriculumBatchSamplerTest(unittest.TestCase):
         self.assertEqual(split_in_three, unsplit)
         self.assertTrue(all(len(batch) == 96 for batch in unsplit))
         self.assertEqual({epoch for _, epoch in unsplit[4]}, {0, 1})
+        first_syn_epoch = [
+            source_index
+            for source_index, epoch in (*unsplit[0], *unsplit[4])
+            if epoch == 0
+        ]
+        self.assertEqual(len(first_syn_epoch), 101)
+        self.assertEqual(set(first_syn_epoch), set(range(101)))
 
     def test_resume_preserves_logical_batches_across_epoch_wrap(self) -> None:
         kwargs = dict(

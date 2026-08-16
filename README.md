@@ -17,6 +17,9 @@ The formal recipe has two optimizer phases:
 Phase II starts from the Phase-I model weights with a fresh optimizer and
 learning-rate scheduler.  Task selection occurs at optimizer-update level;
 all microbatches accumulated into one update belong to the same task.
+The sampler first selects the complete logical batch of 96 records and then
+applies the physical partition.  Thus `96 x 1`, `48 x 2`, and `32 x 3` share
+one deterministic record stream; `32 x 3` is the current safe baseline.
 
 `CAP` predicts `enriched_description`; `T2M` uses it as input.  The original
 `description` field remains the downstream reference used by 3D-MolT5-style
@@ -44,6 +47,12 @@ endpoint span owned by that fragment.  Selecting the motif masks that compound
 unit, keeps the opposite endpoint visible, and disables the affected carrier
 and endpoint geometry.  Endpoints are not sampled again as independent syntax
 units.
+
+A `whole_molecule_fallback` row has zero fragments and unowned atoms
+(`atom_to_fragment = -1`).  Mixed batches validate this rule per row.  Because
+the fallback has no carrier or endpoint destination, its geometry contribution
+is exactly zero; inventing a fragment or silently discarding the row is not
+permitted.  See [training data contracts](docs/training_contracts.md).
 
 ## Length policy
 

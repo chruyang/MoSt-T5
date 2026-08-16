@@ -33,3 +33,11 @@ model-loading code. Every validated setting must affect the instantiated run,
 be written to its manifest and round-trip through checkpoint resume. Artifact-
 dependent dimensions remain strictly compatibility-checked, and mathematically
 derived tensor shapes remain derived rather than duplicated as free knobs.
+
+The release sampler selects a complete optimizer-update batch before physical
+microbatch splitting.  The current logical batch is 96, with `32 x 3` as the
+safe single-GPU baseline; other partitions must retain the same selected
+records and per-sample corruption epochs.  Whole-molecule fallback rows use
+zero fragments and unowned atoms and remain lexical-only even in mixed padded
+batches.  These contracts are documented in `docs/training_contracts.md` and
+must be covered by the release test suite.

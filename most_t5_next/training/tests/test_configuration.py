@@ -77,6 +77,7 @@ class ConfigurationTest(unittest.TestCase):
             * config["batching"]["gradient_accumulation_steps"],
             config["batching"]["effective_batch_size"],
         )
+        self.assertEqual(config["batching"]["effective_batch_size"], 96)
 
     def test_public_config_is_valid_but_intentionally_not_launchable(self) -> None:
         config = load_pretraining_config(CONFIG_PATH)
