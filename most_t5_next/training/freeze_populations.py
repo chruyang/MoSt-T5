@@ -38,8 +38,8 @@ def required_max_epoch(
 ) -> int:
     if min(population, task_updates, micro_batch_size, accumulation_steps) <= 0:
         raise PopulationError("population epoch settings must be positive")
-    batches = (population + micro_batch_size - 1) // micro_batch_size
-    return (task_updates * accumulation_steps - 1) // batches
+    examples = task_updates * micro_batch_size * accumulation_steps
+    return (examples - 1) // population
 
 
 def _init_worker(

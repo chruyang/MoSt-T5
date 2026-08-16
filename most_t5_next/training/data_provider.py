@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import hashlib
-import math
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -134,7 +133,7 @@ class CurriculumDataset(Dataset):
 
 
 class CurriculumBatchSampler(Sampler):
-    """Emit deterministic task-homogeneous microbatches for one phase."""
+    """Draw one logical batch per update, then emit its physical microbatches."""
 
     def __init__(
         self,
@@ -146,6 +145,7 @@ class CurriculumBatchSampler(Sampler):
         accumulation_steps: int,
         seed: int,
         start_update: int = 0,
+        effective_batch_size: int | None = None,
     ) -> None:
         self.curriculum = CurriculumSchedule(phase, total_updates)
         self.populations = {}
@@ -161,12 +161,29 @@ class CurriculumBatchSampler(Sampler):
             self.populations[task] = array
         self.micro_batch_size = int(micro_batch_size)
         self.accumulation_steps = int(accumulation_steps)
+        physical_effective_batch = self.micro_batch_size * self.accumulation_steps
+        self.effective_batch_size = (
+            physical_effective_batch
+            if effective_batch_size is None
+            else int(effective_batch_size)
+        )
         self.seed = int(seed)
         self.start_update = int(start_update)
+        if self.micro_batch_size <= 0 or self.accumulation_steps <= 0:
+            raise DataProviderError("microbatch values must be positive")
+        if self.effective_batch_size <= 0:
+            raise DataProviderError("effective batch size must be positive")
+        if physical_effective_batch != self.effective_batch_size:
+            raise DataProviderError(
+                "microbatch partition does not produce the effective batch size"
+            )
         if not 0 <= self.start_update <= total_updates:
             raise DataProviderError("start_update is outside the phase")
         required = set(self.curriculum.tasks)
-        if any(task not in self.populations or not len(self.populations[task]) for task in required):
+        if any(
+            task not in self.populations or not len(self.populations[task])
+            for task in required
+        ):
             raise DataProviderError("a curriculum task has no admitted population")
 
     def __len__(self) -> int:
@@ -175,20 +192,20 @@ class CurriculumBatchSampler(Sampler):
         ) * self.accumulation_steps
 
     def __iter__(self) -> Iterator[list[CurriculumIndex]]:
-        task_microbatches = {task: 0 for task in self.curriculum.tasks}
+        task_updates = {task: 0 for task in self.curriculum.tasks}
         for previous in range(self.start_update):
-            task_microbatches[self.curriculum.task_at(previous).name] += (
-                self.accumulation_steps
-            )
+            task_updates[self.curriculum.task_at(previous).name] += 1
         order_cache: dict[tuple[str, int], np.ndarray] = {}
         for update in range(self.start_update, self.curriculum.total_updates):
             task = self.curriculum.task_at(update).name
             population = self.populations[task]
-            batches_per_epoch = int(math.ceil(len(population) / self.micro_batch_size))
-            for microbatch in range(self.accumulation_steps):
-                draw = task_microbatches[task]
-                task_microbatches[task] += 1
-                epoch, batch_in_epoch = divmod(draw, batches_per_epoch)
+            logical_start = task_updates[task] * self.effective_batch_size
+            task_updates[task] += 1
+            logical_batch: list[tuple[int, int]] = []
+            cursor = logical_start
+            remaining = self.effective_batch_size
+            while remaining:
+                epoch, position = divmod(cursor, len(population))
                 key = (task, epoch)
                 order = order_cache.get(key)
                 if order is None:
@@ -200,12 +217,17 @@ class CurriculumBatchSampler(Sampler):
                     )
                     order = generator.permutation(len(population))
                     order_cache[key] = order
-                start = batch_in_epoch * self.micro_batch_size
-                stop = min(start + self.micro_batch_size, len(population))
-                chosen = population[order[start:stop]]
+                take = min(remaining, len(population) - position)
+                chosen = population[order[position : position + take]]
+                logical_batch.extend((int(value), epoch) for value in chosen)
+                cursor += take
+                remaining -= take
+            for microbatch in range(self.accumulation_steps):
+                start = microbatch * self.micro_batch_size
+                stop = start + self.micro_batch_size
                 yield [
-                    CurriculumIndex(task, int(value), epoch, update, microbatch)
-                    for value in chosen
+                    CurriculumIndex(task, source_index, epoch, update, microbatch)
+                    for source_index, epoch in logical_batch[start:stop]
                 ]
 
 
@@ -220,12 +242,12 @@ class CurriculumCollator:
         if not rows:
             raise DataProviderError("cannot collate an empty microbatch")
         signatures = {
-            (row.index.task, row.index.epoch, row.index.update, row.index.microbatch)
+            (row.index.task, row.index.update, row.index.microbatch)
             for row in rows
         }
         if len(signatures) != 1:
             raise DataProviderError("one microbatch mixed curriculum coordinates")
-        task, _, update, microbatch = next(iter(signatures))
+        task, update, microbatch = next(iter(signatures))
         payloads = tuple(row.payload for row in rows)
         if task in {"M", "MG", "SYN"}:
             view = {"M": "P2-M", "MG": "P2-MG", "SYN": "P1-SYN"}[task]
@@ -301,6 +323,7 @@ class CurriculumDataLoaderProvider:
             populations=resolved,
             micro_batch_size=runtime.micro_batch_size,
             accumulation_steps=runtime.gradient_accumulation_steps,
+            effective_batch_size=runtime.effective_batch_size,
             seed=runtime.seed,
             start_update=start_update,
         )

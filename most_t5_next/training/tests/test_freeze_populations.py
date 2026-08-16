@@ -14,6 +14,24 @@ class PopulationEpochTest(unittest.TestCase):
             1,
         )
 
+    def test_epoch_budget_is_independent_of_microbatch_partition(self) -> None:
+        expected = required_max_epoch(
+            101, task_updates=10, micro_batch_size=96, accumulation_steps=1
+        )
+        self.assertEqual(expected, 9)
+        self.assertEqual(
+            required_max_epoch(
+                101, task_updates=10, micro_batch_size=48, accumulation_steps=2
+            ),
+            expected,
+        )
+        self.assertEqual(
+            required_max_epoch(
+                101, task_updates=10, micro_batch_size=32, accumulation_steps=3
+            ),
+            expected,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

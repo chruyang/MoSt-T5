@@ -80,6 +80,15 @@ class RunnerTest(unittest.TestCase):
                 report["phase_two"]["task_updates"],
                 {"CAP": 1, "SYN": 1, "T2M": 1, "TXT": 1},
             )
+            self.assertEqual(
+                report["phase_two"]["optimizer_update_batching"],
+                {
+                    "logical_batch_size": 4,
+                    "micro_batch_size": 2,
+                    "gradient_accumulation_steps": 2,
+                    "sample_before_microbatch_split": True,
+                },
+            )
             boundary = torch.load(Path(temporary) / "phase-one-model-boundary.pt")
             self.assertFalse(boundary["optimizer_state_included"])
             self.assertFalse(boundary["scheduler_state_included"])

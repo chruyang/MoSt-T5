@@ -228,6 +228,12 @@ def run_training_phase(
         "task_updates": dict(sorted(task_updates.items())),
         "task_target_tokens": dict(sorted(task_targets.items())),
         "target_token_normalized_accumulation": True,
+        "optimizer_update_batching": {
+            "logical_batch_size": runtime.effective_batch_size,
+            "micro_batch_size": runtime.micro_batch_size,
+            "gradient_accumulation_steps": runtime.gradient_accumulation_steps,
+            "sample_before_microbatch_split": True,
+        },
         "optimization": asdict(optimization),
         "runtime": asdict(runtime),
         "loss": {
