@@ -36,10 +36,10 @@ class DistributedLayoutTest(unittest.TestCase):
             [row.task for row in assignments], ["SYN", "TXT", "CAP", "T2M"]
         )
         self.assertEqual(task_batch_partitions(self.config, phase=2), {
-            "SYN": (96, 1),
+            "SYN": (48, 2),
             "TXT": (48, 2),
-            "CAP": (48, 2),
-            "T2M": (48, 2),
+            "CAP": (32, 3),
+            "T2M": (32, 3),
         })
 
     def test_world_size_mismatch_is_rejected(self) -> None:

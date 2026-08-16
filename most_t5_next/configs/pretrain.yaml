@@ -70,13 +70,13 @@ batching:
   global_effective_batch_size: 384
   task_partitions:
     phase_one:
-      M: {micro_batch_size: 96, gradient_accumulation_steps: 1}
+      M: {micro_batch_size: 48, gradient_accumulation_steps: 2}
       MG: {micro_batch_size: 96, gradient_accumulation_steps: 1}
     phase_two:
-      SYN: {micro_batch_size: 96, gradient_accumulation_steps: 1}
+      SYN: {micro_batch_size: 48, gradient_accumulation_steps: 2}
       TXT: {micro_batch_size: 48, gradient_accumulation_steps: 2}
-      CAP: {micro_batch_size: 48, gradient_accumulation_steps: 2}
-      T2M: {micro_batch_size: 48, gradient_accumulation_steps: 2}
+      CAP: {micro_batch_size: 32, gradient_accumulation_steps: 3}
+      T2M: {micro_batch_size: 32, gradient_accumulation_steps: 3}
 
 distributed:
   strategy: task_homogeneous_ddp

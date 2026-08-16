@@ -112,21 +112,24 @@ class CurriculumBatchSamplerTest(unittest.TestCase):
             accumulation_steps=1,
             effective_batch_size=96,
             task_partitions={
-                "SYN": (96, 1),
+                "SYN": (48, 2),
                 "TXT": (48, 2),
-                "CAP": (48, 2),
-                "T2M": (48, 2),
+                "CAP": (32, 3),
+                "T2M": (32, 3),
             },
             seed=42,
         )
         batches = list(sampler)
-        self.assertEqual([len(batch) for batch in batches], [96, 48, 48, 48, 48, 48, 48])
+        self.assertEqual(
+            [len(batch) for batch in batches],
+            [48, 48, 48, 48, 32, 32, 32, 32, 32, 32],
+        )
         by_update: dict[int, list[CurriculumIndex]] = {}
         for batch in batches:
             by_update.setdefault(batch[0].update, []).extend(batch)
         self.assertEqual({update: len(rows) for update, rows in by_update.items()}, {0: 96, 1: 96, 2: 96, 3: 96})
-        self.assertEqual(sampler.partition_for_task("SYN"), (96, 1))
-        self.assertEqual(sampler.partition_for_task("T2M"), (48, 2))
+        self.assertEqual(sampler.partition_for_task("SYN"), (48, 2))
+        self.assertEqual(sampler.partition_for_task("T2M"), (32, 3))
 
     def test_fixed_task_replicas_draw_disjoint_logical_batches(self) -> None:
         common = {

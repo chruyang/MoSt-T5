@@ -66,13 +66,15 @@ weights are respectively `0.5/0.5` and `0.25/0.25/0.25/0.25`.
 The physical partitions are:
 
 ```text
-Phase I:  M=96x1, MG=96x1
-Phase II: SYN=96x1, TXT=48x2, CAP=48x2, T2M=48x2
+Phase I:  M=48x2, MG=96x1
+Phase II: SYN=48x2, TXT=48x2, CAP=32x3, T2M=32x3
 ```
 
 For accumulated tasks, all non-final forward/backward passes run under DDP
 `no_sync`; the final pass performs the only gradient reduction of the optimizer
-update. Losses are weighted by each microbatch's number of non-ignored target
+update. These partitions were admitted by a four-GPU peak smoke using real
+long-tail records: structural inputs reached 512 tokens and paired text reached
+or exceeded 512 tokens. Losses are weighted by each microbatch's number of non-ignored target
 tokens, making `48 x 2` equivalent to one rank-local logical token-normalized
 batch rather than an unweighted mean of two variable-length losses. DDP then
 gives each rank equal weight. This preserves the explicit task balance instead

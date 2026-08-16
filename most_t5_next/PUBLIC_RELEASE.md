@@ -44,8 +44,9 @@ or source-cache identity.
 
 The release sampler selects a complete rank-local optimizer batch before
 physical microbatch splitting. Each of four task-homogeneous DDP ranks owns 96
-logical records, for a global effective batch of 384. Phase I uses `96 x 1`;
-Phase II uses `SYN=96 x 1` and `TXT/CAP/T2M=48 x 2`, with one gradient
+logical records, for a global effective batch of 384. The physical Phase-I
+partitions are `M=48 x 2` and `MG=96 x 1`. Phase II uses `SYN/TXT=48 x 2`
+and `CAP/T2M=32 x 3`, with one gradient
 reduction per optimizer update. Alternative physical partitions must retain
 the same selected records and per-sample corruption epochs. Whole-molecule fallback rows use
 zero fragments and unowned atoms and remain lexical-only even in mixed padded

@@ -29,6 +29,11 @@ each Phase-II task, so every task receives the same 19.2 million record
 presentations. Shorter overrides are execution smokes only. Full-state atomic
 checkpoints are written every 10,000 updates and at phase end.
 
+Physical microbatching is task-specific while the logical batch remains 96 on
+every rank: Phase I uses `M=48 x 2`, `MG=96 x 1`; Phase II uses
+`SYN/TXT=48 x 2`, `CAP/T2M=32 x 3`. Only the last backward pass synchronizes,
+so each rank still contributes once to each optimizer update.
+
 ## Active code
 
 - `data/`: zero-copy cache union and task-to-dataset routing;

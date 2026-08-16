@@ -17,7 +17,7 @@ PCQM_CACHE=${PCQM_CACHE:-${READY}/phase1-fragsmiles-training-cache-v1-r5}
 PUBCHEM_CACHE=${PUBCHEM_CACHE:-${READY}/phase2-fragsmiles-training-cache-v5}
 PAIRED_TEXT_CACHE=${PAIRED_TEXT_CACHE:-/root/autodl-tmp/phase2-paired-text-enriched-v4}
 PUBMED_CACHE=${PUBMED_CACHE:-/root/autodl-tmp/medrag-pubmed-p2-txt-formal-v1}
-POPULATION_ROOT=${POPULATION_ROOT:-/root/autodl-tmp/most-t5-formal-populations-v2}
+POPULATION_ROOT=${POPULATION_ROOT:-/root/autodl-tmp/most-t5-formal-populations-v3}
 OUTPUT_DIR=${OUTPUT_DIR:-/root/autodl-tmp/most-t5-formal-pretraining-v1}
 RESUME_CHECKPOINT=${RESUME_CHECKPOINT:-}
 
@@ -67,6 +67,16 @@ if batching.get("task_rank_counts") != {
     "CAP": 1, "M": 2, "MG": 2, "SYN": 1, "T2M": 1, "TXT": 1
 }:
     raise SystemExit("population rank multiplicities differ from the curriculum")
+expected_partitions = {
+    task: {
+        "micro_batch_size": int(values["micro_batch_size"]),
+        "gradient_accumulation_steps": int(values["gradient_accumulation_steps"]),
+    }
+    for phase in ("phase_one", "phase_two")
+    for task, values in config["batching"]["task_partitions"][phase].items()
+}
+if batching.get("task_partitions") != expected_partitions:
+    raise SystemExit("population task partitions differ from the config")
 for task in ("M", "MG", "SYN", "TXT", "CAP", "T2M"):
     descriptor = manifest.get("arrays", {}).get(task, {})
     path = Path(sys.argv[2]) / str(descriptor.get("file", ""))

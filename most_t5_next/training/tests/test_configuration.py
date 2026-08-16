@@ -97,12 +97,24 @@ class ConfigurationTest(unittest.TestCase):
             "equal_rank_after_rank_local_token_normalization",
         )
         self.assertEqual(
-            config["batching"]["task_partitions"]["phase_two"]["SYN"],
+            config["batching"]["task_partitions"]["phase_one"]["M"],
+            {"micro_batch_size": 48, "gradient_accumulation_steps": 2},
+        )
+        self.assertEqual(
+            config["batching"]["task_partitions"]["phase_one"]["MG"],
             {"micro_batch_size": 96, "gradient_accumulation_steps": 1},
         )
         self.assertEqual(
-            config["batching"]["task_partitions"]["phase_two"]["CAP"],
+            config["batching"]["task_partitions"]["phase_two"]["SYN"],
             {"micro_batch_size": 48, "gradient_accumulation_steps": 2},
+        )
+        self.assertEqual(
+            config["batching"]["task_partitions"]["phase_two"]["CAP"],
+            {"micro_batch_size": 32, "gradient_accumulation_steps": 3},
+        )
+        self.assertEqual(
+            config["batching"]["task_partitions"]["phase_two"]["T2M"],
+            {"micro_batch_size": 32, "gradient_accumulation_steps": 3},
         )
 
     def test_distributed_layout_cannot_silently_change_global_batch(self) -> None:

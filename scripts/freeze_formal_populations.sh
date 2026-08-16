@@ -10,7 +10,7 @@ PCQM_CACHE=${PCQM_CACHE:-${READY}/phase1-fragsmiles-training-cache-v1-r5}
 PUBCHEM_CACHE=${PUBCHEM_CACHE:-${READY}/phase2-fragsmiles-training-cache-v5}
 PAIRED_TEXT_CACHE=${PAIRED_TEXT_CACHE:-/root/autodl-tmp/phase2-paired-text-enriched-v4}
 PUBMED_CACHE=${PUBMED_CACHE:-/root/autodl-tmp/medrag-pubmed-p2-txt-formal-v1}
-POPULATION_ROOT=${POPULATION_ROOT:-/root/autodl-tmp/most-t5-formal-populations-v2}
+POPULATION_ROOT=${POPULATION_ROOT:-/root/autodl-tmp/most-t5-formal-populations-v3}
 WORKERS=${WORKERS:-24}
 CHUNKSIZE=${CHUNKSIZE:-64}
 
