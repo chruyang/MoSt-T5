@@ -6,6 +6,7 @@ from collections import Counter
 from contextlib import nullcontext
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import random
 import time
@@ -97,6 +98,41 @@ def _target_count(batch: Mapping[str, Any]) -> int:
     return count
 
 
+def _sync_directory(path: Path) -> None:
+    """Best-effort directory sync after replacing a durable state file."""
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    _sync_directory(path.parent)
+
+
+def _torch_save_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("wb") as handle:
+        torch.save(payload, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    _sync_directory(path.parent)
+
+
 def _save_checkpoint(
     path: Path,
     *,
@@ -125,28 +161,19 @@ def _save_checkpoint(
         "rank_progress_states": list(rank_progress_states),
         "protocol": dict(protocol),
     }
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    torch.save(payload, temporary)
-    temporary.replace(path)
+    _torch_save_atomic(path, payload)
     metadata_path = path.with_suffix(path.suffix + ".metadata.json")
-    metadata_temporary = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
-    metadata_temporary.write_text(
-        json.dumps(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "phase": phase,
-                "next_update": next_update,
-                "optimization": asdict(optimization),
-                "runtime": asdict(runtime),
-                "protocol": dict(protocol),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    _write_json_atomic(
+        metadata_path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "phase": phase,
+            "next_update": next_update,
+            "optimization": asdict(optimization),
+            "runtime": asdict(runtime),
+            "protocol": dict(protocol),
+        },
     )
-    metadata_temporary.replace(metadata_path)
 
 
 def _restore_checkpoint(
@@ -288,6 +315,15 @@ def run_training_phase(
             runtime=runtime,
             protocol=protocol,
         )
+        sampler = getattr(batch_provider, "sampler", None)
+        sampler_start_update = getattr(sampler, "start_update", None)
+        if (
+            sampler_start_update is not None
+            and int(sampler_start_update) != next_update
+        ):
+            raise TrainingError(
+                "checkpoint payload and prefetched sampler start update differ"
+            )
         task_updates.update(progress["task_updates"])
         task_records.update(progress["task_records"])
         task_targets.update(progress["task_targets"])
@@ -443,23 +479,15 @@ def run_training_phase(
                     rank_progress_states=rank_progress_states,
                     protocol=protocol,
                 )
-                latest = destination / "latest-checkpoint.json"
-                latest_temporary = latest.with_suffix(latest.suffix + ".tmp")
-                latest_temporary.write_text(
-                    json.dumps(
-                        {
-                            "schema_version": SCHEMA_VERSION,
-                            "phase": phase,
-                            "next_update": completed,
-                            "checkpoint": checkpoint_path.name,
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
+                _write_json_atomic(
+                    destination / "latest-checkpoint.json",
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "phase": phase,
+                        "next_update": completed,
+                        "checkpoint": checkpoint_path.name,
+                    },
                 )
-                latest_temporary.replace(latest)
             _barrier()
     local_summary = {
         "rank": _rank(),

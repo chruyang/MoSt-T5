@@ -108,9 +108,11 @@ semantics.
 ## Checkpoint and resume boundary
 
 Each phase writes an atomic full-state checkpoint every 10,000 completed
-optimizer updates and at phase end. `latest-checkpoint.json` is updated only
-after the corresponding checkpoint rename succeeds, so an interruption during
-a new save leaves the previous checkpoint and pointer intact.
+optimizer updates and at phase end. The checkpoint, metadata sidecar, and
+`latest-checkpoint.json` are flushed and synced before atomic replacement. The
+pointer is updated only after the corresponding checkpoint and metadata have
+been made durable, so an interruption during a new save leaves the previous
+checkpoint and pointer intact.
 
 A resumable checkpoint contains the model, AdamWScale state, scheduler state,
 completed update, per-rank task and loss counters, and Python, NumPy, Torch CPU,
@@ -123,9 +125,12 @@ optimization schedule, or artifact identity.
 The data sampler has no hidden mutable cursor: `start_update` deterministically
 reconstructs the same task-replica stream, epoch labels, logical records, and
 online-corruption seeds. Consequently, recovery starts at the first update not
-included in the checkpoint. The release test suite compares an uninterrupted
-CPU run with an intentionally interrupted and resumed run, including exact
-model, optimizer, scheduler, progress, and RNG equality.
+included in the checkpoint. After loading the tensor payload, the runner also
+requires its `next_update` to equal the already-prefetched sampler's
+`start_update`; metadata/payload disagreement therefore aborts instead of
+silently shifting the data stream. The release test suite compares an
+uninterrupted CPU run with an intentionally interrupted and resumed run,
+including exact model, optimizer, scheduler, progress, and RNG equality.
 
 At the Phase-I/Phase-II boundary the model weights are deliberately retained
 while optimizer and scheduler state are deliberately restarted. This is distinct
@@ -140,8 +145,7 @@ The first westd commits carrying these contracts are:
   validation;
 - `ab5be2e517cb1448ded24564078162ab04d4daf7` -- logical-batch-first sampling.
 
-Any training checkout must contain both changes or a descendant, use a clean
-worktree, and persist its full commit in the launch manifest. The remote branch
-contains westd-only commits beyond the current GitHub branch; the complete
-series must be pushed or rebased deliberately before formal training rather
-than copied as an unversioned directory.
+Any training checkout must contain both changes or a descendant of the release
+branch, have no modified tracked files, and persist its full commit in the
+launch manifest. Untracked operational receipts may coexist with the checkout
+but are not part of the recorded training protocol.

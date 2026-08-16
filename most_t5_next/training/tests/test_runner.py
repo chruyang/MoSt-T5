@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from contextlib import contextmanager
+import json
 from pathlib import Path
 import random
 from types import SimpleNamespace
@@ -168,6 +169,23 @@ class RunnerTest(unittest.TestCase):
                 device="cpu",
                 checkpoint_protocol=protocol,
             )
+            expected_steps = (2, 4, 6)
+            self.assertEqual(
+                sorted(path.name for path in Path(full_dir).glob("phase-1-step-*.pt")),
+                [f"phase-1-step-{step:08d}.pt" for step in expected_steps],
+            )
+            for step in expected_steps:
+                metadata = read_checkpoint_metadata(
+                    Path(full_dir) / f"phase-1-step-{step:08d}.pt"
+                )
+                self.assertEqual(metadata["next_update"], step)
+            latest = json.loads(
+                (Path(full_dir) / "latest-checkpoint.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(latest["next_update"], 6)
+            self.assertEqual(latest["checkpoint"], "phase-1-step-00000006.pt")
 
             seed_everything(123)
             interrupted_model = DropoutTinyModel()
@@ -251,6 +269,23 @@ class RunnerTest(unittest.TestCase):
                     device="cpu",
                     resume_checkpoint=checkpoint,
                     checkpoint_protocol={"fixture": "different"},
+                )
+
+            mismatched_provider = RandomProvider()
+            mismatched_provider.sampler = SimpleNamespace(start_update=3)
+            with self.assertRaisesRegex(
+                TrainingError, "checkpoint payload and prefetched sampler"
+            ):
+                run_training_phase(
+                    model=DropoutTinyModel(),
+                    phase=1,
+                    batch_provider=mismatched_provider,
+                    optimization=optimization,
+                    runtime=runtime,
+                    output_dir=resumed_dir,
+                    device="cpu",
+                    resume_checkpoint=checkpoint,
+                    checkpoint_protocol=protocol,
                 )
 
     def test_two_phases_use_balanced_update_tasks_and_model_only_boundary(self):

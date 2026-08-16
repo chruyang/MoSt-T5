@@ -6,7 +6,9 @@ Both formal phases save at every 10,000 completed optimizer updates and at the
 phase end. With budgets of 100,000 and 200,000 updates, every regular save lies
 on an optimizer boundary. Checkpoint files use
 `phase-{phase}-step-{completed:08d}.pt`; `latest-checkpoint.json` is an atomic
-pointer to the last successfully renamed file.
+pointer to the last successfully renamed file. The tensor payload, metadata
+sidecar, and pointer are flushed with `fsync` before their atomic replacements
+become authoritative.
 
 ## State carried across an accidental restart
 
@@ -41,6 +43,11 @@ direct child of the same existing `--output-dir`; all configuration and data
 arguments must be identical to the original launch. Before constructing the
 DataLoader, the launcher reads the checkpoint phase and `next_update`, then
 creates only the required phase provider at that exact update.
+
+The runner subsequently loads the tensor payload and compares its authoritative
+`next_update` with the provider sampler's `start_update`. If a stale or damaged
+metadata sidecar would have selected a different cursor, resume fails before
+the next forward pass.
 
 The resume gate rejects protocol, runtime, world-size, population-manifest, and
 source-cache identity drift. This prevents a syntactically successful restart
