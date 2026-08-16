@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -150,6 +151,31 @@ def _phase_populations(
     return {task: populations[task] for task in tasks}
 
 
+def _execution_config(
+    formal_config: Mapping[str, object],
+    *,
+    smoke_updates_per_phase: int | None,
+    smoke_checkpoint_every_updates: int,
+) -> tuple[dict[str, object], str]:
+    """Derive a short execution smoke without weakening the formal config."""
+
+    config = deepcopy(formal_config)
+    if smoke_updates_per_phase is None:
+        return config, "formal"
+    updates = int(smoke_updates_per_phase)
+    checkpoint_interval = int(smoke_checkpoint_every_updates)
+    if updates < 2:
+        raise ValueError("execution smoke requires at least two updates per phase")
+    if not 0 < checkpoint_interval <= updates:
+        raise ValueError("execution smoke checkpoint interval is outside its budget")
+    warmup_updates = max(1, min(100, updates // 10))
+    for phase_name in ("phase_one", "phase_two"):
+        config["curriculum"][phase_name]["total_updates"] = updates
+        config["optimization"][phase_name]["warmup_updates"] = warmup_updates
+    config["monitoring"]["checkpoint_every_updates"] = checkpoint_interval
+    return config, "execution_smoke"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -166,15 +192,35 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Resume the matching phase from a checkpoint inside --output-dir",
     )
+    parser.add_argument(
+        "--execution-smoke-updates-per-phase",
+        type=int,
+        help=(
+            "Run a non-formal short two-phase hardware smoke through the exact "
+            "distributed launcher; output directory name must contain 'smoke'"
+        ),
+    )
+    parser.add_argument(
+        "--execution-smoke-checkpoint-every-updates",
+        type=int,
+        default=2,
+    )
     parser.add_argument("--set", action="append", default=[], dest="overrides")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = load_pretraining_config(
+    formal_config = load_pretraining_config(
         args.config, overrides=args.overrides, require_launch_values=True
     )
+    config, execution_mode = _execution_config(
+        formal_config,
+        smoke_updates_per_phase=args.execution_smoke_updates_per_phase,
+        smoke_checkpoint_every_updates=args.execution_smoke_checkpoint_every_updates,
+    )
+    if execution_mode == "execution_smoke" and "smoke" not in args.output_dir.name.lower():
+        raise ValueError("execution smoke output directory name must contain 'smoke'")
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -310,6 +356,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         launch_manifest = {
             "schema_version": "most-t5/pretraining-launch/v1",
             "status": "running",
+            "execution_mode": execution_mode,
+            "formal_protocol": execution_mode == "formal",
             "world_size": world_size,
             "checkpoint_protocol": checkpoint_protocol,
             "resolved_config": config,

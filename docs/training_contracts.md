@@ -97,8 +97,11 @@ Phase II per task: 1 rank  x 96 records x 200,000 updates = 19,200,000
 ```
 
 All six tasks therefore receive the same record-presentation budget.  These
-values are formal-recipe defaults; reduced values may be used only for launch
-or resume smokes and must be labelled as such in their manifests.
+values are formal-recipe defaults. Reduced values are admitted only through
+the explicit `--execution-smoke-updates-per-phase` launcher path. That path
+requires `smoke` in the output name, records `formal_protocol=false`, and uses
+a distinct resolved-config identity, so its checkpoints cannot enter or resume
+the formal run.
 
 Text-only ranks do not execute the geometry adapter, while molecular ranks do.
 The DDP wrapper therefore uses `find_unused_parameters=true`; this is a

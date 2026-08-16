@@ -136,6 +136,12 @@ optimizer protocol, population manifest, or source-cache identity manifests.
 population first; after that gate and the four-GPU smoke pass,
 `scripts/start_formal_pretraining.sh` is the guarded formal launcher.
 
+Hardware and recovery gates use the same `scripts.pretrain` entry point with
+`--execution-smoke-updates-per-phase N`. Such an output directory must contain
+`smoke` in its name, its launch manifest records `formal_protocol=false`, and
+its checkpoint protocol differs from formal training. A smoke checkpoint can
+therefore never be resumed accidentally as the 100k/200k formal run.
+
 ## Repository layout
 
 - `most_t5_next/modeling`: T5 wrapper and geometry adapter;
